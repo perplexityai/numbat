@@ -246,7 +246,11 @@ numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`
 `endpoint.device_id` for fleet joins.
 `enforcement` is hook-only; `scan_summary` is scan-only.
 
-Event and finding value fields are redacted before emission. Event/timeline
+Event and finding value fields are redacted before emission. Masking covers
+credential-bearing URL query values, secret-like assignments, self-identifying
+token formats, a URL userinfo password (emitted as
+`postgres://user:%5Bredacted%5D@host:5432/db`, percent-encoded so the URL still
+parses), and an `Authorization: Bearer` credential. Event/timeline
 output keeps a readable, redacted `project_path`; findings and indicators use
 `project_path_hash` / `sample_project_path_hash` for joins. On findings,
 `redacted:true` means at least one emitted finding field was masked. File-backed

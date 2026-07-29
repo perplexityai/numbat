@@ -1,6 +1,8 @@
 package redact
 
 import (
+	// Aliased: two tests below use "url" as a local variable for the URL under test.
+	neturl "net/url"
 	"strings"
 	"testing"
 )
@@ -89,16 +91,227 @@ func TestStringLeavesBenignText(t *testing.T) {
 // TestStringKnownFalseNegatives documents secret shapes redaction does NOT
 // catch today. These assertions lock current behavior so a future redaction
 // change that starts (or stops) catching them is an intentional, reviewed edit.
+//
+// The bare AWS secret access key is an ACCEPTED PERMANENT gap, not a backlog
+// item. It is 40 arbitrary base64 bytes with no prefix, no key name, and no
+// grammatical position to anchor on — unlike the userinfo password and the
+// bearer credential, which are anchored by RFC 3986 and RFC 6750 syntax
+// respectively and are masked (see TestStringMasksURLUserinfoPassword and
+// TestStringMasksAuthorizationBearer). The only pattern that would catch it is a
+// generic 40-char shape, which would also mask hashes, git object ids, and
+// random identifiers in benign command output. CONTRIBUTING.md requires
+// preferring a documented false negative to a false positive, so it stays here.
+//
+// The userinfo entries are the boundary of the userinfo pass, in the same
+// tradition: a userinfo holding a byte that ends the authority scan (an unencoded
+// '/', whitespace, a non-ASCII byte, or a list separator — see
+// authorityTerminator) abandons the match rather than masking part of it. That
+// includes a byte in the USERNAME, which strands an otherwise maskable password.
+// Widening the scan to reach these was measured to be worse: it reads a benign
+// path such as /download/file@2x.png as userinfo, and running it through
+// non-ASCII text lets a CJK sentence bridge a host:port to an unrelated address
+// (see TestStringPreservesURLWithoutUserinfoPassword).
+//
+// RFC 3986 requires percent-encoding for the '/' and whitespace and non-ASCII
+// spellings, and those percent-encoded forms ARE masked — see the
+// "percent-encoded slash" case in TestStringMasksURLUserinfoPassword. The list
+// separators are the exception: they are legal sub-delims, so a password
+// containing one is a deliberate precision trade, not a malformed URL.
+//
+// The assertion is exact equality, not containment: each entry locks the whole
+// line, so a change that starts masking anything else on it is caught too.
 func TestStringKnownFalseNegatives(t *testing.T) {
 	cases := []string{
-		"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", // bare AWS secret access key, no key= prefix
-		"postgres://user:p4ssw0rd@host:5432/db",    // DB-URL embedded password
-		"Authorization: Bearer abcdef123456",       // bearer token without a secret-looking key
+		"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",                              // bare AWS secret access key, no key= prefix
+		"postgres://svc:S3cret/Key+9@db.test:5432/app",                          // '/' ends the authority scan before the '@'
+		"postgres://user:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY@host:5432/db", // same, with the AWS key as the password
+		"postgres://user:SUPER retPW42@host:5432/db",                            // whitespace ends the authority scan
+		"postgres://user:p,ss@db.test/app",                                      // ',' is read as a list separator, not a password byte
+		"postgres://user:pässwörd@db.test/app",                                  // non-ASCII cannot appear in a URI at all
+		"postgres://usér:S3cretPw@db.test/app",                                  // non-ASCII in the USERNAME strands a maskable password
+		`headers["Authorization"] = "Bearer S3CRETVALUE1234"`,                   // subscript form: ']' separates the header name from the operator
 	}
 	for _, c := range cases {
-		if got := String(c); !strings.Contains(got, c) {
+		if got := String(c); got != c {
 			t.Fatalf("behavior changed (now masked) for known false negative %q -> %q", c, got)
 		}
+	}
+}
+
+// TestStringMasksURLUserinfoPassword covers the DSN leak class: a password in the
+// URL authority is a live credential, positionally identified by RFC 3986 rather
+// than by a secret-looking key, so it is masked for any scheme. The scheme,
+// username, host, port, and path stay readable so the observation is still
+// actionable.
+//
+// The assertion is EXACT output, not "the secret is absent". The masked span is
+// defined by two rules — it starts at the first ':' of the userinfo and ends at
+// the last '@' of the authority — and a substring check cannot distinguish them
+// from first-'@'/last-':' variants that leak the password's head or tail: with
+// "p@ss" masked as "%5Bredacted%5D@ss", the substring "p@ss" is absent from a
+// string that still leaks "ss".
+func TestStringMasksURLUserinfoPassword(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"postgres dsn", "postgres://user:p4ssw0rd@host:5432/db", "postgres://user:" + userinfoMask + "@host:5432/db"},
+		{"https userinfo", "https://user:hunter2@example.test/x", "https://user:" + userinfoMask + "@example.test/x"},
+		{"password with colon", "redis://u:pa:ss@cache.test:6379/0", "redis://u:" + userinfoMask + "@cache.test:6379/0"},
+		{"password with at", "amqp://u:p@ss@broker.test/vhost", "amqp://u:" + userinfoMask + "@broker.test/vhost"},
+		{"empty username", "redis://:pw123456@cache.test:6379/0", "redis://:" + userinfoMask + "@cache.test:6379/0"},
+		{"srv scheme", "mongodb+srv://admin:s3cr3t@cluster.test/admin", "mongodb+srv://admin:" + userinfoMask + "@cluster.test/admin"},
+		{"ipv6 host", "https://user:hunter2@[2001:db8::1]:8443/x", "https://user:" + userinfoMask + "@[2001:db8::1]:8443/x"},
+		{"defanged scheme", "hxxp://user:hunter2@evil.test/x", "hxxp://user:" + userinfoMask + "@evil.test/x"},
+		{"percent-encoded slash", "postgres://user:S3cret%2FKey@db.test/app", "postgres://user:" + userinfoMask + "@db.test/app"},
+		{"inside prose", "connecting to postgres://user:topsecret@db.test/app now", "connecting to postgres://user:" + userinfoMask + "@db.test/app now"},
+		{
+			"two dsns on one line",
+			"postgres://a:pw1@x.test/d redis://b:pw2@y.test/0",
+			"postgres://a:" + userinfoMask + "@x.test/d redis://b:" + userinfoMask + "@y.test/0",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := String(c.in); got != c.want {
+				t.Fatalf("String(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStringPreservesURLWithoutUserinfoPassword is the anti-over-redaction guard
+// for the userinfo pass: a ':' or '@' that is not a userinfo password separator
+// must leave the text byte-identical.
+//
+// The second group is the reason authorityEnd stops at a list separator. Each of
+// those lines pairs a benign host:port with an unrelated '@' later on; a greedier
+// authority scan reads the two as one authority and masks the PORT as a password,
+// which destroys two real indicators (the host and the email) and fabricates a
+// third from the text after the '@' — the exact failure the "no fabrication" half
+// of the CONTRIBUTING.md precision contract forbids.
+func TestStringPreservesURLWithoutUserinfoPassword(t *testing.T) {
+	cases := []string{
+		"https://host.test:8443/path",                    // host:port, no userinfo at all
+		"postgres://user@db.test:5432/app",               // colon-less userinfo stays readable
+		"https://user:@host.test/x",                      // empty password, nothing to leak
+		"https://[2001:db8::1]:8443/x",                   // IPv6 literal host, colons but no userinfo
+		"git@github.com:org/repo.git",                    // scp-style remote, not a URL authority
+		"https://x.test/p?email=alice%40corp.test",       // '@' lives in the query
+		`{"url":"redis://u:p","note":"a@b.test"}`,        // '@' is in a LATER quoted field
+		"run docker://image:tag then mail bob@corp.test", // ':' and '@' in separate tokens
+
+		"upstream=https://api.test:8443;user=ops@corp.test",                 // ';' separated pairs
+		"api.test,https://api.test:8443,ops@corp.test",                      // CSV row
+		"https://[2001:db8::1]:8443,admin@corp.test",                        // CSV row, IPv6 host
+		"--url https://h.test:8443&mail=ops@corp.test",                      // '&' separated pairs
+		"[api](https://h.test:8443)[mail](mailto:ops@corp.test)",            // adjacent markdown links
+		"[api](https://h.test:8443)ops@corp.test",                           // ')' is the only separator
+		"https://h.test:8443(ops@corp.test)",                                // '(' is the only separator
+		"docker run -e URL=redis://cache.test:6379,ADMIN=ops@corp.test img", // env list
+
+		// A URI is ASCII, so any byte >= 0x80 is text around the URL. CJK prose has
+		// no spaces to stop the scan, and a no-break space or an em dash reads as an
+		// ordinary byte, so each of these would otherwise mask the PORT as a
+		// password and invent a host from the address that follows.
+		"https://api.test:8443 ops@corp.test",          // no-break space
+		"サーバhttps://api.test:8443へ接続、管理者ops@corp.test", // CJK prose, no ASCII whitespace at all
+		"https://h.test:8443—ops@corp.test",            // em dash
+		"https://[2001:db8::1]:8443 admin@corp.test",   // no-break space, IPv6 host
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := String(in); got != in {
+				t.Fatalf("URL over-redacted: %q -> %q", in, got)
+			}
+		})
+	}
+}
+
+// TestStringMasksURLUserinfoKeepsURLParseable locks the reason userinfoMask is
+// percent-encoded instead of the raw Mask. Downstream consumers strip userinfo
+// structurally with net/url; a raw "[redacted]" is invalid userinfo, so it would
+// fail that parse and drop the host and path along with the credential, turning a
+// redaction into lost signal.
+func TestStringMasksURLUserinfoKeepsURLParseable(t *testing.T) {
+	got := String("https://user:secretpw123@evil.example/x")
+	u, err := neturl.Parse(got)
+	if err != nil {
+		t.Fatalf("redacted URL no longer parses: %q: %v", got, err)
+	}
+	u.User = nil
+	if want := "https://evil.example/x"; u.String() != want {
+		t.Fatalf("userinfo strip = %q, want %q (from %q)", u.String(), want, got)
+	}
+}
+
+// TestStringMasksAuthorizationBearer covers the RFC 6750 leak class: the
+// credential is anchored by the Authorization header position, not by a
+// secret-looking key, so the header name and the Bearer scheme are preserved
+// while the credential is masked.
+func TestStringMasksAuthorizationBearer(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"header", "Authorization: Bearer abcdef123456", "Authorization: Bearer " + Mask},
+		{"lowercase", "authorization: bearer abcdef123456", "authorization: bearer " + Mask},
+		{"json", `{"Authorization":"Bearer abcdef123456"}`, `{"Authorization":"Bearer ` + Mask + `"}`},
+		{"proxy header", "Proxy-Authorization: Bearer abcdef123456", "Proxy-Authorization: Bearer " + Mask},
+		{"tab separated", "Authorization:\tBearer abcdef123456", "Authorization:\tBearer " + Mask},
+		{"equals operator", "Authorization=Bearer abcdef123456", "Authorization=Bearer " + Mask},
+		{
+			"jwt",
+			"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+			"Authorization: Bearer " + Mask,
+		},
+		{"base64 padding", "Authorization: Bearer YWJjZGVmZ2hpams=", "Authorization: Bearer " + Mask},
+		// 8 bytes is the exact length gate; the 7-byte form is in the preserve test.
+		{"minimum length", "Authorization: Bearer abcd1234", "Authorization: Bearer " + Mask},
+		{
+			"curl header arg",
+			`curl -H "Authorization: Bearer abcdef123456" https://x.test`,
+			`curl -H "Authorization: Bearer ` + Mask + `" https://x.test`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := String(c.in); got != c.want {
+				t.Fatalf("String(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStringPreservesNonCredentialBearerText is the anti-over-redaction guard for
+// the bearer pass. It pins all three precision boundaries: the header anchor is
+// required, a short synthetic placeholder is below the length gate, and a shell or
+// documentation placeholder is outside the b64token charset. The curl form is the
+// same fixture shape the rule catalog uses, so masking it would degrade unrelated
+// evidence.
+//
+// NOTE the deliberate boundary: once the header anchor matches, the length gate is
+// the only filter on what follows, so a word of prose after a literal
+// "Authorization: Bearer" IS masked ("...the Authorization: Bearer credential
+// must be rotated"). That is the accepted cost of a deterministic, explainable
+// rule — the alternative is entropy or dictionary guessing — and the anchor keeps
+// it confined to text already claiming to be an Authorization header. The cases
+// below stay preserved because each fails the charset or the length gate, not
+// because the pass second-guesses whether the value looks like a credential.
+func TestStringPreservesNonCredentialBearerText(t *testing.T) {
+	cases := []string{
+		"Authorization: Bearer test",                                             // 4-byte placeholder, under the length gate
+		"Authorization: Bearer tok123",                                           // 6-byte placeholder
+		"Authorization: Bearer abcd123",                                          // 7 bytes: one short of the gate
+		"Authorization: Bearer <token>",                                          // doc placeholder: '<' is not b64token
+		`curl --header "Authorization: Bearer $TOKEN" https://collector.example`, // shell variable, not b64token
+		"Bearer abcdef123456",                                                    // no header anchor: not a credential context
+		"the bearer of this message must be verified",                            // prose
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := String(in); got != in {
+				t.Fatalf("non-credential bearer text over-redacted: %q -> %q", in, got)
+			}
+		})
 	}
 }
 
@@ -1294,6 +1507,11 @@ func FuzzString(f *testing.F) {
 		{"https://x.test#frag", ""},
 		{"%zz?x=", "&sig=%"},
 		{"", ">tail"},
+		// Position-driven passes: an authority scan and a header anchor must also
+		// survive truncated, nested, and unterminated input.
+		{"postgres://u:p@h", "&bar=2"},
+		{"redis://:@", "@:"},
+		{"Authorization: Bearer ", "&bar=2"},
 	}
 	for _, s := range seeds {
 		f.Add(s.prefix, s.suffix)
@@ -1303,6 +1521,18 @@ func FuzzString(f *testing.F) {
 		got := String(in) // must not panic
 		if strings.Contains(got, secret) {
 			t.Fatalf("secret survived redaction: %q -> %q", in, got)
+		}
+		// The position-driven passes carry the same no-leak property. The secret
+		// holds no byte that ends an authority scan or leaves the b64token
+		// charset, so arbitrary surrounding text must not rescue it: every
+		// counterexample here is a real leak, not a documented boundary.
+		dsn := prefix + "postgres://u:" + secret + "@h.test/db" + suffix
+		if got := String(dsn); strings.Contains(got, secret) {
+			t.Fatalf("userinfo password survived redaction: %q -> %q", dsn, got)
+		}
+		hdr := prefix + "\nAuthorization: Bearer " + secret + suffix
+		if got := String(hdr); strings.Contains(got, secret) {
+			t.Fatalf("bearer credential survived redaction: %q -> %q", hdr, got)
 		}
 		_ = String(prefix + suffix) // exercise arbitrary non-secret text for panics
 	})

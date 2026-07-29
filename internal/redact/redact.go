@@ -28,6 +28,41 @@ var tokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 }
 
+// authorizationBearerPattern matches an RFC 6750 bearer credential in the
+// Authorization header position: the literal header name, an optional
+// JSON/YAML quote and ':'/'=' operator, the literal Bearer scheme, then the
+// credential. Group 1 is the header and scheme text and is preserved; group 2 is
+// the credential and is masked, so an observed request stays readable.
+//
+// Precision boundaries, each chosen to keep this anchored rather than fuzzy:
+//   - The header anchor is REQUIRED. RFC 6750 defines the scheme only for this
+//     header, so a floating "Bearer" word in prose, a log message, or an
+//     identifier is not a credential context and masking after it would be a
+//     pure false positive. Matching is case-insensitive (HTTP header names are)
+//     and unanchored on the left, which also covers Proxy-Authorization. The
+//     header name must be followed directly by the operator, so a subscript or
+//     call form (headers["Authorization"] = "Bearer …") is an accepted false
+//     negative: admitting one such spelling invites every other quoting and
+//     accessor syntax, with no principled place to stop.
+//   - The credential charset is b64token plus its optional '=' padding, so a
+//     shell placeholder such as `Bearer $TOKEN` or a doc placeholder such as
+//     `Bearer <token>` stays readable.
+//   - 8 bytes is the minimum credential length. It sits above every short
+//     synthetic placeholder ("test", "tok123", "secret" — 4 to 6 bytes) that
+//     appears in fixtures and documentation, and below the shortest real token
+//     this pass exists to catch. A genuine token under 8 bytes is an accepted
+//     false negative. NOTE the length gate is the ONLY filter on the credential:
+//     the header anchor is trusted, so a word of prose that follows it ("…the
+//     Authorization: Bearer credential must be rotated") is masked too. That is
+//     an accepted over-mask — the alternative is entropy or dictionary guessing,
+//     which is neither deterministic nor explainable — and the anchor keeps it
+//     confined to text that already claims to be an Authorization header.
+//   - The separator is SP/HTAB only, not any whitespace. Content previews are
+//     multi-line, so crossing a newline would mask the next line's first word;
+//     an obs-folded header is therefore an accepted false negative.
+var authorizationBearerPattern = regexp.MustCompile(
+	`(?i)(authorization["']?[ \t]*[:=][ \t]*["']?bearer[ \t]+)([A-Za-z0-9._~+/-]{8,}={0,2})`)
+
 // secretKey matches a secret-looking assignment key (env var, JSON field,
 // YAML key). Capture group 1 is the key text as written.
 const secretKey = `([A-Za-z0-9_."'-]*(?i:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)[A-Za-z0-9_."'-]*)`
@@ -64,12 +99,19 @@ var credentialQueryKeys = map[string]struct{}{
 
 const maxCredentialQueryKeyLen = len("x-amz-security-token")
 
-// String masks exact credential parameters, secret-like assignments, and
-// self-identifying token formats. Credential-key matching uses a normalized
-// whole-input view rather than trusting URL boundaries; the broader assignment
-// patterns are limited to non-URL spans to avoid masking benign query keys such
-// as id_token.
+// String masks exact credential parameters, credentials held in a fixed
+// grammatical position (a URL userinfo password, an Authorization: Bearer
+// credential), secret-like assignments, and self-identifying token formats.
+// Credential-key matching uses a normalized whole-input view rather than
+// trusting URL boundaries; the broader assignment patterns are limited to
+// non-URL spans to avoid masking benign query keys such as id_token.
+//
+// The position-driven passes run first: they delimit their own credential span
+// exactly, so masking there leaves less ambiguous text for the later, broader
+// passes to interpret.
 func String(s string) string {
+	s = maskURLUserinfoPasswords(s)
+	s = maskAuthorizationBearer(s)
 	s = maskCredentialValues(s)
 	var b strings.Builder
 	last := 0
@@ -376,6 +418,146 @@ func valueEnd(s string, start int) int {
 		i++
 	}
 	return i
+}
+
+// urlSchemePattern matches an RFC 3986 scheme followed by "//": the start of a
+// URL authority. It deliberately accepts ANY scheme rather than just http(s),
+// because an embedded password is overwhelmingly a database or broker DSN
+// (postgres://, redis://, amqp://, mongodb+srv://), and a defanged scheme
+// (hxxp://) must still be recognized. It only locates a candidate authority;
+// maskURLUserinfoPasswords decides what to mask. Note this is NOT urlPattern:
+// widening that pattern would extend the region where the assignment pass is
+// suppressed, which changes unrelated behavior.
+var urlSchemePattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// userinfoMask replaces a URL password in place. It is Mask with its brackets
+// percent-encoded, because the emitted URL must remain parseable: downstream
+// consumers strip userinfo structurally with net/url, and a raw "[redacted]" is
+// invalid userinfo, so it would fail that parse and drop the whole URL — host and
+// path included — rather than just the credential.
+const userinfoMask = "%5Bredacted%5D"
+
+// maskURLUserinfoPasswords masks the password of a URL authority
+// (scheme://user:password@host). The credential is identified by its POSITION in
+// the RFC 3986 grammar, not by a secret-looking key name, which is what closes
+// the DSN leak class (postgres://user:p4ssw0rd@host/db): no query key, no
+// assignment key, and no self-describing shape is present for the other passes
+// to match. The username, host, port, and path are left intact by THIS pass —
+// they carry triage value and are not credentials. (A username that is itself
+// secret-looking, as in postgres://token:pw@host/db, is still masked by the later
+// assignment pass, which takes the rest of the URL with it.)
+//
+// Span boundaries — both are load-bearing, and TestStringMasksURLUserinfoPassword
+// asserts exact output because a substring check cannot tell them apart:
+//   - The userinfo ends at the LAST '@' inside the authority, so neither a
+//     password containing '@' nor a later '@' in the path or query can leave a
+//     surviving credential tail.
+//   - The password starts at the FIRST ':' of the userinfo, so a password
+//     containing ':' is masked whole.
+//
+// Not masked, by design:
+//   - A userinfo with no ':' (scheme://token@host): a bare username is normally
+//     not a credential, and a self-describing token there is already caught by
+//     tokenPatterns. An empty password (scheme://user:@host) has nothing to leak.
+//   - A userinfo holding a byte that ends the authority scan — an unencoded '/',
+//     whitespace, a non-ASCII byte, a quote, or one of the list separators in
+//     authorityTerminator. This covers the USERNAME as well as the password: the
+//     scan stops before it ever reaches the '@', so postgres://usér:pw@h/db is
+//     left alone even though the password itself is maskable. The scan then finds
+//     no '@' and masks nothing, so every case here is a false negative rather
+//     than a partial mask, and each class is recorded in
+//     TestStringKnownFalseNegatives. Widening the scan to recover them was
+//     measured to be worse: it reads a benign path such as /download/file@2x.png
+//     as userinfo and masks the path, and running through non-ASCII text lets a
+//     CJK sentence bridge a host:port to an address later in the line.
+func maskURLUserinfoPasswords(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, loc := range urlSchemePattern.FindAllStringIndex(s, -1) {
+		authStart := loc[1]
+		// Matches arrive in increasing order and authorityEnd stops at the '/'
+		// that any later scheme match must contain, so spans cannot overlap and
+		// this cannot fire today. It stays because the splice below indexes
+		// s[last:pwStart]: were that invariant ever broken, the alternative to
+		// skipping is a panic on a redaction path.
+		if authStart < last {
+			continue
+		}
+		at := strings.LastIndexByte(s[authStart:authorityEnd(s, authStart)], '@')
+		if at < 0 {
+			continue
+		}
+		colon := strings.IndexByte(s[authStart:authStart+at], ':')
+		if colon < 0 {
+			continue
+		}
+		pwStart, pwEnd := authStart+colon+1, authStart+at
+		if pwStart >= pwEnd {
+			continue
+		}
+		if last == 0 {
+			b.Grow(len(s) + len(userinfoMask))
+		}
+		b.WriteString(s[last:pwStart])
+		b.WriteString(userinfoMask)
+		last = pwEnd
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// authorityEnd returns the index one past the URL authority beginning at start.
+// The scan is deliberately short rather than greedy, because every byte it reads
+// past the real host is a byte that can turn an unrelated '@' later in the line
+// into a fabricated userinfo — masking a port as a password, destroying two true
+// indicators and inventing a third. It therefore stops at:
+//
+//   - '/', '?', '#' — where RFC 3986 ends the authority.
+//   - Whitespace, control bytes, the quote/brace/pipe wrappers, and every
+//     non-ASCII byte, none of which may appear in a URI at all. A URI is ASCII,
+//     so a byte >= 0x80 is the text AROUND the URL — CJK or other non-English
+//     prose, a no-break space pasted from a page, typographic punctuation — and
+//     treating it as authority-legal is how a CJK sentence bridges a benign
+//     host:port to an address later in the line. Stopping at a wrapper also keeps
+//     the scan inside one quoted string, so a JSON value like "redis://u:p"
+//     followed by a later field containing '@' is not read as a single authority.
+//   - ',' ';' '&' '(' ')' — legal userinfo sub-delims, but in practice they
+//     separate items in a list, a query, or a CSV row and wrap a markdown link.
+//     Reading past one is exactly how "https://api.test:8443;user=ops@corp.test"
+//     becomes a false positive, so precision wins here.
+//
+// The cost is a false negative when a password contains one of those bytes
+// unencoded (RFC 3986 requires percent-encoding for all of them except the five
+// sub-delims); see maskURLUserinfoPasswords and TestStringKnownFalseNegatives.
+func authorityEnd(s string, start int) int {
+	i := start
+	for i < len(s) && !authorityTerminator(s[i]) {
+		i++
+	}
+	return i
+}
+
+// authorityTerminator reports whether b ends an authority scan. '[' and ']' are
+// deliberately absent so an IPv6 literal host stays inside the scan.
+func authorityTerminator(b byte) bool {
+	switch b {
+	case '/', '?', '#',
+		'"', '\'', '`', '<', '>', '\\', '{', '}', '|', '^',
+		',', ';', '&', '(', ')':
+		return true
+	}
+	// Space, every control byte, and every non-ASCII byte (DEL upward).
+	return b <= ' ' || b >= 0x7F
+}
+
+// maskAuthorizationBearer masks the credential of an Authorization: Bearer
+// header, keeping the header name and scheme so the observed request stays
+// readable. See authorizationBearerPattern for the precision boundaries.
+func maskAuthorizationBearer(s string) string {
+	return authorizationBearerPattern.ReplaceAllString(s, "${1}"+Mask)
 }
 
 // maskAssignAll runs every assignment pass over s, masking KEY=VALUE secret
