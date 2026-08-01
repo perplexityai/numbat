@@ -118,7 +118,12 @@ For the rule format and override behavior, see [Writing rules](rules.md).
 ## Tampering
 
 - `tamper.agent_config_write` - a command or structured action mutates an agent
-  hook, settings, plugin surface, or project `.mcp.json`.
+  hook, settings, or plugin surface, or an MCP server-definition store. Covered
+  MCP stores are the project `.mcp.json`, Claude Code's `~/.claude.json` and
+  system `managed-mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`,
+  `.codeium/windsurf/mcp_config.json`, and the workspace `.vscode/mcp.json`.
+  A user-profile `mcp.json` under `Library/Application Support` is not matched,
+  because relocated system paths are excluded to keep the rule precise.
 - `tamper.detector_state_write` - a command or structured action targets the
   default per-user `$HOME/.numbat` state directory.
 - `tamper.guardrails_off` - the session uses a reduced-approval permission
