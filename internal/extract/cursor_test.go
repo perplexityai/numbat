@@ -88,6 +88,51 @@ func TestExtractCursorMapsShapesWithCursorIdentity(t *testing.T) {
 	assertUniqueEventIDs(t, res.Events)
 }
 
+// Current Cursor transcripts wrap content blocks in message and end each turn
+// with a bookkeeping record. Both the text and tool call must still surface,
+// while turn_ended should be silent.
+func TestExtractCursorCurrentMessageEnvelope(t *testing.T) {
+	const body = `{"role":"user","message":{"content":[{"type":"text","text":"inspect the readme"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I will open it."},{"type":"tool_use","name":"Read","input":{"path":"/workspace/README.md"}}]}}
+{"type":"turn_ended","status":"success"}`
+	res := extractCursor(t, body, ProfileEvidence)
+	if len(res.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
+	}
+
+	acts := activityEvents(res.Events)
+	wantTypes := []model.EventType{
+		model.EventPromptUser,
+		model.EventMessageAssistant,
+		model.EventFileRead,
+	}
+	wantPointers := []string{
+		"/message/content/0",
+		"/message/content/0",
+		"/message/content/1",
+	}
+	if len(acts) != len(wantTypes) {
+		t.Fatalf("got %d activity events, want %d:\n%s", len(acts), len(wantTypes), dumpEvents(res.Events))
+	}
+	for i := range wantTypes {
+		if acts[i].EventType != wantTypes[i] || acts[i].Evidence.JSONPointer != wantPointers[i] {
+			t.Errorf("event %d = {%s pointer=%q}, want {%s pointer=%q}",
+				i, acts[i].EventType, acts[i].Evidence.JSONPointer, wantTypes[i], wantPointers[i])
+		}
+	}
+	if acts[2].FilePath != "/workspace/README.md" || acts[2].ToolName != "Read" {
+		t.Errorf("file event = {path=%q tool=%q}, want {/workspace/README.md Read}", acts[2].FilePath, acts[2].ToolName)
+	}
+	assertUniqueEventIDs(t, res.Events)
+}
+
+func TestExtractCursorToleratesNonObjectMessageEnvelope(t *testing.T) {
+	res := extractCursor(t, `{"type":"system","message":"bookkeeping"}`, ProfileEvidence)
+	if len(res.Diagnostics) != 0 || len(res.Events) != 0 {
+		t.Fatalf("scalar message produced output: events=%s diagnostics=%+v", dumpEvents(res.Events), res.Diagnostics)
+	}
+}
+
 // A tool result whose call id was never a shell command stays a generic
 // tool.result (never a command.result), and a structurally-marked failure is
 // tagged tool_error. This covers the non-command correlation branch.
