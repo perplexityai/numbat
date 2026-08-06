@@ -11,21 +11,26 @@ import (
 // Cursor uses a flat event-to-command schema. Its installer preserves unrelated
 // entries and removes only marker-owned numbat commands.
 
-// cursorHookEvent pairs one native Cursor event with its callback deadline.
-// Cursor's generic tool hooks overlap the older specialized shell/MCP/file
-// callbacks, so numbat installs the generic stream only. That gives every tool
-// one pre event and one success/failure event without depending on a matcher to
-// partition overlapping callbacks.
+// cursorHookEvent pairs one native Cursor event with its callback deadline and
+// optional tool matcher. Cursor's Read and ReadFile actions use the specialized
+// beforeReadFile callback because some builds omit the generic callbacks for
+// ReadFile. The generic stream excludes those names to avoid duplicate events.
 type cursorHookEvent struct {
 	event   string
+	matcher string
 	timeout int
 }
 
+// Cursor matchers are JavaScript regular expressions. Read and ReadFile use the
+// specialized callback below, so exclude both names from the generic stream.
+const cursorNonReadToolMatcher = "^(?!(?:Read|ReadFile)$).*"
+
 var cursorHookEvents = []cursorHookEvent{
 	{event: "beforeSubmitPrompt", timeout: promptHookTimeoutSeconds},
-	{event: "preToolUse", timeout: fastHookTimeoutSeconds},
-	{event: "postToolUse", timeout: fastHookTimeoutSeconds},
-	{event: "postToolUseFailure", timeout: fastHookTimeoutSeconds},
+	{event: "preToolUse", matcher: cursorNonReadToolMatcher, timeout: fastHookTimeoutSeconds},
+	{event: "beforeReadFile", timeout: fastHookTimeoutSeconds},
+	{event: "postToolUse", matcher: cursorNonReadToolMatcher, timeout: fastHookTimeoutSeconds},
+	{event: "postToolUseFailure", matcher: cursorNonReadToolMatcher, timeout: fastHookTimeoutSeconds},
 	{event: "stop", timeout: stopHookTimeoutSeconds},
 	{event: "sessionStart", timeout: fastHookTimeoutSeconds},
 	{event: "sessionEnd", timeout: fastHookTimeoutSeconds},
@@ -161,8 +166,7 @@ func (cs cursorSettings) hasNumbatHooks() bool {
 }
 
 // hasCurrentCursorHooks requires one owned entry at every event in the current
-// install contract. This lets status distinguish an older specialized-only
-// install from the complete generic pre/success/failure stream.
+// install contract. This lets status distinguish an older or incomplete install.
 func (cs cursorSettings) hasCurrentCursorHooks() bool {
 	for _, spec := range cursorHookEvents {
 		found := false
@@ -187,6 +191,7 @@ func (cs cursorSettings) applyNumbatHooksWithArgs(binary string, runtimeArgs []s
 	for _, spec := range cursorHookEvents {
 		entry, err := json.Marshal(cursorHookEntry{
 			Command: cursorCommandWithArgs(binary, spec.event, runtimeArgs, enforce && cursorEnforceEvent(spec.event)),
+			Matcher: spec.matcher,
 			Timeout: spec.timeout,
 		})
 		if err != nil {
@@ -198,7 +203,7 @@ func (cs cursorSettings) applyNumbatHooksWithArgs(binary string, runtimeArgs []s
 }
 
 func cursorEnforceEvent(event string) bool {
-	return event == "preToolUse"
+	return event == "preToolUse" || event == "beforeReadFile"
 }
 
 // removeNumbatHooks strips every numbat-installed entry, dropping now-empty event

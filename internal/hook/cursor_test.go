@@ -86,6 +86,20 @@ func TestMapCursorEvents(t *testing.T) {
 			},
 		},
 		{
+			name:  "preToolUse ReadFile maps before action",
+			event: "preToolUse",
+			payload: map[string]any{
+				"tool_name":  "ReadFile",
+				"tool_input": map[string]any{"path": "/proj/.env"},
+			},
+			want: model.EventFileRead,
+			check: func(t *testing.T, ev model.Event) {
+				if ev.FilePath != "/proj/.env" || ev.ToolName != "ReadFile" {
+					t.Errorf("mapped ReadFile = path %q, tool %q", ev.FilePath, ev.ToolName)
+				}
+			},
+		},
+		{
 			name:  "preToolUse StrReplace maps before action",
 			event: "preToolUse",
 			payload: map[string]any{

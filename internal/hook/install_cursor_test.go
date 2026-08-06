@@ -74,11 +74,11 @@ func TestCursorInstallCreatesAllEvents(t *testing.T) {
 		if entries[0].Timeout != spec.timeout {
 			t.Errorf("event %q timeout = %d, want %d", spec.event, entries[0].Timeout, spec.timeout)
 		}
-		if entries[0].Matcher != "" {
-			t.Errorf("event %q matcher = %q, want empty", spec.event, entries[0].Matcher)
+		if entries[0].Matcher != spec.matcher {
+			t.Errorf("event %q matcher = %q, want %q", spec.event, entries[0].Matcher, spec.matcher)
 		}
 	}
-	for _, duplicate := range []string{"beforeShellExecution", "afterShellExecution", "beforeMCPExecution", "afterMCPExecution", "beforeReadFile", "afterFileEdit"} {
+	for _, duplicate := range []string{"beforeShellExecution", "afterShellExecution", "beforeMCPExecution", "afterMCPExecution", "afterFileEdit"} {
 		if _, ok := parsed.Hooks[duplicate]; ok {
 			t.Errorf("overlapping specialized event %q should not be installed", duplicate)
 		}
@@ -104,6 +104,29 @@ func TestCursorInstallIsIdempotent(t *testing.T) {
 	hooks := readCursorHooks(t, path)
 	if got, want := countCursorNumbatHooks(hooks), len(cursorHookEvents); got != want {
 		t.Fatalf("after two installs got %d numbat hooks, want %d (no duplicates)", got, want)
+	}
+}
+
+func TestCursorReadHooksArePartitioned(t *testing.T) {
+	wantMatchers := map[string]string{
+		"preToolUse":         cursorNonReadToolMatcher,
+		"beforeReadFile":     "",
+		"postToolUse":        cursorNonReadToolMatcher,
+		"postToolUseFailure": cursorNonReadToolMatcher,
+	}
+	gotMatchers := make(map[string]string, len(cursorHookEvents))
+	for _, spec := range cursorHookEvents {
+		gotMatchers[spec.event] = spec.matcher
+	}
+	for event, want := range wantMatchers {
+		got, ok := gotMatchers[event]
+		if !ok {
+			t.Errorf("required event %s is not installed", event)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s matcher = %q, want %q", event, got, want)
+		}
 	}
 }
 
@@ -159,7 +182,8 @@ func TestCursorEnforceInstallWiresOnlyBlockingHooks(t *testing.T) {
 		t.Fatalf("enforce install hooks = %d, want %d", got, want)
 	}
 	enforceEvents := map[string]bool{
-		"preToolUse": true,
+		"preToolUse":     true,
+		"beforeReadFile": true,
 	}
 	for event, entries := range cs.hooks {
 		for _, raw := range entries {
@@ -173,8 +197,15 @@ func TestCursorEnforceInstallWiresOnlyBlockingHooks(t *testing.T) {
 			if got := strings.Contains(decodedHookCommand(entry.Command), enforceFlag); got != enforceEvents[event] {
 				t.Errorf("%s enforce flag = %v, want %v: %s", event, got, enforceEvents[event], entry.Command)
 			}
-			if entry.Matcher != "" {
-				t.Errorf("%s matcher = %q, want unfiltered generic hook", event, entry.Matcher)
+			specMatcher := ""
+			for _, spec := range cursorHookEvents {
+				if spec.event == event {
+					specMatcher = spec.matcher
+					break
+				}
+			}
+			if entry.Matcher != specMatcher {
+				t.Errorf("%s matcher = %q, want %q", event, entry.Matcher, specMatcher)
 			}
 		}
 	}

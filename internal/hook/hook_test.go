@@ -133,8 +133,8 @@ func TestEnforceEligibleOnlyBlockingPreToolEvents(t *testing.T) {
 		{AgentWindsurf, "post_read_code", LifecycleFileRead, false},
 		{AgentWindsurf, "post_write_code", LifecycleFileWrite, false},
 		{AgentWindsurf, "post_mcp_tool_use", LifecycleMCPCall, false},
-		// Specialized Cursor events remain eligible for older/manual configs;
-		// the current installer uses only generic preToolUse.
+		// Specialized Cursor events remain eligible for manual configs. Current
+		// installs also use beforeReadFile as the canonical file-read gate.
 		{AgentCursor, "beforeShellExecution", LifecycleCommandExec, true},
 		{AgentCursor, "beforeMCPExecution", LifecycleMCPCall, true},
 		{AgentCursor, "beforeReadFile", LifecycleFileRead, true},
