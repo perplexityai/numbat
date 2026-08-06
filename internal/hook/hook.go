@@ -1560,7 +1560,7 @@ func classifyCursorTool(ev *model.Event, r *resolver, post, failed bool) {
 	case "shell":
 		ev.EventType = model.EventCommandExec
 		ev.Command = firstString(input, "command", "command_line", "commandLine")
-	case "read", "grep":
+	case "read", "readfile", "grep":
 		ev.EventType = model.EventFileRead
 		ev.FilePath = firstString(input, "file_path", "filePath", "path")
 	case "write", "edit", "strreplace":

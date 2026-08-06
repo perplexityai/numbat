@@ -11,19 +11,21 @@ import (
 // Cursor uses a flat event-to-command schema. Its installer preserves unrelated
 // entries and removes only marker-owned numbat commands.
 
-// cursorHookEvent pairs one native Cursor event with its callback deadline.
-// Cursor's generic tool hooks overlap the older specialized shell/MCP/file
-// callbacks, so numbat installs the generic stream only. That gives every tool
-// one pre event and one success/failure event without depending on a matcher to
-// partition overlapping callbacks.
+// cursorHookEvent pairs one native Cursor event with its callback deadline and
+// optional tool matcher. Cursor's generic tool hooks cover most current tools.
+// ReadFile is the exception in Cursor 3.15.6: it emits beforeReadFile but no
+// preToolUse callback, so numbat installs a narrowly matched specialized
+// fallback without duplicating legacy Read events.
 type cursorHookEvent struct {
 	event   string
+	matcher string
 	timeout int
 }
 
 var cursorHookEvents = []cursorHookEvent{
 	{event: "beforeSubmitPrompt", timeout: promptHookTimeoutSeconds},
 	{event: "preToolUse", timeout: fastHookTimeoutSeconds},
+	{event: "beforeReadFile", matcher: "ReadFile", timeout: fastHookTimeoutSeconds},
 	{event: "postToolUse", timeout: fastHookTimeoutSeconds},
 	{event: "postToolUseFailure", timeout: fastHookTimeoutSeconds},
 	{event: "stop", timeout: stopHookTimeoutSeconds},
@@ -187,6 +189,7 @@ func (cs cursorSettings) applyNumbatHooksWithArgs(binary string, runtimeArgs []s
 	for _, spec := range cursorHookEvents {
 		entry, err := json.Marshal(cursorHookEntry{
 			Command: cursorCommandWithArgs(binary, spec.event, runtimeArgs, enforce && cursorEnforceEvent(spec.event)),
+			Matcher: spec.matcher,
 			Timeout: spec.timeout,
 		})
 		if err != nil {
@@ -198,7 +201,7 @@ func (cs cursorSettings) applyNumbatHooksWithArgs(binary string, runtimeArgs []s
 }
 
 func cursorEnforceEvent(event string) bool {
-	return event == "preToolUse"
+	return event == "preToolUse" || event == "beforeReadFile"
 }
 
 // removeNumbatHooks strips every numbat-installed entry, dropping now-empty event
