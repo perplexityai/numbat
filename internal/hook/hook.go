@@ -1523,9 +1523,8 @@ func classifyVSCodeTool(ev *model.Event, r *resolver, post bool) {
 }
 
 // classifyCursorTool maps Cursor's generic preToolUse, postToolUse, and
-// postToolUseFailure payloads. New installs use these generic events instead of
-// the overlapping specialized shell/MCP/file callbacks, so one tool invocation
-// produces one pre event and exactly one success-or-failure event.
+// postToolUseFailure payloads. Current installs exclude Read and ReadFile from
+// these callbacks because beforeReadFile is the canonical read-action source.
 func classifyCursorTool(ev *model.Event, r *resolver, post, failed bool) {
 	name := r.toolName()
 	input := r.toolInput()

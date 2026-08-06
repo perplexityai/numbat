@@ -107,6 +107,29 @@ func TestCursorInstallIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCursorReadHooksArePartitioned(t *testing.T) {
+	wantMatchers := map[string]string{
+		"preToolUse":         cursorNonReadToolMatcher,
+		"beforeReadFile":     "",
+		"postToolUse":        cursorNonReadToolMatcher,
+		"postToolUseFailure": cursorNonReadToolMatcher,
+	}
+	gotMatchers := make(map[string]string, len(cursorHookEvents))
+	for _, spec := range cursorHookEvents {
+		gotMatchers[spec.event] = spec.matcher
+	}
+	for event, want := range wantMatchers {
+		got, ok := gotMatchers[event]
+		if !ok {
+			t.Errorf("required event %s is not installed", event)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s matcher = %q, want %q", event, got, want)
+		}
+	}
+}
+
 func TestCursorReinstallMigratesOwnedSpecializedHooks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
 	seed := map[string]any{

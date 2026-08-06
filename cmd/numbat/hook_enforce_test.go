@@ -1025,23 +1025,32 @@ func TestEnforceOnDenyStdoutPartialThenPanicNoCorruption(t *testing.T) {
 
 func TestCursorEnforceUsesNativeDeny(t *testing.T) {
 	dir := writeEnforceRuleFile(t, unconditionalEnforceRule)
-	payload := `{"conversation_id":"s1","cwd":"/proj","tool_name":"Shell","tool_input":{"command":"cat .env"},"tool_use_id":"tool-1"}`
-	out, _, code := runCLIStdin(payload,
-		enforceHookArgs(t, "hook", "preToolUse", "--agent", "cursor", "--enforce", "--rules-dir", dir)...)
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0", code)
+	tests := []struct {
+		name, event, payload string
+	}{
+		{"generic shell", "preToolUse", `{"conversation_id":"s1","cwd":"/proj","tool_name":"Shell","tool_input":{"command":"cat .env"},"tool_use_id":"tool-1"}`},
+		{"specialized file read", "beforeReadFile", `{"conversation_id":"s1","file_path":"/proj/.env","content":"SECRET=value"}`},
 	}
-	var response map[string]any
-	if err := json.Unmarshal([]byte(out), &response); err != nil {
-		t.Fatalf("invalid Cursor response %q: %v", out, err)
-	}
-	if got := nestedString(response, "permission"); got != "deny" {
-		t.Fatalf("permission = %q, want deny; response=%s", got, out)
-	}
-	for _, field := range []string{"user_message", "agent_message"} {
-		if got := nestedString(response, field); got != defaultDenyMessage {
-			t.Fatalf("%s = %q, want %q", field, got, defaultDenyMessage)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, code := runCLIStdin(tc.payload,
+				enforceHookArgs(t, "hook", tc.event, "--agent", "cursor", "--enforce", "--rules-dir", dir)...)
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0", code)
+			}
+			var response map[string]any
+			if err := json.Unmarshal([]byte(out), &response); err != nil {
+				t.Fatalf("invalid Cursor response %q: %v", out, err)
+			}
+			if got := nestedString(response, "permission"); got != "deny" {
+				t.Fatalf("permission = %q, want deny; response=%s", got, out)
+			}
+			for _, field := range []string{"user_message", "agent_message"} {
+				if got := nestedString(response, field); got != defaultDenyMessage {
+					t.Fatalf("%s = %q, want %q", field, got, defaultDenyMessage)
+				}
+			}
+		})
 	}
 }
 
