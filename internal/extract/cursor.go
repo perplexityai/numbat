@@ -200,6 +200,9 @@ func (e CursorExtractor) mapLine(res *Result, src Source, sha string, st *cursor
 		res.diag(src.Path, line, "malformed JSON line")
 		return
 	}
+	if entry.Content.hasData() && entry.Message.Content.hasData() {
+		res.diag(src.Path, line, "multiple content bodies; using top-level content")
+	}
 	st.observe(res, e, src, sha, line, &entry)
 	e.indexCommandCalls(st, &entry)
 

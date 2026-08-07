@@ -133,6 +133,18 @@ func TestExtractCursorToleratesNonObjectMessageEnvelope(t *testing.T) {
 	}
 }
 
+func TestExtractCursorDiagnosesMultipleContentBodies(t *testing.T) {
+	const body = `{"role":"assistant","content":"top-level text","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"/workspace/hidden.txt"}}]}}`
+	res := extractCursor(t, body, ProfileEvidence)
+	if len(res.Diagnostics) != 1 || !strings.Contains(res.Diagnostics[0].Msg, "multiple content bodies") {
+		t.Fatalf("diagnostics = %+v, want one multiple-content warning", res.Diagnostics)
+	}
+	acts := activityEvents(res.Events)
+	if len(acts) != 1 || acts[0].EventType != model.EventMessageAssistant || acts[0].ContentPreview != "top-level text" {
+		t.Fatalf("activity events = %s, want the top-level assistant message", dumpEvents(acts))
+	}
+}
+
 // A tool result whose call id was never a shell command stays a generic
 // tool.result (never a command.result), and a structurally-marked failure is
 // tagged tool_error. This covers the non-command correlation branch.
