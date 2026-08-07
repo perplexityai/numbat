@@ -200,6 +200,9 @@ func (e CursorExtractor) mapLine(res *Result, src Source, sha string, st *cursor
 		res.diag(src.Path, line, "malformed JSON line")
 		return
 	}
+	if entry.Content.hasData() && entry.Message.Content.hasData() {
+		res.diag(src.Path, line, "multiple content bodies; using top-level content")
+	}
 	st.observe(res, e, src, sha, line, &entry)
 	e.indexCommandCalls(st, &entry)
 
@@ -208,7 +211,7 @@ func (e CursorExtractor) mapLine(res *Result, src Source, sha string, st *cursor
 		// "tool"/"system"/empty records carry no standalone message body; their
 		// forensic signal is the tool call/result handled below. Only a genuinely
 		// unknown kind is a diagnostic.
-		if !isToolBearingKind(entry.kind()) {
+		if !isKnownCursorRecordKind(entry.kind()) {
 			res.diag(src.Path, line, "unhandled record kind")
 		}
 	}
@@ -221,11 +224,12 @@ func (e CursorExtractor) mapLine(res *Result, src Source, sha string, st *cursor
 	// 2. The content[] body in source order. messageEmitted guards the single
 	// concatenated message so a multi-text body still emits one event, at the
 	// position of its first text block.
-	calls := entry.Content.ToolCalls
-	results := entry.Content.ToolResults
+	content := entry.content()
+	calls := content.ToolCalls
+	results := content.ToolResults
 	ci, ri := 0, 0
 	messageEmitted := false
-	for _, kind := range entry.Content.Order {
+	for _, kind := range content.Order {
 		switch kind {
 		case cursorBlockText:
 			if !messageEmitted && ok {
@@ -271,8 +275,14 @@ func messageRole(kind string) (model.EventType, string, bool) {
 	}
 }
 
-// isToolBearingKind reports whether a non-message record kind is one Cursor uses
-// for tool/system bookkeeping (so it is not flagged as an unhandled kind).
+// isKnownCursorRecordKind reports whether a non-message record kind is known
+// bookkeeping that should not produce a standalone event or diagnostic.
+func isKnownCursorRecordKind(kind string) bool {
+	return kind == "turn_ended" || isToolBearingKind(kind)
+}
+
+// isToolBearingKind reports whether a non-message record kind is one Cursor or
+// Windsurf uses for tool/system bookkeeping.
 func isToolBearingKind(kind string) bool {
 	switch kind {
 	case "tool", "tool_result", "tool_call", "system", "":
@@ -332,7 +342,7 @@ func (e CursorExtractor) emitToolCall(res *Result, src Source, sha string, line 
 	ev.Actor = model.ActorAssistant
 	ev.Confidence = model.ConfidenceHigh
 	ev.ToolCallID = tc.callID()
-	ev.Evidence.JSONPointer = tc.Pointer
+	ev.Evidence.JSONPointer = entry.contentPointer(tc.Pointer)
 	classifyCursorTool(&ev, name, tc.input())
 	res.Events = append(res.Events, ev)
 	*block++
@@ -348,7 +358,7 @@ func (e CursorExtractor) emitToolResult(res *Result, src Source, sha string, st 
 	ev.Actor = model.ActorTool
 	ev.Confidence = model.ConfidenceHigh
 	ev.ToolCallID = to.callID()
-	ev.Evidence.JSONPointer = to.Pointer
+	ev.Evidence.JSONPointer = entry.contentPointer(to.Pointer)
 	if st.isCommandCall(to.callID()) {
 		ev.EventType = model.EventCommandResult
 		ev.ExitCode = to.exitCode()

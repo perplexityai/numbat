@@ -42,6 +42,8 @@ type cursorEntry struct {
 	// custom unmarshaler below normalizes both, and also lifts any tool-call and
 	// tool-result blocks out of an array body into ToolCalls/ToolResult.
 	Content cursorContent `json:"content"`
+	// Current Cursor builds wrap the same content body in a message object.
+	Message cursorMessage `json:"message"`
 
 	// Text is an alternate flat body some records carry instead of content.
 	Text string `json:"text"`
@@ -56,14 +58,28 @@ type cursorEntry struct {
 	Output     *cursorToolOut   `json:"output"`
 }
 
+// cursorMessage is the message envelope used by current Cursor transcripts.
+type cursorMessage struct {
+	Content cursorContent `json:"content"`
+}
+
+func (m *cursorMessage) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if raw == "" || raw[0] != '{' {
+		return nil
+	}
+	type wire cursorMessage
+	return json.Unmarshal(data, (*wire)(m))
+}
+
 // cursorContent is the normalized body of a Cursor record. Text holds the
 // concatenated plain text; ToolCalls and ToolResults hold any tool-call /
 // tool-result blocks lifted out of an array-shaped content body. TextPointer is
 // the RFC 6901 pointer to the body in the SOURCE record: "/content" for a plain
 // string body, or "/content/<i>" naming the single text block when an array
 // body carries exactly one (so a lifted-block body still points at its real
-// source location rather than the synthetic concatenation). Each lifted tool
-// call/result carries its own source pointer (see cursorToolCall.Pointer).
+// source location rather than the synthetic concatenation). Message-wrapped
+// bodies gain their /message prefix when emitted.
 //
 // Order records the source-block order of the content[] body so the mapper can
 // emit a call before its same-record result. Each element names which bucket
@@ -75,6 +91,10 @@ type cursorContent struct {
 	ToolCalls   []cursorToolCall
 	ToolResults []cursorToolOut
 	Order       []cursorBlockKind
+}
+
+func (c *cursorContent) hasData() bool {
+	return strings.TrimSpace(c.Text) != "" || len(c.ToolCalls) > 0 || len(c.ToolResults) > 0
 }
 
 // cursorBlockKind tags one entry in cursorContent.Order with the bucket the
@@ -92,7 +112,7 @@ const (
 // its later result when the record assigns one. Pointer is the RFC 6901 pointer
 // to this call in the SOURCE record (e.g. "/content/2", "/toolCall",
 // "/toolCalls/0"); it is set by the accessors/unmarshaler, never decoded from
-// the record, so the emitted evidence reference is always source-faithful.
+// the record. Message-wrapped content gains its /message prefix when emitted.
 type cursorToolCall struct {
 	Type    string                     `json:"type"`
 	Name    string                     `json:"name"`
@@ -259,6 +279,23 @@ func (e *cursorEntry) time() string {
 	return timeString(e.CreatedAt)
 }
 
+// content returns the record's content body. Older transcripts store it at the
+// top level; current builds place it under message.
+func (e *cursorEntry) content() *cursorContent {
+	if e.Content.hasData() {
+		return &e.Content
+	}
+	return &e.Message.Content
+}
+
+// contentPointer maps a normalized content pointer back to its source location.
+func (e *cursorEntry) contentPointer(pointer string) string {
+	if e.Content.hasData() || (pointer != "/content" && !strings.HasPrefix(pointer, "/content/")) {
+		return pointer
+	}
+	return "/message" + pointer
+}
+
 // timeString returns v as a timestamp only when it is already a string; a
 // numeric epoch returns "" (see time() for why numbat does not guess a format).
 func timeString(v any) string {
@@ -270,11 +307,12 @@ func timeString(v any) string {
 
 // text returns the record's body, preferring the structured content text over
 // the flat Text field, together with the RFC 6901 pointer to it in the SOURCE
-// record. The content body points at "/content" or "/content/<i>" (set by the
-// unmarshaler); the flat fallback points at "/text".
+// record. Content pointers reflect either the top-level or message-wrapped body;
+// the flat fallback points at "/text".
 func (e *cursorEntry) text() (string, string) {
-	if s := strings.TrimSpace(e.Content.Text); s != "" {
-		return s, e.Content.TextPointer
+	content := e.content()
+	if s := strings.TrimSpace(content.Text); s != "" {
+		return s, e.contentPointer(content.TextPointer)
 	}
 	if s := strings.TrimSpace(e.Text); s != "" {
 		return s, "/text"
@@ -284,12 +322,11 @@ func (e *cursorEntry) text() (string, string) {
 
 // toolCalls returns every tool invocation the record carries, gathered from the
 // array-content blocks, the top-level toolCalls list, and a single top-level
-// toolCall, in that order. Each call carries its source pointer: array blocks
-// keep the "/content/<i>" set at unmarshal time, the top-level list points at
-// "/toolCalls/<i>", and a lone top-level call points at "/toolCall".
+// toolCall, in that order. Content-block pointers are adjusted at emission; the
+// top-level list points at "/toolCalls/<i>", and a lone call at "/toolCall".
 func (e *cursorEntry) toolCalls() []cursorToolCall {
 	var calls []cursorToolCall
-	calls = append(calls, e.Content.ToolCalls...)
+	calls = append(calls, e.content().ToolCalls...)
 	for i := range e.ToolCalls {
 		tc := e.ToolCalls[i]
 		tc.Pointer = fmt.Sprintf("/toolCalls/%d", i)
