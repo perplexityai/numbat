@@ -82,7 +82,7 @@ func TestKimiPermissionResultMapsDecisionAndJoin(t *testing.T) {
 	}{
 		{"approved", model.EventPermissionApproved, model.DecisionAllowed},
 		{"rejected", model.EventPermissionDenied, model.DecisionDenied},
-		{"cancelled", model.EventPermissionDenied, model.DecisionDenied},
+		{"cancelled", model.EventPermissionRequested, model.DecisionAsked},
 	}
 	for _, tc := range cases {
 		ev := Map(LifecyclePermission, AgentKimi, model.AgentKimiCode, "kimi-result", map[string]any{

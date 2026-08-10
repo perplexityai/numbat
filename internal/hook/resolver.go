@@ -699,7 +699,7 @@ func (r resolver) decision() string {
 	switch raw {
 	case "allow", "allowed", "approve", "approved", "accept", "accepted":
 		return model.DecisionAllowed
-	case "deny", "denied", "block", "blocked", "reject", "rejected", "cancel", "cancelled":
+	case "deny", "denied", "block", "blocked", "reject", "rejected":
 		return model.DecisionDenied
 	case "ask", "asked", "requested", "prompt":
 		return model.DecisionAsked
