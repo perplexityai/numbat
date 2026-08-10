@@ -79,27 +79,29 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 
 ## Permission and decision telemetry
 
-The enforcement column above says whether numbat can return a synchronous deny;
-it does not imply that the host reports its own permission decision. Explicit
-permission inputs are normalized to `permission.requested`,
-`permission.approved`, or `permission.denied`:
+The enforcement column above says only whether numbat can synchronously deny an
+action. It does not say whether the agent later reports its own permission
+request or decision. numbat normalizes supported reports to
+`permission.requested`, `permission.approved`, or `permission.denied`:
 
-| Agent | Input | Host signal | Per-action join |
+| Agent | Source event | Reported outcome | Per-action ID |
 |---|---|---|---|
-| Claude Code | `PermissionRequest`, `PermissionDenied`; OTLP `claude_code.tool_decision` | request, classifier denial, or OTLP decision | denial `tool_use_id`; OTLP `tool_use_id` |
-| Codex | `PermissionRequest`; OTLP `codex.tool_decision` | request; OTLP decision | hook id not established; OTLP `call_id` |
-| Kimi Code | `PermissionRequest`, `PermissionResult` | request and result | `tool_call_id` |
-| Qwen Code | `PermissionRequest`, `PermissionDenied` | request or classifier denial | denial `tool_use_id` |
-| Copilot CLI / VS Code | `PermissionRequest` | request only | not established |
-| Grok Build | `PermissionDenied` | denial only | not established |
-| Devin CLI | `PermissionRequest` | request only | not established |
-| Hermes | `pre_approval_request`, `post_approval_response` | request and final choice | session only |
+| Claude Code | `PermissionRequest`, `PermissionDenied`; OTLP `claude_code.tool_decision` | request, auto-mode denial, or OTLP decision | `PermissionDenied`: `tool_use_id`; OTLP: `tool_use_id` |
+| Codex | `PermissionRequest`; OTLP `codex.tool_decision` | request or OTLP decision | `PermissionRequest`: none verified; OTLP: `call_id` |
+| Kimi Code | `PermissionRequest`, `PermissionResult` | request or final decision | `tool_call_id` |
+| Qwen Code | `PermissionRequest`, `PermissionDenied` | request or auto-mode denial | `PermissionDenied`: `tool_use_id` |
+| Copilot CLI / VS Code | `PermissionRequest` | request | none verified |
+| Grok Build | `PermissionDenied` | denial | none verified |
+| Devin CLI | `PermissionRequest` | request | none verified |
+| Hermes | `pre_approval_request`, `post_approval_response` | request and final choice | session ID only |
 | OpenCode | OTLP `tool_decision` | decision | `call_id` |
 
-Other OTLP records carrying `approval.required`, `approval.decision`, or
+The per-action ID is copied into numbat's normalized `tool_call_id`, allowing
+records for the same action to be correlated. **None verified** means no usable
+ID has been confirmed from current documentation or fixtures. Other OTLP
+records with `approval.required`, `approval.decision`, or
 `permission.decision` are also mapped; `gen_ai.tool.call.id` is retained when
-present. A join key links records but does not prove that the host honored a
-numbat response.
+present. Correlation does not prove that the agent honored a numbat response.
 
 ## Material exceptions and limits
 
