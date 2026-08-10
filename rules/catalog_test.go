@@ -140,6 +140,11 @@ func TestTamperRules(t *testing.T) {
 	runCases(t, eng, []ruleCase{
 		{"claude settings write", write("/Users/dev/.claude/settings.json"), "tamper.agent_config_write"},
 		{"claude settings.local write", write("/Users/dev/.claude/settings.local.json"), "tamper.agent_config_write"},
+		{"claude managed-mcp delete macOS", model.Event{EventType: model.EventFileDelete, FilePath: "/Library/Application Support/ClaudeCode/managed-mcp.json"}, "tamper.agent_config_write"},
+		{"claude managed-mcp write Linux", write("/etc/claude-code/managed-mcp.json"), "tamper.agent_config_write"},
+		{"claude managed-mcp write Windows", write("C:/Program Files/ClaudeCode/managed-mcp.json"), "tamper.agent_config_write"},
+		{"claude managed-mcp redirect", cmd("echo '{}' > /etc/claude-code/managed-mcp.json"), "tamper.agent_config_write"},
+		{"claude managed-mcp remove", cmd(`rm -f "/Library/Application Support/ClaudeCode/managed-mcp.json"`), "tamper.agent_config_write"},
 		{"codex hooks write", write("/Users/dev/.codex/hooks.json"), "tamper.agent_config_write"},
 		{"gemini installer hooks write", write("/Users/dev/.gemini/config/hooks.json"), "tamper.agent_config_write"},
 		{"gemini system settings write", write("/etc/gemini-cli/settings.json"), "tamper.agent_config_write"},

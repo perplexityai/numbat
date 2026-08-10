@@ -1,5 +1,5 @@
 id: tamper.agent_config_write
-version: "1.7"
+version: "1.8"
 enabled: true
 title: Agent hook or settings file targeted
 description: |-
@@ -12,9 +12,9 @@ expr: |-
     event.file_path.matches(
       "(?i)(^|/)(" +
       "\\.claude/settings(\\.local)?\\.json|" +
-      "etc/claude-code/managed-settings(\\.d/[^/]+)?\\.json|" +
-      "Library/Application Support/ClaudeCode/managed-settings(\\.d/[^/]+)?\\.json|" +
-      "Program Files/ClaudeCode/managed-settings(\\.d/[^/]+)?\\.json|" +
+      "etc/claude-code/managed-(settings(\\.d/[^/]+)?|mcp)\\.json|" +
+      "Library/Application Support/ClaudeCode/managed-(settings(\\.d/[^/]+)?|mcp)\\.json|" +
+      "Program Files/ClaudeCode/managed-(settings(\\.d/[^/]+)?|mcp)\\.json|" +
       "\\.codex/hooks\\.json|etc/codex/(hooks\\.json|requirements\\.toml)|" +
       "ProgramData/OpenAI/Codex/requirements\\.toml|" +
       "\\.gemini/(settings\\.json|config/hooks\\.json)|" +
@@ -54,8 +54,8 @@ expr: |-
         redirect.op in ["write", "append"] &&
         redirect.target.matches(
           "(?i)(^|[\\\\/])(" +
-          "\\.claude[\\\\/]settings(\\.local)?\\.json|etc[\\\\/]claude-code[\\\\/]managed-settings(\\.d[\\\\/][^\\\\/]+)?\\.json|" +
-          "Library[\\\\/]Application Support[\\\\/]ClaudeCode[\\\\/]managed-settings(\\.d[\\\\/][^\\\\/]+)?\\.json|Program Files[\\\\/]ClaudeCode[\\\\/]managed-settings(\\.d[\\\\/][^\\\\/]+)?\\.json|" +
+          "\\.claude[\\\\/]settings(\\.local)?\\.json|etc[\\\\/]claude-code[\\\\/]managed-(settings(\\.d[\\\\/][^\\\\/]+)?|mcp)\\.json|" +
+          "Library[\\\\/]Application Support[\\\\/]ClaudeCode[\\\\/]managed-(settings(\\.d[\\\\/][^\\\\/]+)?|mcp)\\.json|Program Files[\\\\/]ClaudeCode[\\\\/]managed-(settings(\\.d[\\\\/][^\\\\/]+)?|mcp)\\.json|" +
           "\\.codex[\\\\/]hooks\\.json|etc[\\\\/]codex[\\\\/](hooks\\.json|requirements\\.toml)|ProgramData[\\\\/]OpenAI[\\\\/]Codex[\\\\/]requirements\\.toml|" +
           "\\.gemini[\\\\/](settings\\.json|config[\\\\/]hooks\\.json)|etc[\\\\/]gemini-cli[\\\\/]settings\\.json|Library[\\\\/]Application Support[\\\\/]GeminiCli[\\\\/]settings\\.json|ProgramData[\\\\/]gemini-cli[\\\\/]settings\\.json|" +
           "\\.cursor[\\\\/]hooks\\.json|etc[\\\\/]cursor[\\\\/]hooks\\.json|Library[\\\\/]Application Support[\\\\/]Cursor[\\\\/]hooks\\.json|ProgramData[\\\\/]Cursor[\\\\/]hooks\\.json|" +
@@ -144,7 +144,7 @@ expr: |-
         i < command.argv.size() &&
         command.argv[i].matches(
           "(?i)(^|[\\\\/])(" +
-          "\\.claude[\\\\/]settings(\\.local)?\\.json|etc[\\\\/]claude-code[\\\\/]managed-settings(\\.d[\\\\/][^\\\\/]+)?\\.json|Library[\\\\/]Application Support[\\\\/]ClaudeCode[\\\\/]managed-settings(\\.d[\\\\/][^\\\\/]+)?\\.json|Program Files[\\\\/]ClaudeCode[\\\\/]managed-settings(\\.d[\\\\/][^\\\\/]+)?\\.json|" +
+          "\\.claude[\\\\/]settings(\\.local)?\\.json|etc[\\\\/]claude-code[\\\\/]managed-(settings(\\.d[\\\\/][^\\\\/]+)?|mcp)\\.json|Library[\\\\/]Application Support[\\\\/]ClaudeCode[\\\\/]managed-(settings(\\.d[\\\\/][^\\\\/]+)?|mcp)\\.json|Program Files[\\\\/]ClaudeCode[\\\\/]managed-(settings(\\.d[\\\\/][^\\\\/]+)?|mcp)\\.json|" +
           "\\.codex[\\\\/]hooks\\.json|etc[\\\\/]codex[\\\\/](hooks\\.json|requirements\\.toml)|ProgramData[\\\\/]OpenAI[\\\\/]Codex[\\\\/]requirements\\.toml|" +
           "\\.gemini[\\\\/](settings\\.json|config[\\\\/]hooks\\.json)|etc[\\\\/]gemini-cli[\\\\/]settings\\.json|Library[\\\\/]Application Support[\\\\/]GeminiCli[\\\\/]settings\\.json|ProgramData[\\\\/]gemini-cli[\\\\/]settings\\.json|" +
           "\\.cursor[\\\\/]hooks\\.json|etc[\\\\/]cursor[\\\\/]hooks\\.json|Library[\\\\/]Application Support[\\\\/]Cursor[\\\\/]hooks\\.json|ProgramData[\\\\/]Cursor[\\\\/]hooks\\.json|" +
