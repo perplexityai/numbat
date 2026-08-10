@@ -63,11 +63,37 @@ func TestNewAgentLifecycleAndResponses(t *testing.T) {
 
 func TestQwenPermissionDeniedMapsFinalDecision(t *testing.T) {
 	ev := Map(LifecyclePermissionDenied, AgentQwen, model.AgentQwenCode, "qwen-denied", map[string]any{
-		"tool_name": "run_shell_command",
-		"reason":    "user rejected the command",
+		"tool_name":   "run_shell_command",
+		"tool_use_id": "toolu-qwen-1",
+		"reason":      "classifier_blocked",
 	})
-	if ev.EventType != model.EventPermissionDenied || ev.Decision != model.DecisionDenied || ev.ApprovalDecision != model.DecisionDenied {
+	if ev.EventType != model.EventPermissionDenied || ev.Decision != model.DecisionDenied ||
+		ev.ApprovalDecision != model.DecisionDenied || ev.ToolCallID != "toolu-qwen-1" ||
+		ev.ApprovalReason != "classifier_blocked" {
 		t.Fatalf("permission denial = %+v", ev)
+	}
+}
+
+func TestKimiPermissionResultMapsDecisionAndJoin(t *testing.T) {
+	cases := []struct {
+		decision string
+		wantType model.EventType
+		want     string
+	}{
+		{"approved", model.EventPermissionApproved, model.DecisionAllowed},
+		{"rejected", model.EventPermissionDenied, model.DecisionDenied},
+		{"cancelled", model.EventPermissionDenied, model.DecisionDenied},
+	}
+	for _, tc := range cases {
+		ev := Map(LifecyclePermission, AgentKimi, model.AgentKimiCode, "kimi-result", map[string]any{
+			"tool_name":    "Shell",
+			"tool_call_id": "toolu-kimi-1",
+			"decision":     tc.decision,
+		})
+		if ev.EventType != tc.wantType || ev.Decision != tc.want ||
+			ev.ApprovalDecision != tc.want || ev.ToolCallID != "toolu-kimi-1" {
+			t.Errorf("%s permission result = %+v", tc.decision, ev)
+		}
 	}
 }
 
