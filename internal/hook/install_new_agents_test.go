@@ -112,8 +112,8 @@ func TestQwenInstallPreservesUnrelatedJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasNumbatQwenHooks(gs) || len(gs.hooks["PreToolUse"]) != 2 {
-		t.Fatalf("Qwen hooks = %#v", gs.hooks["PreToolUse"])
+	if !hasNumbatQwenHooks(gs) || len(gs.hooks["PreToolUse"]) != 2 || len(gs.hooks["PermissionDenied"]) != 1 {
+		t.Fatalf("Qwen hooks = %#v", gs.hooks)
 	}
 	delete(gs.hooks, "SessionEnd")
 	if err := writeGeminiSettings(path, gs, false); err != nil {

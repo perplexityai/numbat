@@ -77,6 +77,30 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
 
+## Permission and decision telemetry
+
+The enforcement column above says whether numbat can return a synchronous deny;
+it does not imply that the host reports its own permission decision. Explicit
+permission inputs are normalized to `permission.requested`,
+`permission.approved`, or `permission.denied`:
+
+| Agent | Input | Host signal | Per-action join |
+|---|---|---|---|
+| Claude Code | `PermissionRequest`, `PermissionDenied`; OTLP `claude_code.tool_decision` | request, denial, or OTLP decision | hook `tool_call_id` when supplied; OTLP `tool_use_id` |
+| Codex | `PermissionRequest`; OTLP `codex.tool_decision` | request; OTLP decision | hook id not established; OTLP `call_id` |
+| Kimi Code | `PermissionRequest`, `PermissionResult` | request and result | not established |
+| Qwen Code | `PermissionRequest`, `PermissionDenied` | request and denial | not established |
+| Copilot CLI / VS Code | `PermissionRequest` | request only | not established |
+| Grok Build | `PermissionDenied` | denial only | not established |
+| Devin CLI | `PermissionRequest` | request only | not established |
+| Hermes | `pre_approval_request`, `post_approval_response` | request and final choice | session only |
+| OpenCode | OTLP `tool_decision` | decision | `call_id` |
+
+Other OTLP records carrying `approval.required`, `approval.decision`, or
+`permission.decision` are also mapped; `gen_ai.tool.call.id` is retained when
+present. A join key links records but does not prove that the host honored a
+numbat response.
+
 ## Material exceptions and limits
 
 These boundaries affect installation or interpretation and do not fit in one

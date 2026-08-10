@@ -24,6 +24,7 @@ var qwenHookEvents = []qwenHookEvent{
 	{settingsKey: "PostToolUse", lifecycle: "post-tool", matcher: ".*", timeoutMs: fastHookTimeoutSeconds * 1000},
 	{settingsKey: "PostToolUseFailure", lifecycle: "post-tool", matcher: ".*", timeoutMs: fastHookTimeoutSeconds * 1000},
 	{settingsKey: "PermissionRequest", lifecycle: "permission-request", matcher: ".*", timeoutMs: fastHookTimeoutSeconds * 1000},
+	{settingsKey: "PermissionDenied", lifecycle: "permission-denied", matcher: ".*", timeoutMs: fastHookTimeoutSeconds * 1000},
 	{settingsKey: "Stop", lifecycle: "stop", timeoutMs: stopHookTimeoutSeconds * 1000},
 	{settingsKey: "SessionEnd", lifecycle: "session-end", timeoutMs: fastHookTimeoutSeconds * 1000},
 	{settingsKey: "SubagentStart", lifecycle: "session-start", timeoutMs: fastHookTimeoutSeconds * 1000},

@@ -18,6 +18,7 @@ func TestNewAgentLifecycleAndResponses(t *testing.T) {
 		{AgentKimi, "PreToolUse", LifecyclePreTool},
 		{AgentKimi, "PermissionResult", LifecyclePermission},
 		{AgentQwen, "PostToolUseFailure", LifecyclePostTool},
+		{AgentQwen, "PermissionDenied", LifecyclePermissionDenied},
 		{AgentCline, "TaskResume", LifecycleSessionStart},
 		{AgentCline, "tool_call", LifecyclePreTool},
 		{AgentCline, "agent_error", LifecycleSessionEnd},
@@ -57,6 +58,16 @@ func TestNewAgentLifecycleAndResponses(t *testing.T) {
 		if !DenyUsesExitCode(agent) {
 			t.Errorf("%s should deny with exit 2", agent)
 		}
+	}
+}
+
+func TestQwenPermissionDeniedMapsFinalDecision(t *testing.T) {
+	ev := Map(LifecyclePermissionDenied, AgentQwen, model.AgentQwenCode, "qwen-denied", map[string]any{
+		"tool_name": "run_shell_command",
+		"reason":    "user rejected the command",
+	})
+	if ev.EventType != model.EventPermissionDenied || ev.Decision != model.DecisionDenied || ev.ApprovalDecision != model.DecisionDenied {
+		t.Fatalf("permission denial = %+v", ev)
 	}
 }
 
