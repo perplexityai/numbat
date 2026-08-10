@@ -61,7 +61,7 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | OpenClaw | Stable v2026.7.1: primary JSONL plus plain retained `.jsonl.{reset,deleted}.<timestamp>` archives under `<state-root>/agents/<id>/sessions`, including embedded `agent/sessions` and `agent/codex-home/sessions`; native AgentMessage and embedded-Codex flavors are parsed, while standalone `event_msg`/unknown flavors are diagnostic-only | native plugin at `<config-root>/extensions/numbat/` | yes — `before_tool_call` | Requires OpenClaw v2026.7.1+. Eight message, session, subagent, and tool callbacks load without conversation access; `llm_input` and `llm_output` add model/harness-boundary coverage when explicitly trusted. The v2026.7.2 beta/development database and compressed archives are deferred. Root selection and host limits are below. |
 | Pi | `${PI_CODING_AGENT_SESSION_DIR}/**/*.jsonl` or `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/**/*.jsonl` | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/extensions/numbat.ts` | yes — `tool_call` | Versioned session records are parsed in physical artifact order, retaining every branch. The generated extension observes prompts, tools, turns, and session boundaries; only the synchronous pre-execution `tool_call` can block. |
 | Kimi Code | `$KIMI_CODE_HOME/sessions/*/*/agents/*/wire.jsonl` or `~/.kimi-code/sessions/.../wire.jsonl` | `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` | yes — `PreToolUse` | Current flat wire journals cover main and sub-agents. The installer appends a marked `[[hooks]]` block using only Kimi's documented fields and leaves existing keys, comments, and ordering intact. Legacy `kimi-cli` records are not mixed into this parser. |
-| Qwen Code | deferred conversation/checkpoint storage | `${QWEN_HOME:-~/.qwen}/settings.json`; OTLP logs | yes — `PreToolUse` | Hooks require Qwen Code 0.12.0+. Hook input/output follows Qwen's command-hook contract. Exit code 2 carries an intentional deny; hook errors and timeouts remain upstream fail-open. The automatic installer accepts strict JSON and refuses JSON comments or trailing commas rather than rewriting them. Current conversation storage is not parsed without a stable fixture. |
+| Qwen Code | deferred conversation/checkpoint storage | `${QWEN_HOME:-~/.qwen}/settings.json`; OTLP logs | yes — `PreToolUse` | Hooks require Qwen Code 0.17.0+. Hook input/output follows Qwen's command-hook contract. Exit code 2 carries an intentional deny; hook errors and timeouts remain upstream fail-open. The automatic installer accepts strict JSON and refuses JSON comments or trailing commas rather than rewriting them. Current conversation storage is not parsed without a stable fixture. |
 | Cline CLI | deferred SQLite sessions | `${CLINE_DIR:-~/.cline}/hooks/{TaskStart,...,SessionShutdown}`, or `CLINE_HOOKS_DIR` | yes — `PreToolUse` | The current CLI/SDK auto-discovers the global directory and accepts an additional runtime directory through `CLINE_HOOKS_DIR` / `--hooks-dir`; no hook-enable setting is required. numbat installs all current action/lifecycle files except bookkeeping-only `PreCompact`: task start/resume/complete/cancel/error, session shutdown, prompt, and pre/post tool. Project `.cline/hooks` and legacy `.clinerules/hooks` directories can be targeted with `--settings`. The legacy editor directory remains available through `--settings ~/Documents/Cline/Hooks`; its Unix files require the Hooks-tab toggle. |
 | Amp | deferred thread/history storage | `~/.config/amp/plugins/numbat.ts` | yes — `tool.call` | The generated TypeScript plugin uses Amp's stable plugin API. Monitor mode forwards asynchronously; enforce mode waits only at `tool.call` and returns Amp's native `reject-and-continue` response. Reload plugins in Amp after installation. |
 | Auggie | deferred session/task storage | `~/.augment/settings.json` plus generated scripts under `~/.augment/hooks/` | yes — `PreToolUse` | Auggie requires a script path rather than an inline command, so numbat owns explicit `.sh`/`.ps1` wrappers. Unknown strict-JSON keys are preserved; automatic install refuses comments and trailing commas instead of rewriting ambiguous input. Project paths remain available through `--settings`. |
@@ -76,6 +76,32 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Grok Build | `${GROK_HOME:-~/.grok}/sessions/` (deferred record shape) | `${GROK_HOME:-~/.grok}/hooks/numbat.json` | yes — `PreToolUse` | Sessions persist automatically across TUI, headless, and ACP hosts, but the record schema is not published. Project hooks require `/hooks-trust`. |
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
+
+## Permission and decision telemetry
+
+The enforcement column above says only whether numbat can synchronously deny an
+action. It does not say whether the agent later reports its own permission
+request or decision. numbat normalizes supported reports to
+`permission.requested`, `permission.approved`, or `permission.denied`:
+
+| Agent | Source event | Reported outcome | Per-action ID |
+|---|---|---|---|
+| Claude Code | `PermissionRequest`, `PermissionDenied`; OTLP `claude_code.tool_decision` | request, auto-mode denial, or OTLP decision | `PermissionDenied`: `tool_use_id`; OTLP: `tool_use_id` |
+| Codex | `PermissionRequest`; OTLP `codex.tool_decision` | request or OTLP decision | `PermissionRequest`: none verified; OTLP: `call_id` |
+| Kimi Code | `PermissionRequest`, `PermissionResult` | request or final decision | `tool_call_id` |
+| Qwen Code | `PermissionRequest`, `PermissionDenied` | request or auto-mode denial | `PermissionDenied`: `tool_use_id` |
+| Copilot CLI / VS Code | `PermissionRequest` | request | none verified |
+| Grok Build | `PermissionDenied` | denial | none verified |
+| Devin CLI | `PermissionRequest` | request | none verified |
+| Hermes | `pre_approval_request`, `post_approval_response` | request and final choice | session ID only |
+| OpenCode | OTLP `tool_decision` | decision | `call_id` |
+
+The per-action ID is copied into numbat's normalized `tool_call_id`, allowing
+records for the same action to be correlated. **None verified** means no usable
+ID has been confirmed from current documentation or fixtures. Other OTLP
+records with `approval.required`, `approval.decision`, or
+`permission.decision` are also mapped; `gen_ai.tool.call.id` is retained when
+present. Correlation does not prove that the agent honored a numbat response.
 
 ## Material exceptions and limits
 

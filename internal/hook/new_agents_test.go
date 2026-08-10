@@ -18,6 +18,7 @@ func TestNewAgentLifecycleAndResponses(t *testing.T) {
 		{AgentKimi, "PreToolUse", LifecyclePreTool},
 		{AgentKimi, "PermissionResult", LifecyclePermission},
 		{AgentQwen, "PostToolUseFailure", LifecyclePostTool},
+		{AgentQwen, "PermissionDenied", LifecyclePermissionDenied},
 		{AgentCline, "TaskResume", LifecycleSessionStart},
 		{AgentCline, "tool_call", LifecyclePreTool},
 		{AgentCline, "agent_error", LifecycleSessionEnd},
@@ -56,6 +57,42 @@ func TestNewAgentLifecycleAndResponses(t *testing.T) {
 	for _, agent := range []string{AgentKimi, AgentQwen, AgentAuggie, AgentKiro, AgentGoose, AgentOpenHands, AgentCrush, AgentJunie} {
 		if !DenyUsesExitCode(agent) {
 			t.Errorf("%s should deny with exit 2", agent)
+		}
+	}
+}
+
+func TestQwenPermissionDeniedMapsFinalDecision(t *testing.T) {
+	ev := Map(LifecyclePermissionDenied, AgentQwen, model.AgentQwenCode, "qwen-denied", map[string]any{
+		"tool_name":   "run_shell_command",
+		"tool_use_id": "toolu-qwen-1",
+		"reason":      "classifier_blocked",
+	})
+	if ev.EventType != model.EventPermissionDenied || ev.Decision != model.DecisionDenied ||
+		ev.ApprovalDecision != model.DecisionDenied || ev.ToolCallID != "toolu-qwen-1" ||
+		ev.ApprovalReason != "classifier_blocked" {
+		t.Fatalf("permission denial = %+v", ev)
+	}
+}
+
+func TestKimiPermissionResultMapsDecisionAndJoin(t *testing.T) {
+	cases := []struct {
+		decision string
+		wantType model.EventType
+		want     string
+	}{
+		{"approved", model.EventPermissionApproved, model.DecisionAllowed},
+		{"rejected", model.EventPermissionDenied, model.DecisionDenied},
+		{"cancelled", model.EventPermissionRequested, model.DecisionAsked},
+	}
+	for _, tc := range cases {
+		ev := Map(LifecyclePermission, AgentKimi, model.AgentKimiCode, "kimi-result", map[string]any{
+			"tool_name":    "Shell",
+			"tool_call_id": "toolu-kimi-1",
+			"decision":     tc.decision,
+		})
+		if ev.EventType != tc.wantType || ev.Decision != tc.want ||
+			ev.ApprovalDecision != tc.want || ev.ToolCallID != "toolu-kimi-1" {
+			t.Errorf("%s permission result = %+v", tc.decision, ev)
 		}
 	}
 }
