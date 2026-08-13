@@ -229,7 +229,7 @@ func (e KimiCodeExtractor) mapLoopEvent(res *Result, src Source, sha string, st 
 			ev.Evidence.JSONPointer = "/event/part"
 			res.Events = append(res.Events, ev)
 		case "think":
-			if !src.fullProfile() || strings.TrimSpace(event.Part.Think) == "" {
+			if !src.IncludeReasoning || strings.TrimSpace(event.Part.Think) == "" {
 				return
 			}
 			ev := e.base(src, sha, st, line, ts, 0)

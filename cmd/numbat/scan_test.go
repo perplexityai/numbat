@@ -551,9 +551,8 @@ func TestScanArtifactParsedFailedCounts(t *testing.T) {
 	var rec, diag bytes.Buffer
 	em := output.New(&rec, &diag, "run-test")
 	sc := &scanner{
-		emit:    em,
-		sel:     emitSelection{events: true},
-		profile: "evidence",
+		emit: em,
+		sel:  emitSelection{events: true},
 	}
 	sc.pipe = newTestScannerPipeline(sc, em, time.Unix(0, 0))
 	// A discovered artifact with no registered extractor: the no-extractor branch
@@ -647,7 +646,7 @@ func TestScanArtifactPanicIsSkippedScanContinues(t *testing.T) {
 
 	var rec, diag bytes.Buffer
 	em := output.New(&rec, &diag, "run-test")
-	sc := &scanner{emit: em, sel: emitSelection{events: true}, profile: "evidence"}
+	sc := &scanner{emit: em, sel: emitSelection{events: true}}
 	sc.pipe = newTestScannerPipeline(sc, em, time.Unix(0, 0))
 	// Route the panic agent to the panicking parser; everything else uses the real
 	// registry so the well-formed Claude artifact parses normally.
@@ -708,7 +707,7 @@ func TestScanArtifactPanicDuringEmitIsFailedNotParsed(t *testing.T) {
 	// The records sink panics when it sees the sentinel event, modeling a crash mid
 	// stream; all other records (the good artifact's) flow through to rec.
 	em := output.NewWithSink(panicSink{inner: &rec}, &diag, "run-test")
-	sc := &scanner{emit: em, sel: emitSelection{events: true}, profile: "evidence"}
+	sc := &scanner{emit: em, sel: emitSelection{events: true}}
 	sc.pipe = newTestScannerPipeline(sc, em, time.Unix(0, 0))
 	sc.lookup = func(agent string) (extract.Extractor, bool) {
 		if agent == "panic-emit-agent" {
@@ -754,7 +753,7 @@ func TestScanSummaryPartialStatusCountsParsedOnly(t *testing.T) {
 	good := writeTranscript(t, scanTranscript)
 	var rec, diag bytes.Buffer
 	em := output.New(&rec, &diag, "run-test")
-	sc := &scanner{emit: em, sel: emitSelection{events: true}, profile: "evidence"}
+	sc := &scanner{emit: em, sel: emitSelection{events: true}}
 	sc.pipe = newTestScannerPipeline(sc, em, time.Unix(0, 0))
 
 	sc.scanArtifact(discover.Artifact{Path: good, Agent: model.AgentClaudeCode})

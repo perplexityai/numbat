@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
 )
 
@@ -169,6 +170,35 @@ func TestCollectHandlerMapsAndProcesses(t *testing.T) {
 	}
 	if findings < 1 {
 		t.Errorf("expected at least one finding for curl|sh, got %d", findings)
+	}
+}
+
+func TestCollectFullContentProjection(t *testing.T) {
+	var records, diags bytes.Buffer
+	em := output.New(&records, &diags, "run-test", output.WithFullContent())
+	c, err := newCollector(collectorConfig{
+		emit:  em,
+		runID: "run-test",
+		sel:   emitSelection{events: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	prompt := strings.Repeat("ordinary context ", 20) + secret
+	body := buildOTLPLogs("claude-code", []map[string]string{{
+		"__event_name":  "gen_ai.user.message",
+		"gen_ai.prompt": prompt,
+	}})
+	if rr := postLogs(t, c, body, contentTypeProtobuf); rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var ev model.Event
+	if err := json.Unmarshal(bytes.TrimSpace(records.Bytes()), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.EventType != model.EventPromptUser || ev.Content == "" || strings.Contains(ev.Content, secret) || ev.ContentBytes != len(prompt) {
+		t.Fatalf("OTLP content projection = %+v", ev)
 	}
 }
 

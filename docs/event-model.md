@@ -59,14 +59,18 @@ it does not mean success.
 
 Prompt, assistant, and source-recorded reasoning events carry a normalized
 `content_preview` of at most 200 Unicode code points. Rules and indicator
-extraction can inspect the source text through `content`, bounded to 1 MiB per
-event and reported by `content_bytes` and `content_truncated`. This applies only
-when the source exposes conversation text; it does not retain file bodies,
-patch text, or arbitrary tool output.
+extraction inspect mapped message text through `content`, bounded to 1 MiB per
+event.
+This analysis content is not emitted by default; `--content full` emits its
+redacted form with `content_bytes` and `content_truncated`.
+Reasoning is emitted only when the source exposes it and
+`--include-reasoning` is selected.
 
 `content_preview_truncated` states that the preview omits text. A long token is
-kept as a rune-safe prefix rather than disappearing. Output redaction runs
-after local rule evaluation.
+kept as a rune-safe prefix rather than disappearing. `content_bytes` counts the
+mapped body before Numbat's bound and output redaction. Message content does not
+include file bodies, patch text, or arbitrary tool output. Findings carry the
+same signal as `observed_content_preview_truncated`.
 
 ## MCP
 

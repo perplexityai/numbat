@@ -15,12 +15,12 @@ import (
 // is exercised the same way on every OS, and the helper stays macOS-symlink safe
 // by never comparing a full path.
 func extractOpenCodePath(t *testing.T, path, body string) *Result {
-	return extractOpenCodePathProfile(t, path, body, ProfileEvidence)
+	return extractOpenCodePathWithReasoning(t, path, body, false)
 }
 
-func extractOpenCodePathProfile(t *testing.T, path, body string, profile Profile) *Result {
+func extractOpenCodePathWithReasoning(t *testing.T, path, body string, includeReasoning bool) *Result {
 	t.Helper()
-	res, err := OpenCodeExtractor{}.Extract(strings.NewReader(body), Source{Path: path, CaseID: "case-oc", Profile: profile})
+	res, err := OpenCodeExtractor{}.Extract(strings.NewReader(body), Source{Path: path, CaseID: "case-oc", IncludeReasoning: includeReasoning})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -34,11 +34,11 @@ func extractOpenCode(t *testing.T, body string) *Result {
 	return extractOpenCodePath(t, path, body)
 }
 
-// extractOpenCodeProfile parses body with an explicit capture profile.
-func extractOpenCodeProfile(t *testing.T, body string, profile Profile) *Result {
+// extractOpenCodeWithReasoning parses body with an explicit reasoning setting.
+func extractOpenCodeWithReasoning(t *testing.T, body string, includeReasoning bool) *Result {
 	t.Helper()
 	path := filepath.Join("/cases", "opencode", "storage", "part", "msg1", "prt1.json")
-	res, err := OpenCodeExtractor{}.Extract(strings.NewReader(body), Source{Path: path, CaseID: "case-oc", Profile: profile})
+	res, err := OpenCodeExtractor{}.Extract(strings.NewReader(body), Source{Path: path, CaseID: "case-oc", IncludeReasoning: includeReasoning})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -427,19 +427,18 @@ func TestOpenCodePatchInvalidHash(t *testing.T) {
 
 // TestOpenCodeTextAndReasoningAreNoOps proves text and reasoning parts are
 // prose-only and OUT of scope for this forensic parser: they emit NO event and
-// store NO preview, in either profile, so numbat never retains assistant prose
-// or model reasoning. Their absence is by design, so it is not a diagnostic gap
-// either.
+// store NO preview, so numbat never retains assistant prose or model reasoning.
+// Their absence is by design, so it is not a diagnostic gap either.
 func TestOpenCodeTextAndReasoningAreNoOps(t *testing.T) {
 	for _, body := range []string{
 		`{"type":"text","text":"here is the plan"}`,
 		`{"type":"reasoning","text":"let me think"}`,
 	} {
 		if r := extractOpenCode(t, body); len(r.Events) != 0 || len(r.Diagnostics) != 0 {
-			t.Errorf("evidence profile %s: want no events and no diagnostics, got events=%+v diags=%+v", body, r.Events, r.Diagnostics)
+			t.Errorf("default %s: want no events and no diagnostics, got events=%+v diags=%+v", body, r.Events, r.Diagnostics)
 		}
-		if r := extractOpenCodeProfile(t, body, ProfileFull); len(r.Events) != 0 || len(r.Diagnostics) != 0 {
-			t.Errorf("full profile %s: want no events and no diagnostics, got events=%+v diags=%+v", body, r.Events, r.Diagnostics)
+		if r := extractOpenCodeWithReasoning(t, body, true); len(r.Events) != 0 || len(r.Diagnostics) != 0 {
+			t.Errorf("with reasoning %s: want no events and no diagnostics, got events=%+v diags=%+v", body, r.Events, r.Diagnostics)
 		}
 	}
 }
@@ -458,11 +457,11 @@ func TestOpenCodeMessageRole(t *testing.T) {
 	if res.Events[0].SessionID != "s1" || res.Events[0].Timestamp != "2023-11-14T22:13:20Z" {
 		t.Errorf("user message context = session %q at %q", res.Events[0].SessionID, res.Events[0].Timestamp)
 	}
-	if res.Events[0].Model != "" || res.Events[0].ModelProvider != "" {
-		t.Errorf("evidence profile retained model identity: %+v", res.Events[0])
+	if res.Events[0].Model != "gpt-5" || res.Events[0].ModelProvider != "openai" {
+		t.Errorf("default extraction omitted model identity: %+v", res.Events[0])
 	}
 
-	asst := extractOpenCodePathProfile(t, userPath, `{"id":"m1","sessionID":"s1","role":"assistant","time":{"created":1700000000123},"modelID":"gpt-5","providerID":"openai","path":{"cwd":"/repo"}}`, ProfileFull)
+	asst := extractOpenCodePathWithReasoning(t, userPath, `{"id":"m1","sessionID":"s1","role":"assistant","time":{"created":1700000000123},"modelID":"gpt-5","providerID":"openai","path":{"cwd":"/repo"}}`, true)
 	if len(asst.Events) != 1 || asst.Events[0].EventType != model.EventMessageAssistant {
 		t.Fatalf("assistant message: got %+v, want message.assistant", asst.Events)
 	}
@@ -562,7 +561,7 @@ func TestOpenCodeEventsSatisfyContract(t *testing.T) {
 		`{"id":"m2","role":"assistant","time":{"created":1}}`,
 	}
 	for _, body := range bodies {
-		res := extractOpenCodeProfile(t, body, ProfileFull)
+		res := extractOpenCodeWithReasoning(t, body, true)
 		if len(res.Events) == 0 {
 			t.Fatalf("body produced no events: %s", body)
 		}

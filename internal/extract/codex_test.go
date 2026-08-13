@@ -1186,10 +1186,10 @@ func TestExtractCodexMetaAndTurnContextEmitNothing(t *testing.T) {
 	}
 }
 
-// extractCodexProfile parses a rollout under an explicit capture profile.
-func extractCodexProfile(t *testing.T, body string, p Profile) *Result {
+// extractCodexWithReasoning parses a rollout with explicit reasoning inclusion.
+func extractCodexWithReasoning(t *testing.T, body string, includeReasoning bool) *Result {
 	t.Helper()
-	res, err := CodexExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/rollout.jsonl", CaseID: "case-1", Profile: p})
+	res, err := CodexExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/rollout.jsonl", CaseID: "case-1", IncludeReasoning: includeReasoning})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -1405,20 +1405,19 @@ func TestExtractCodexCustomToolCallNamespaceFallback(t *testing.T) {
 	}
 }
 
-// Model reasoning is opt-in: a response_item reasoning item surfaces only under
-// the full profile. Under the default evidence profile it is absent.
-func TestExtractCodexReasoningProfileGated(t *testing.T) {
+// Model reasoning is opt-in context.
+func TestExtractCodexReasoningIsOptIn(t *testing.T) {
 	line := `{"timestamp":"t","type":"session_meta","payload":{"id":"s","cwd":"/p"}}
 {"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"plotting the next step"}]}}`
 
-	evidence := activityEvents(extractCodexProfile(t, line, ProfileEvidence).Events)
+	evidence := activityEvents(extractCodexWithReasoning(t, line, false).Events)
 	for _, ev := range evidence {
 		if ev.EventType == model.EventMessageReasoning {
-			t.Errorf("evidence profile surfaced reasoning: %+v", ev)
+			t.Errorf("default extraction surfaced reasoning: %+v", ev)
 		}
 	}
 
-	full := activityEvents(extractCodexProfile(t, line, ProfileFull).Events)
+	full := activityEvents(extractCodexWithReasoning(t, line, true).Events)
 	var reasoning *model.Event
 	for i := range full {
 		if full[i].EventType == model.EventMessageReasoning {
@@ -1426,7 +1425,7 @@ func TestExtractCodexReasoningProfileGated(t *testing.T) {
 		}
 	}
 	if reasoning == nil {
-		t.Fatalf("full profile did not surface reasoning: %s", dumpEvents(full))
+		t.Fatalf("reasoning option did not surface reasoning: %s", dumpEvents(full))
 		return
 	}
 	if reasoning.Actor != model.ActorAssistant || reasoning.ContentPreview != "plotting the next step" {
@@ -1434,13 +1433,21 @@ func TestExtractCodexReasoningProfileGated(t *testing.T) {
 	}
 }
 
+func TestExtractCodexIncludesRecordedModelProviderByDefault(t *testing.T) {
+	line := `{"timestamp":"2026-06-02T10:00:00Z","type":"session_meta","payload":{"id":"s","cwd":"/p","model_provider":"openai"}}`
+	res := extractCodexWithReasoning(t, line, false)
+	if len(res.Events) == 0 || res.Events[0].EventType != model.EventSessionStart || res.Events[0].ModelProvider != "openai" {
+		t.Fatalf("session context = %s", dumpEvents(res.Events))
+	}
+}
+
 // Empty/encrypted reasoning carries no human-readable evidence. It is a
-// recognized no-op, including under the full profile, not a parse diagnostic.
+// recognized no-op even when reasoning is requested, not a parse diagnostic.
 func TestExtractCodexEncryptedReasoningNoOp(t *testing.T) {
 	line := `{"timestamp":"t","type":"session_meta","payload":{"id":"s","cwd":"/p"}}
 {"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"opaque"}}`
 
-	res := extractCodexProfile(t, line, ProfileFull)
+	res := extractCodexWithReasoning(t, line, true)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}

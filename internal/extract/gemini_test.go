@@ -115,10 +115,10 @@ func extractGemini(t *testing.T, body string) *Result {
 	return extractGeminiPath(t, "checkpoint-work.json", body)
 }
 
-func extractGeminiSession(t *testing.T, body string, profile Profile) *Result {
+func extractGeminiSession(t *testing.T, body string, includeReasoning bool) *Result {
 	t.Helper()
 	path := filepath.Join("/cases", ".gemini", "tmp", "project", "chats", "session-1.jsonl")
-	res, err := GeminiExtractor{}.Extract(strings.NewReader(body), Source{Path: path, CaseID: "case-g", Profile: profile})
+	res, err := GeminiExtractor{}.Extract(strings.NewReader(body), Source{Path: path, CaseID: "case-g", IncludeReasoning: includeReasoning})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -126,7 +126,7 @@ func extractGeminiSession(t *testing.T, body string, profile Profile) *Result {
 }
 
 func TestExtractGeminiCurrentSessionJournal(t *testing.T) {
-	res := extractGeminiSession(t, geminiSessionFixture, ProfileFull)
+	res := extractGeminiSession(t, geminiSessionFixture, true)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %+v", res.Diagnostics)
 	}
@@ -179,12 +179,19 @@ func TestExtractGeminiCurrentSessionJournal(t *testing.T) {
 	assertUniqueEventIDs(t, res.Events)
 }
 
-func TestExtractGeminiSessionEvidenceProfileDropsModelAndReasoning(t *testing.T) {
-	res := extractGeminiSession(t, geminiSessionFixture, ProfileEvidence)
+func TestExtractGeminiSessionDefaultIncludesModelButDropsReasoning(t *testing.T) {
+	res := extractGeminiSession(t, geminiSessionFixture, false)
+	modelSeen := false
 	for _, ev := range res.Events {
-		if ev.Model != "" || ev.EventType == model.EventMessageReasoning {
-			t.Errorf("evidence profile retained monitoring context: %+v", ev)
+		if ev.EventType == model.EventMessageReasoning {
+			t.Errorf("default extraction surfaced reasoning: %+v", ev)
 		}
+		if ev.Model == "gemini-3-pro" {
+			modelSeen = true
+		}
+	}
+	if !modelSeen {
+		t.Fatal("default extraction omitted source-recorded model identity")
 	}
 }
 
@@ -195,7 +202,7 @@ func TestExtractGeminiLegacySessionObject(t *testing.T) {
   "startTime":"2026-07-14T09:00:00Z",
   "messages":[{"id":"u1","timestamp":"2026-07-14T09:00:01Z","type":"user","content":[{"text":"hello"}]}]
 }`
-	res := extractGeminiSession(t, body, ProfileEvidence)
+	res := extractGeminiSession(t, body, false)
 	acts := activityEvents(res.Events)
 	if len(acts) != 1 || acts[0].EventType != model.EventPromptUser || acts[0].ContentPreview != "hello" {
 		t.Fatalf("legacy session events = %s", dumpEvents(res.Events))
@@ -206,14 +213,14 @@ func TestExtractGeminiLegacySessionObject(t *testing.T) {
 }
 
 func TestExtractGeminiSessionMetadataUpdateDoesNotInventStart(t *testing.T) {
-	res := extractGeminiSession(t, `{"$set":{"lastUpdated":"2026-07-14T09:00:00Z"}}`, ProfileEvidence)
+	res := extractGeminiSession(t, `{"$set":{"lastUpdated":"2026-07-14T09:00:00Z"}}`, false)
 	if len(res.Events) != 0 {
 		t.Fatalf("events = %s, want none", dumpEvents(res.Events))
 	}
 }
 
 func TestExtractGeminiSessionPreservesJournalLineNumbers(t *testing.T) {
-	res := extractGeminiSession(t, "\n"+geminiSessionFixture, ProfileEvidence)
+	res := extractGeminiSession(t, "\n"+geminiSessionFixture, false)
 	if len(res.Events) == 0 || res.Events[0].Evidence.Line != 2 {
 		t.Fatalf("first event evidence = %+v, want line 2", res.Events[0].Evidence)
 	}
@@ -222,7 +229,7 @@ func TestExtractGeminiSessionPreservesJournalLineNumbers(t *testing.T) {
 func TestExtractGeminiSessionSuppressesReadManyResult(t *testing.T) {
 	body := `{"sessionId":"s1","startTime":"2026-07-14T09:00:00Z"}
 {"id":"g1","timestamp":"2026-07-14T09:00:01Z","type":"gemini","content":[],"toolCalls":[{"id":"r1","name":"read_many_files","args":{"include":["**/*.env"]},"result":[{"functionResponse":{"id":"r1","name":"read_many_files","response":{"output":"SECRET=value"}}}],"status":"success","timestamp":"2026-07-14T09:00:02Z"}]}`
-	res := extractGeminiSession(t, body, ProfileEvidence)
+	res := extractGeminiSession(t, body, false)
 	acts := activityEvents(res.Events)
 	if len(acts) != 2 || acts[1].EventType != model.EventToolResult || acts[1].ContentPreview != "" {
 		t.Fatalf("read_many_files events = %s", dumpEvents(acts))

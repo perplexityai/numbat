@@ -38,10 +38,8 @@ var timelineExtractorFor = extract.For
 // It reuses scan's discovery model: --agent limits known default roots, while
 // repeatable --path reads explicit roots. It is tolerant the same way: a
 // per-file failure is a stderr diagnostic, not an abort.
-// Raw transcript content never leaves the box —
-// a step is anchored by its evidence ref (artifact path + line/pointer), and the
-// observed fields (command/path/url/content preview) are redacted on emission
-// (redact.Events, after grouping) before either view renders them.
+// The default view emits only redacted previews. JSON output can explicitly
+// include bounded, redacted conversation content with --content full.
 //
 // Exit codes: 0 on a completed render (even with no events), 2 on a usage error,
 // 1 when no artifact is found or every discovered artifact fails to parse.
@@ -53,10 +51,11 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	var agents multiFlag
 	fs.Var(&agents, "agent", "limit automatic discovery to a parser-backed agent (repeatable; cannot be combined with --path)")
 	caseID := fs.String("case-id", "", "case identifier stamped on every event")
-	profileFlag := fs.String("profile", string(extract.ProfileEvidence), "capture depth: evidence (no reasoning/model context)|full")
+	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
 	formatFlag := fs.String("format", timelineFormatText, "output format: text|json")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--profile evidence|full] [--format text|json]")
+		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--include-reasoning] [--content preview|full] [--format text|json]")
 		fmt.Fprintln(stderr, "\nReconstructs a per-session chronological view of agent activity (prompts, tool calls,")
 		fmt.Fprintln(stderr, "commands, approvals, file edits, outcomes) from the same artifacts scan reads.")
 		fmt.Fprintf(stderr, "Automatic-discovery agents: %s.\n", artifactAgentUsage())
@@ -91,13 +90,17 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
-	profile, err := parseProfile(*profileFlag)
+	content, err := parseContentMode(*contentFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "timeline: %v\n", err)
 		fs.Usage()
 		return 2
 	}
-
+	if content == contentFull && format != timelineFormatJSON {
+		fmt.Fprintln(stderr, "timeline: --content full requires --format json")
+		fs.Usage()
+		return 2
+	}
 	roots := []string(paths)
 	if len(roots) == 0 {
 		home, err := os.UserHomeDir()
@@ -135,7 +138,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 			}
 			seenArtifacts[key] = struct{}{}
 			discovered++
-			evs, ok := readArtifactEvents(a, *caseID, profile, false, stderr)
+			evs, ok := readArtifactEvents(a, *caseID, *includeReasoning, content == contentFull, stderr)
 			if !ok {
 				continue
 			}
@@ -153,9 +156,13 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	}
 
 	sessions := groupSessions(events)
-	// Group first, then apply the shared event redactor before rendering.
+	// Group first, then apply the requested shared event projection.
 	for i := range sessions {
-		sessions[i].Events = redact.Events(sessions[i].Events)
+		if content == contentFull {
+			sessions[i].Events = redact.EventsWithContent(sessions[i].Events)
+		} else {
+			sessions[i].Events = redact.Events(sessions[i].Events)
+		}
 		sessions[i].ProjectPath = redact.String(sessions[i].ProjectPath)
 	}
 	if format == timelineFormatJSON {
@@ -172,7 +179,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 // per-file tolerance: a missing extractor, an unreadable file, or a parse error
 // is a stderr diagnostic and yields ok=false so the caller skips it without
 // aborting the whole run. Per-line parse problems are diagnostics too.
-func readArtifactEvents(a discover.Artifact, caseID string, profile extract.Profile, captureContent bool, stderr io.Writer) ([]model.Event, bool) {
+func readArtifactEvents(a discover.Artifact, caseID string, includeReasoning, captureContent bool, stderr io.Writer) ([]model.Event, bool) {
 	ex, ok := timelineExtractorFor(a.Agent)
 	if !ok {
 		fmt.Fprintf(stderr, "timeline: no extractor for agent %q (%s)\n", a.Agent, a.Path)
@@ -186,10 +193,10 @@ func readArtifactEvents(a discover.Artifact, caseID string, profile extract.Prof
 	defer f.Close()
 
 	res, err := extract.SafeExtract(ex, f, extract.Source{
-		Path:           a.Path,
-		CaseID:         caseID,
-		Profile:        profile,
-		CaptureContent: captureContent,
+		Path:             a.Path,
+		CaseID:           caseID,
+		IncludeReasoning: includeReasoning,
+		CaptureContent:   captureContent,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "timeline: parse %q: %v\n", a.Path, err)

@@ -268,7 +268,7 @@ func messageRole(kind string) (model.EventType, string, bool) {
 	case "assistant", "ai", "model":
 		// Cursor transcripts carry the model's prose, not a separate reasoning
 		// channel, so assistant text is forensic message content (high confidence),
-		// not gated behind the full profile the way Claude's thinking blocks are.
+		// not gated with model reasoning because this is an agent-generated note.
 		return model.EventMessageAssistant, model.ActorAssistant, true
 	default:
 		return "", "", false

@@ -265,7 +265,7 @@ func (e GeminiExtractor) emitGeminiSessionMessage(res *Result, src Source, sha, 
 		res.Events = append(res.Events, ev)
 	}
 
-	if src.fullProfile() {
+	if src.IncludeReasoning {
 		for i, thought := range message.Thoughts {
 			content := strings.TrimSpace(strings.TrimSpace(thought.Subject+" ") + thought.Description)
 			if content == "" {
@@ -442,10 +442,8 @@ func (e GeminiExtractor) sessionEvent(src Source, sha, sourceID, kind string, li
 	}
 }
 
-func (GeminiExtractor) stampGeminiSessionModel(ev *model.Event, src Source, name string) {
-	if src.fullProfile() {
-		ev.Model = name
-	}
+func (GeminiExtractor) stampGeminiSessionModel(ev *model.Event, _ Source, name string) {
+	ev.Model = name
 }
 
 func geminiSessionEventID(path, sourceID, kind string) string {

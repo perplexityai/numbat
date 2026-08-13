@@ -86,8 +86,8 @@ func TestPiExtractMapsDocumentedSessionRecords(t *testing.T) {
 
 func TestPiExtractFullProfileIncludesReasoning(t *testing.T) {
 	res, err := (PiExtractor{}).Extract(strings.NewReader(piSessionFixture), Source{
-		Path:    "/home/u/.pi/agent/sessions/s.jsonl",
-		Profile: ProfileFull,
+		Path:             "/home/u/.pi/agent/sessions/s.jsonl",
+		IncludeReasoning: true,
 	})
 	if err != nil {
 		t.Fatal(err)

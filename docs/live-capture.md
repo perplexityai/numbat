@@ -109,7 +109,9 @@ and applicable enforcement decisions to `$HOME/.numbat/findings.ndjson`. When
 events or indicators are selected, the default becomes
 `$HOME/.numbat/records.ndjson`. Change it with
 `--output-file PATH`; repeat `--emit findings|events|indicators`, or use
-`--emit all`. Repeat
+`--emit all`. Event records use bounded previews by default; add
+`--content full` to retain bounded, redacted conversation text when the agent
+exposes it. Repeat
 `--output file --output http --http-url URL` to keep the file and also attempt
 direct HTTP delivery. Direct HTTP alone is not durable: it has bounded in-memory
 buffering, but no disk spool. numbat does not rotate output files itself; for

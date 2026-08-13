@@ -95,8 +95,9 @@ agent's transcript.
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings)
---profile evidence|full      capture depth; evidence omits reasoning/model context
-                             (default evidence)
+--content preview|full       conversation content in event output (default preview;
+                             full is redacted and bounded to 1 MiB)
+--include-reasoning          include source-recorded reasoning events
 --rules-dir DIR              operator rules to add or replace by id
                              (repeatable)
 --no-builtin-rules           load only --rules-dir rules
@@ -218,19 +219,22 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 }
 ```
 
-### Capture profiles
+### Message content
 
-- `evidence` (default) — evidence-bearing events: prompts, assistant messages,
-  tool and command calls and their results (including `command.result` with an
-  exit code), file operations, config and MCP changes, network indicators, and
-  session lifecycle. It omits reasoning blocks and low-evidentiary model/session
-  context.
-- `full` — everything in `evidence` plus `message.reasoning` and model/provider
-  session context. Use it only when the additional context is required; it has
-  higher volume and sensitivity.
+Events contain a redacted `content_preview` of at most 200 Unicode code points
+by default. `--content full` adds bounded, redacted `content` to prompt,
+assistant, and reasoning events; it requires `--emit events` or `--emit all`.
+`content_bytes` is the mapped body size before the 1 MiB bound and output
+redaction, while `content_truncated` reports that Numbat applied the bound.
 
-`model`, `model_provider`, and `entrypoint` are source-specific and omitted when
-the source does not provide them; numbat does not infer these values.
+`--include-reasoning` adds reasoning summaries or thinking blocks that the
+source persisted. It does not recover hidden model chain-of-thought, and it is
+independent of `--content`: without `--content full`, reasoning events still
+carry only a preview. Rules and indicator extraction can inspect bounded
+message content without enabling full-content output.
+
+`model`, `model_provider`, and `entrypoint` are emitted when the source provides
+them; Numbat does not infer these values. Availability varies by agent.
 
 Finding `timestamp` is the matched event's activity time (the completing event
 for a sequence); `detected_at` is when numbat created the finding. `timestamp`
@@ -316,8 +320,9 @@ explicit-root `--path` modes as `scan`.
                              agent locations under $HOME plus supported
                              agent home/data env overrides)
 --case-id ID                 case identifier stamped on every event
---profile evidence|full      capture depth; evidence omits reasoning/model context
-                             (default evidence)
+--content preview|full       conversation content in JSON output (default preview;
+                             full is redacted and bounded to 1 MiB)
+--include-reasoning          include source-recorded reasoning events
 --format text|json           output format (default text)
 ```
 
@@ -325,7 +330,11 @@ explicit-root `--path` modes as `scan`.
 numbat timeline --agent claude
 numbat timeline --path ~/.claude/projects
 numbat timeline --path ~/.claude/projects --path ~/.codex --format json
+numbat timeline --agent codex --include-reasoning --content full --format json
 ```
+
+`--content full` is available only with `--format json`; the text view remains a
+compact preview.
 
 ## collect
 
@@ -360,6 +369,8 @@ IDs so receivers can deduplicate it.
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings)
+--content preview|full       conversation content in event output (default preview;
+                             full is redacted and bounded to 1 MiB)
 --output SINK                record sink: stdout, file, or http
                              (repeatable; default stdout; stdout cannot be combined)
 --output-file PATH           destination path (required when output includes file)
@@ -536,6 +547,8 @@ below.
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings; enforce mode
                              requires findings)
+--content preview|full       conversation content in event output (default preview;
+                             full is redacted and bounded to 1 MiB)
 --enforce                    opt-in enforce mode: block an action when a rule
                              marked enforce: true matches, including the final
                              action of a sequence. Off by default: monitor mode
@@ -603,6 +616,8 @@ default. This agent process deadline is separate from the hook handler's
                              findings, events, indicators, or all
                              (repeatable; default findings; enforce mode requires
                              findings)
+--content preview|full       conversation content installed hook commands emit
+                             (default preview; full requires events or all)
 --output SINK                record sink installed hook commands use:
                              stdout, file, or http (repeatable; default file;
                              stdout cannot be combined and writes records to

@@ -1118,10 +1118,10 @@ func TestExtractClaudeUnknownEntryTypeWarns(t *testing.T) {
 	}
 }
 
-// extractFixtureProfile parses a transcript under an explicit capture profile.
-func extractFixtureProfile(t *testing.T, body string, p Profile) *Result {
+// extractFixtureWithReasoning parses a transcript with explicit reasoning inclusion.
+func extractFixtureWithReasoning(t *testing.T, body string, includeReasoning bool) *Result {
 	t.Helper()
-	res, err := ClaudeExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/session.jsonl", CaseID: "case-1", Profile: p})
+	res, err := ClaudeExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/session.jsonl", CaseID: "case-1", IncludeReasoning: includeReasoning})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -1276,20 +1276,18 @@ func TestExtractClaudeMCPNameSplit(t *testing.T) {
 	}
 }
 
-// Model reasoning (a thinking block) is opt-in: it is context, not forensic
-// evidence of an action, so it surfaces only under the full profile. Under the
-// default evidence profile it must be absent.
-func TestExtractClaudeReasoningProfileGated(t *testing.T) {
+// Model reasoning (a thinking block) is opt-in context.
+func TestExtractClaudeReasoningIsOptIn(t *testing.T) {
 	line := `{"type":"assistant","uuid":"a1","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plotting the next step"},{"type":"text","text":"done"}]}}`
 
-	evidence := activityEvents(extractFixtureProfile(t, line, ProfileEvidence).Events)
+	evidence := activityEvents(extractFixtureWithReasoning(t, line, false).Events)
 	for _, ev := range evidence {
 		if ev.EventType == model.EventMessageReasoning {
-			t.Errorf("evidence profile surfaced reasoning: %+v", ev)
+			t.Errorf("default extraction surfaced reasoning: %+v", ev)
 		}
 	}
 
-	full := activityEvents(extractFixtureProfile(t, line, ProfileFull).Events)
+	full := activityEvents(extractFixtureWithReasoning(t, line, true).Events)
 	var reasoning *model.Event
 	for i := range full {
 		if full[i].EventType == model.EventMessageReasoning {
@@ -1297,11 +1295,19 @@ func TestExtractClaudeReasoningProfileGated(t *testing.T) {
 		}
 	}
 	if reasoning == nil {
-		t.Fatalf("full profile did not surface reasoning: %s", dumpEvents(full))
+		t.Fatalf("reasoning option did not surface reasoning: %s", dumpEvents(full))
 		return
 	}
 	if reasoning.Actor != model.ActorAssistant || reasoning.ContentPreview != "plotting the next step" {
 		t.Errorf("reasoning event = %s/%q, want assistant/'plotting the next step'", reasoning.Actor, reasoning.ContentPreview)
+	}
+}
+
+func TestExtractClaudeIncludesRecordedModelByDefault(t *testing.T) {
+	line := `{"type":"assistant","uuid":"a1","sessionId":"s-1","message":{"model":"claude-sonnet","role":"assistant","content":[{"type":"text","text":"done"}]}}`
+	res := extractFixtureWithReasoning(t, line, false)
+	if len(res.Events) == 0 || res.Events[0].EventType != model.EventSessionStart || res.Events[0].Model != "claude-sonnet" {
+		t.Fatalf("session context = %s", dumpEvents(res.Events))
 	}
 }
 

@@ -287,7 +287,7 @@ func (e CodexExtractor) mapLine(res *Result, src Source, sha string, st *codexSt
 	case codexTypeTurnContext:
 		e.applyTurnContext(st, rl.Payload)
 	case codexTypeResponseItem:
-		e.mapResponseItem(res, src, sha, st, line, rl.Timestamp, rl.Payload, src.fullProfile())
+		e.mapResponseItem(res, src, sha, st, line, rl.Timestamp, rl.Payload, src.IncludeReasoning)
 	case codexTypeEventMsg:
 		e.mapEventMsg(res, src, sha, st, line, rl.Timestamp, rl.Payload)
 	case codexTypeCompacted:
@@ -342,9 +342,7 @@ func (e CodexExtractor) applySessionMeta(res *Result, src Source, sha string, st
 	ev.Actor = model.ActorSystem
 	ev.Confidence = model.ConfidenceHigh
 	ev.CLIVersion = meta.CliVersion
-	if src.fullProfile() {
-		ev.ModelProvider = meta.ModelProvider
-	}
+	ev.ModelProvider = meta.ModelProvider
 	ev.Evidence.JSONPointer = "/payload"
 	st.startIdx = len(res.Events)
 	st.started = true
@@ -403,7 +401,7 @@ func (e CodexExtractor) applyTurnContext(st *codexState, payload json.RawMessage
 // that carry no distinct activity are handled per-variant; an unknown variant
 // falls through to a generic tool.call only when it looks like a tool call,
 // otherwise it is skipped quietly.
-func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st *codexState, line int, ts string, payload json.RawMessage, full bool) {
+func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st *codexState, line int, ts string, payload json.RawMessage, includeReasoning bool) {
 	var ri codexResponseItem
 	if err := json.Unmarshal(payload, &ri); err != nil {
 		res.diag(src.Path, line, "malformed response_item payload")
@@ -602,10 +600,10 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 	case codexRIReasoning:
 		// Model reasoning is opt-in: it is context, not forensic evidence of an
 		// action (mirrors Claude's thinking-block handling), so it surfaces only
-		// under the full profile. The reasoning text lives in the summary array
+		// when reasoning is requested. The text lives in the summary array
 		// (ReasoningItemReasoningSummary in models.rs); an empty body yields
 		// nothing.
-		if !full {
+		if !includeReasoning {
 			break
 		}
 		text := strings.TrimSpace(decodeCodexReasoningText(ri.Summary, ri.Content))

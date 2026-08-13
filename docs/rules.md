@@ -175,12 +175,12 @@ That gate avoids matching both the request and result for sources that emit
 both. A custom rule may use only `command.exec` when it cares strictly about
 requested actions, or only `command.result` when completion matters.
 
-For conversation events, `event.content` is the unredacted, whitespace-
-preserving text numbat received, bounded to 1 MiB per event. It is independent
-of the 200-rune `event.content_preview`; use `event.content_truncated` when a
-rule must reject incomplete input. `event.content_bytes` is the number of bytes
-numbat received before applying its bound. These fields do not cause file
-bodies, patches, or arbitrary tool output to be retained.
+For conversation events, `event.content` is the unredacted mapped message text,
+bounded to 1 MiB per event. A rule that references a content field automatically
+enables this analysis; `--content full` is needed only to emit it. Use
+`event.content_truncated` when a rule must reject incomplete input.
+`event.content_bytes` is the mapped body size before Numbat's bound. These
+fields never include file bodies, patches, or arbitrary tool output.
 
 ### Event fields
 

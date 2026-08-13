@@ -207,7 +207,7 @@ func classifyCmdFile(name string) (forbidden []string, ok bool) {
 		name == "collect.go" || strings.HasPrefix(name, "collect_") ||
 		name == "ship.go" || strings.HasPrefix(name, "ship_"):
 		return forbidForensics, true
-	case name == "main.go" || name == "rules.go" || name == "rules_companion.go" ||
+	case name == "content.go" || name == "main.go" || name == "rules.go" || name == "rules_companion.go" ||
 		name == "run_id.go" || name == "sink.go" || name == "version.go":
 		return nil, true
 	case name == "agents.go":

@@ -3,6 +3,7 @@ package redact
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/perplexityai/numbat/internal/model"
 )
@@ -56,6 +57,9 @@ func TestEventRedactsObservedFields(t *testing.T) {
 	if got.Content != "" || got.ContentBytes != 0 || got.ContentTruncated {
 		t.Errorf("default projection retained full content: %+v", got)
 	}
+	if got.ContentForAnalysis() != "" {
+		t.Error("default projection retained hidden analysis content")
+	}
 	// Closed-vocabulary / non-secret fields are copied verbatim.
 	if got.ToolName != "Bash" || got.EventType != model.EventCommandExec || got.EventID != "e1" {
 		t.Errorf("non-observed fields altered: %+v", got)
@@ -66,10 +70,52 @@ func TestEventRedactsObservedFields(t *testing.T) {
 	}
 }
 
+func TestEventBoundsPreviewAfterRedactionExpansion(t *testing.T) {
+	in := model.Event{ContentPreview: strings.Repeat("Authorization: Bearer x ", 8)}
+	got := Event(in)
+	if utf8.RuneCountInString(got.ContentPreview) > model.ContentPreviewMaxRunes || !got.ContentPreviewTruncated {
+		t.Fatalf("preview = %d runes, truncated=%t", utf8.RuneCountInString(got.ContentPreview), got.ContentPreviewTruncated)
+	}
+}
+
 func TestEventRedactsSecretInProjectPath(t *testing.T) {
 	got := Event(model.Event{ProjectPath: "/repo/" + canaryOpen})
 	if strings.Contains(got.ProjectPath, canaryOpen) || !strings.Contains(got.ProjectPath, Mask) {
 		t.Errorf("project path was not redacted: %q", got.ProjectPath)
+	}
+}
+
+func TestEventWithContentRedactsRetainedBody(t *testing.T) {
+	raw := strings.Repeat("context ", 30) + canaryOpen + "\nsecond line"
+	in := model.Event{EventID: "e-content", EventType: model.EventPromptUser}
+	in.SetContent(raw, true)
+
+	got := EventWithContent(in)
+	if got.Content == "" || strings.Contains(got.Content, canaryOpen) || !strings.Contains(got.Content, Mask) {
+		t.Fatalf("full content was not redacted: %q", got.Content)
+	}
+	if got.ContentBytes != len(raw) || got.ContentTruncated {
+		t.Fatalf("content metadata = %d/%v, want %d/false", got.ContentBytes, got.ContentTruncated, len(raw))
+	}
+	if !strings.Contains(got.Content, "\nsecond line") {
+		t.Errorf("full content lost message formatting: %q", got.Content)
+	}
+	if got.ContentForAnalysis() != got.Content {
+		t.Error("full projection retained an unredacted analysis copy")
+	}
+	if in.Content != "" || !strings.Contains(in.ContentForAnalysis(), canaryOpen) {
+		t.Fatal("full-content projection mutated its input")
+	}
+}
+
+func TestEventWithContentBoundsRedactionExpansion(t *testing.T) {
+	raw := strings.Repeat("Authorization: Bearer x\n", model.ContentMaxBytes/24)
+	in := model.Event{EventID: "e-expanded", EventType: model.EventPromptUser}
+	in.SetContent(raw, true)
+
+	got := EventWithContent(in)
+	if len(got.Content) > model.ContentMaxBytes || !got.ContentTruncated {
+		t.Fatalf("expanded content = %d bytes, truncated=%t", len(got.Content), got.ContentTruncated)
 	}
 }
 
@@ -101,5 +147,11 @@ func TestEventsSliceRedactsEachAndPreservesNil(t *testing.T) {
 	}
 	if strings.Contains(out[1].URL, canarySig) {
 		t.Errorf("element 1 not redacted: %q", out[1].URL)
+	}
+}
+
+func TestEventsWithContentPreservesNil(t *testing.T) {
+	if EventsWithContent(nil) != nil {
+		t.Error("EventsWithContent(nil) should be nil")
 	}
 }

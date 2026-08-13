@@ -100,8 +100,8 @@ func TestKimiCodeExtractMapsCurrentWireRecords(t *testing.T) {
 
 func TestKimiCodeExtractFullProfileIncludesThinking(t *testing.T) {
 	res, err := (KimiCodeExtractor{}).Extract(strings.NewReader(kimiWireFixture), Source{
-		Path:    "/x/.kimi-code/sessions/w/s/agents/main/wire.jsonl",
-		Profile: ProfileFull,
+		Path:             "/x/.kimi-code/sessions/w/s/agents/main/wire.jsonl",
+		IncludeReasoning: true,
 	})
 	if err != nil {
 		t.Fatal(err)

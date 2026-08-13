@@ -185,7 +185,7 @@ type codexResponseItem struct {
 	// Reasoning. The reasoning item's human-readable text is the summary array
 	// (ReasoningItemReasoningSummary: [{type:"summary_text", text}]). Older/raw
 	// shapes carry it under content instead, so both are accepted; the reasoning
-	// text is surfaced only under the full profile.
+	// text is surfaced only when reasoning is requested.
 	Summary json.RawMessage `json:"summary"`
 }
 

@@ -191,9 +191,7 @@ func (st *claudeState) observe(res *Result, e ClaudeExtractor, src Source, sha s
 		ev.Confidence = model.ConfidenceHigh
 		ev.GitBranch = entry.GitBranch
 		ev.CLIVersion = entry.Version
-		if src.fullProfile() {
-			ev.Model = entry.Message.Model
-		}
+		ev.Model = entry.Message.Model
 		st.startIdx = len(res.Events)
 		st.started = true
 		res.Events = append(res.Events, ev)
@@ -206,7 +204,7 @@ func (st *claudeState) observe(res *Result, e ClaudeExtractor, src Source, sha s
 	if start.CLIVersion == "" {
 		start.CLIVersion = entry.Version
 	}
-	if src.fullProfile() && start.Model == "" {
+	if start.Model == "" {
 		start.Model = entry.Message.Model
 	}
 }
@@ -277,7 +275,7 @@ func (e ClaudeExtractor) mapLine(res *Result, src Source, sha string, st *claude
 	case "user":
 		e.mapUser(res, src, sha, st, line, &entry)
 	case "assistant":
-		e.mapAssistant(res, src, sha, st, line, &entry, src.fullProfile())
+		e.mapAssistant(res, src, sha, st, line, &entry, src.IncludeReasoning)
 	case "permission-mode":
 		e.mapPermissionMode(res, src, sha, line, st, &entry, entry.PermissionMode, "/permissionMode")
 	case "mode":
@@ -403,7 +401,7 @@ func (e ClaudeExtractor) mapUser(res *Result, src Source, sha string, st *claude
 // several content blocks (text plus one or more tool_use calls); each becomes
 // its own event, in block order, so the emitted stream is a faithful timeline
 // and a tool call is a first-class, rule-matchable record.
-func (e ClaudeExtractor) mapAssistant(res *Result, src Source, sha string, st *claudeState, line int, entry *claudeEntry, full bool) {
+func (e ClaudeExtractor) mapAssistant(res *Result, src Source, sha string, st *claudeState, line int, entry *claudeEntry, includeReasoning bool) {
 	for i := range entry.Message.Content {
 		c := &entry.Message.Content[i]
 		switch c.Type {
@@ -432,9 +430,9 @@ func (e ClaudeExtractor) mapAssistant(res *Result, src Source, sha string, st *c
 			res.Events = append(res.Events, ev)
 		case "thinking":
 			// Model reasoning is opt-in: it is not forensic evidence of an
-			// action, only context, so it surfaces solely under the full profile.
+			// action, only context, so it surfaces only when reasoning is requested.
 			s := strings.TrimSpace(c.Thinking)
-			if !full || s == "" {
+			if !includeReasoning || s == "" {
 				continue
 			}
 			ev := e.base(src, sha, line, entry, i)

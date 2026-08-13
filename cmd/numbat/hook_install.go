@@ -39,6 +39,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	var (
 		enforce           bool
 		emitValues        multiFlag
+		contentValue      = "preview"
 		outputValues      multiFlag
 		outputFileValue   string
 		httpURL           string
@@ -55,6 +56,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	if action == "install" {
 		fs.BoolVar(&enforce, "enforce", false, "install in enforce mode for agents with blocking support: deny supported pre-action requests when a rule marked enforce=true matches; requires an enabled enforce=true rule in the effective catalog (default: monitor only)")
 		fs.Var(&emitValues, "emit", "records emitted by live integrations: findings, events, indicators, or all (repeatable; default findings; enforce mode requires findings)")
+		fs.StringVar(&contentValue, "content", "preview", contentFlagHelp())
 		fs.Var(&outputValues, "output", outputFlagHelp(outputModeFile)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
 		fs.StringVar(&outputFileValue, "output-file", "", "destination path when --output includes file (default findings.ndjson, or records.ndjson when --emit includes events/indicators)")
 		fs.StringVar(&httpURL, "http-url", "", "ingest URL (required when --output includes http)")
@@ -75,7 +77,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "usage: numbat hook %s %s [--settings PATH] [--managed]", action, agentArg)
 		if action == "install" {
-			fmt.Fprint(stderr, " [--emit KIND ...] [--output SINK ...] [--rules-dir DIR ...] [--no-builtin-rules] [--enforce]")
+			fmt.Fprint(stderr, " [--emit KIND ...] [--content preview|full] [--output SINK ...] [--rules-dir DIR ...] [--no-builtin-rules] [--enforce]")
 		}
 		fmt.Fprintln(stderr)
 		switch action {
@@ -174,8 +176,14 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	}
 	var installOpts hook.InstallOptions
 	if action == "install" {
+		content, parseErr := parseContentMode(contentValue)
+		if parseErr != nil {
+			fmt.Fprintf(stderr, "hook install: %v\n", parseErr)
+			return 2
+		}
 		args, err := installRuntimeArgs(installRuntimeConfig{
 			emit:          emitValues,
+			content:       content,
 			modes:         outputValues,
 			file:          outputFileValue,
 			httpURL:       httpURL,
@@ -274,6 +282,7 @@ func runHookAction(action, agent, path, binary string, installOpts hook.InstallO
 
 type installRuntimeConfig struct {
 	emit          []string
+	content       contentMode
 	modes         []string
 	file          string
 	httpURL       string
@@ -294,6 +303,9 @@ type installRuntimeConfig struct {
 func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error) {
 	emitSel, err := parseEmit(cfg.emit)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateContentSelection(cfg.content, emitSel); err != nil {
 		return nil, err
 	}
 	sinks, err := parseOutputSinks(cfg.modes, outputModeFile)
@@ -344,6 +356,9 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 		for _, mode := range emitSel.canonicalModes() {
 			args = append(args, "--emit", mode)
 		}
+	}
+	if cfg.content == contentFull {
+		args = append(args, "--content=full")
 	}
 	if !sinks.http {
 		for _, name := range httpOnlyInstallFlagNames() {
