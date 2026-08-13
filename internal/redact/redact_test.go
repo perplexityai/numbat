@@ -84,6 +84,48 @@ func TestStringMasksMultipleSecrets(t *testing.T) {
 	}
 }
 
+func TestStringMasksCredentialNestedInEarlierValueSpan(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		secrets []string
+	}{
+		{"quoted nested", `api_key=FIRST_SECRET token="SECOND_SECRET"`, []string{"FIRST_SECRET", "SECOND_SECRET"}},
+		{"padded quoted nested", `api_key=FIRST_SECRET token = "SECOND_SECRET"`, []string{"FIRST_SECRET", "SECOND_SECRET"}},
+		{"padded quoted", `token = "SECOND_SECRET"`, []string{"SECOND_SECRET"}},
+		{"single quoted", `token=   'SECOND_SECRET'`, []string{"SECOND_SECRET"}},
+		{"encoded padding", `token=%20"SECOND_SECRET"`, []string{"SECOND_SECRET"}},
+		{"angle wrapped nested", `api_key=FIRST_SECRET token=<SECOND_SECRET>`, []string{"FIRST_SECRET", "SECOND_SECRET"}},
+		{"unquoted nested", `api_key=FIRST_SECRET token=SECOND_SECRET`, []string{"FIRST_SECRET", "SECOND_SECRET"}},
+		{"delimited", `token=FIRST_SECRET&api_key=SECOND_SECRET;password=THIRD_SECRET`, []string{"FIRST_SECRET", "SECOND_SECRET", "THIRD_SECRET"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := String(tt.input)
+			for _, secret := range tt.secrets {
+				if strings.Contains(got, secret) {
+					t.Fatalf("credential %q survived: %q -> %q", secret, tt.input, got)
+				}
+			}
+		})
+	}
+}
+
+func TestStringMasksCredentialAfterRepeatedTargetAssignments(t *testing.T) {
+	const secret = "TAIL_SECRET"
+	in := strings.Repeat("token=value ", 8192) + `token = "` + secret + `"`
+	got := String(in)
+	if strings.Contains(got, secret) {
+		t.Fatalf("trailing credential survived")
+	}
+	if !strings.Contains(got, Mask) {
+		t.Fatal("mask absent")
+	}
+	if len(got) >= len(in) {
+		t.Fatalf("overlapping credential spans were not coalesced")
+	}
+}
+
 // TestStringPreservesStructure verifies redaction does not eat trailing JSON
 // structure after an unquoted-looking value.
 func TestStringPreservesStructure(t *testing.T) {
