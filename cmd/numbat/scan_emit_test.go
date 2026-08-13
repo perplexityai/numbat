@@ -292,6 +292,42 @@ func TestScanIncludeReasoning(t *testing.T) {
 	}
 }
 
+func TestScanDeprecatedFullProfileIncludesReasoningOnly(t *testing.T) {
+	p := writeTranscript(t, emitTranscript)
+	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--profile", "full")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	for _, ev := range decodeEventRecords(t, out) {
+		if ev.EventType != model.EventMessageReasoning {
+			continue
+		}
+		if ev.Content != "" {
+			t.Fatalf("deprecated --profile full emitted full content: %q", ev.Content)
+		}
+		return
+	}
+	t.Fatal("deprecated --profile full did not include reasoning")
+}
+
+func TestScanDeprecatedEvidenceProfileOmitsReasoning(t *testing.T) {
+	p := writeTranscript(t, emitTranscript)
+	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--profile", "evidence")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(out, `"event_type":"message.reasoning"`) {
+		t.Fatalf("deprecated --profile evidence included reasoning:\n%s", out)
+	}
+}
+
+func TestScanRejectsInvalidDeprecatedProfile(t *testing.T) {
+	_, errb, code := runCLI("scan", "--profile", "everything")
+	if code != 2 || !strings.Contains(errb, `invalid --profile "everything": want evidence|full`) {
+		t.Fatalf("exit=%d stderr=%q", code, errb)
+	}
+}
+
 func TestScanFullContentIsExplicitBoundedAndRedacted(t *testing.T) {
 	secret := "sk-abcdefghijklmnopqrstuvwxyz0123456789"
 	raw := strings.Repeat("ordinary context ", 20) + secret + "\nfinal line"

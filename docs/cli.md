@@ -98,6 +98,7 @@ agent's transcript.
 --content preview|full       conversation content in event output (default preview;
                              full is redacted and bounded to 1 MiB)
 --include-reasoning          include source-recorded reasoning events
+--profile evidence|full      deprecated alias; full enables --include-reasoning
 --rules-dir DIR              operator rules to add or replace by id
                              (repeatable)
 --no-builtin-rules           load only --rules-dir rules
@@ -233,6 +234,9 @@ independent of `--content`: without `--content full`, reasoning events still
 carry only a preview. Rules and indicator extraction can inspect bounded
 message content without enabling full-content output.
 
+For compatibility, `scan` and `timeline` still accept `--profile`. Its `full`
+value enables `--include-reasoning`; it does not enable `--content full`.
+
 `model`, `model_provider`, and `entrypoint` are emitted when the source provides
 them; Numbat does not infer these values. Availability varies by agent.
 
@@ -323,6 +327,7 @@ explicit-root `--path` modes as `scan`.
 --content preview|full       conversation content in JSON output (default preview;
                              full is redacted and bounded to 1 MiB)
 --include-reasoning          include source-recorded reasoning events
+--profile evidence|full      deprecated alias; full enables --include-reasoning
 --format text|json           output format (default text)
 ```
 

@@ -24,6 +24,17 @@ func parseContentMode(value string) (contentMode, error) {
 	}
 }
 
+func applyDeprecatedProfile(value string, includeReasoning bool) (bool, error) {
+	switch value {
+	case "", "evidence":
+		return includeReasoning, nil
+	case "full":
+		return true, nil
+	default:
+		return false, fmt.Errorf("invalid --profile %q: want evidence|full", value)
+	}
+}
+
 func validateContentSelection(mode contentMode, sel emitSelection) error {
 	if mode == contentFull && !sel.events {
 		return fmt.Errorf("--content full requires --emit events or --emit all")

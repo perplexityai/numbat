@@ -53,6 +53,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	caseID := fs.String("case-id", "", "case identifier stamped on every event")
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
+	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	formatFlag := fs.String("format", timelineFormatText, "output format: text|json")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--include-reasoning] [--content preview|full] [--format text|json]")
@@ -91,6 +92,12 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	content, err := parseContentMode(*contentFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "timeline: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	reasoning, err := applyDeprecatedProfile(*profileFlag, *includeReasoning)
 	if err != nil {
 		fmt.Fprintf(stderr, "timeline: %v\n", err)
 		fs.Usage()
@@ -138,7 +145,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 			}
 			seenArtifacts[key] = struct{}{}
 			discovered++
-			evs, ok := readArtifactEvents(a, *caseID, *includeReasoning, content == contentFull, stderr)
+			evs, ok := readArtifactEvents(a, *caseID, reasoning, content == contentFull, stderr)
 			if !ok {
 				continue
 			}

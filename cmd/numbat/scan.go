@@ -37,6 +37,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&emitValues, "emit", emitFlagHelp())
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
+	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout))
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
@@ -88,6 +89,12 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	content, err := parseContentMode(*contentFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "scan: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	reasoning, err := applyDeprecatedProfile(*profileFlag, *includeReasoning)
 	if err != nil {
 		fmt.Fprintf(stderr, "scan: %v\n", err)
 		fs.Usage()
@@ -177,7 +184,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		emit:             em,
 		caseID:           *caseID,
 		sel:              sel,
-		includeReasoning: *includeReasoning,
+		includeReasoning: reasoning,
 		captureContent:   captureContent,
 	}
 	if sel.indicators {
