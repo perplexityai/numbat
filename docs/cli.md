@@ -196,7 +196,7 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.3.0",
   "record_type": "indicator",
   "run_id": "run-example-01",
   "endpoint": {
@@ -240,7 +240,7 @@ is omitted when that event has no valid timestamp.
 
 numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`,
 `finding`, `enforcement`, `indicator`, or `scan_summary`) plus a `run_id` and
-`schema_version` (`0.2.0`). Every line carries an `endpoint` object with
+`schema_version` (`0.3.0`). Every line carries an `endpoint` object with
 `hostname`, `os`, `arch`,
 `username`, and `uid`; set `NUMBAT_DEVICE_ID` to add a stable opaque
 `endpoint.device_id` for fleet joins.
@@ -279,7 +279,7 @@ A one-batch run can therefore report zero for both; use `http_failed`,
 diagnostics, and the process exit code to determine delivery health.
 
 Machine-readable JSON Schemas for the record stream and each `record_type` live
-under [schema/v0.2.0](schema/v0.2.0/). Use `record-stream.schema.json` when
+under [schema/v0.3.0](schema/v0.3.0/). Use `record-stream.schema.json` when
 validating arbitrary NDJSON lines, or route on `record_type` and validate against
 the per-record schema.
 
@@ -815,7 +815,7 @@ a manifest.
 ## version
 
 `numbat version` prints the tool version and the record schema version
-(`0.2.0`). Release and schema versions advance independently; the schema changes
+(`0.3.0`). Release and schema versions advance independently; the schema changes
 only when the emitted record contract changes.
 
 ## Exit status

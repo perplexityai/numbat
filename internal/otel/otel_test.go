@@ -183,6 +183,23 @@ func TestServiceNameToSourceAgent(t *testing.T) {
 	}
 }
 
+func TestPromptRetainsBoundedAnalysisContent(t *testing.T) {
+	prompt := strings.Repeat("padding ", 40) + "needle-after-preview"
+	res := mapOne(t,
+		[][]byte{kv(attrServiceName, "generic-agent")},
+		recBuilder{attrs: [][]byte{kv(attrGenAIPrompt, prompt)}}.build(),
+	)
+	if !res.Mapped || res.Event.EventType != model.EventPromptUser {
+		t.Fatalf("result = %+v, want prompt.user", res)
+	}
+	if strings.Contains(res.Event.ContentPreview, "needle-after-preview") {
+		t.Fatal("test needle unexpectedly fits in preview")
+	}
+	if !strings.Contains(res.Event.ContentForAnalysis(), "needle-after-preview") {
+		t.Fatal("OTLP analysis content omitted text beyond preview")
+	}
+}
+
 func TestMapClaudeToolCall(t *testing.T) {
 	resource := [][]byte{kv(attrServiceName, "claude-code")}
 	rec := recBuilder{

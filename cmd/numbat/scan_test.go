@@ -134,6 +134,36 @@ func TestScanEmitsFindings(t *testing.T) {
 	}
 }
 
+func TestScanCustomRuleSeesPromptBeyondPreview(t *testing.T) {
+	prompt := strings.Repeat("padding ", 40) + "needle-after-preview"
+	entry, err := json.Marshal(map[string]any{
+		"type": "user", "uuid": "u1", "sessionId": "s1",
+		"message": map[string]any{"role": "user", "content": prompt},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := writeTranscript(t, string(entry))
+	rulesDir := t.TempDir()
+	ruleBody := `id: test.prompt_content
+version: "1"
+title: Prompt content
+severity: high
+expr: event.event_type == "prompt.user" && event.content.contains("needle-after-preview")
+`
+	if err := os.WriteFile(filepath.Join(rulesDir, "prompt_content.yaml"), []byte(ruleBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runCLI("scan", "--path", artifact, "--rules-dir", rulesDir, "--no-builtin-rules")
+	if code != 0 {
+		t.Fatalf("exit = %d (err=%s)", code, errb)
+	}
+	findings := decodeFindings(t, out)
+	if len(findings) != 1 || findings[0].RuleID != "test.prompt_content" {
+		t.Fatalf("findings = %+v, want prompt content match", findings)
+	}
+}
+
 func TestScanDirectoryRecursive(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "projects", "p")

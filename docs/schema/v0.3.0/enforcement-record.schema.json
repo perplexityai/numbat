@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat enforcement decision record",
+  "description": "Numbat's computed policy decision for a matched pre-action hook. It does not prove that the control response was delivered or honored by the host.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "run_id",
+    "endpoint",
+    "decision_id",
+    "timestamp",
+    "decision",
+    "mode",
+    "reason",
+    "source_agent",
+    "source_type",
+    "action_event_ids",
+    "rule_ids"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.3.0" },
+    "record_type": { "const": "enforcement" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "endpoint": { "$ref": "#/$defs/endpoint" },
+    "decision_id": { "type": "string", "pattern": "^enf-[a-f0-9]{24}$" },
+    "case_id": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "decision": {
+      "description": "deny selects Numbat's host deny contract; no_override leaves the host's normal permission flow unchanged.",
+      "type": "string",
+      "enum": ["no_override", "deny"]
+    },
+    "mode": { "type": "string", "enum": ["monitor", "enforce"] },
+    "reason": {
+      "type": "string",
+      "enum": ["monitor_mode", "no_enforce_eligible_match", "fail_open", "enforce_rule_match"]
+    },
+    "source_agent": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "cowork",
+        "codex",
+        "gemini-cli",
+        "cursor",
+        "windsurf",
+        "copilot",
+        "vscode",
+        "opencode",
+        "openclaw",
+        "antigravity",
+        "factory",
+        "grok",
+        "devin-cli",
+        "hermes",
+        "kimi-code",
+        "pi",
+        "qwen-code",
+        "cline",
+        "amp",
+        "auggie",
+        "kiro",
+        "goose",
+        "kilo",
+        "openhands",
+        "crush",
+        "junie",
+        "unknown"
+      ]
+    },
+    "source_type": { "const": "hook" },
+    "session_id": { "type": "string" },
+    "model": { "type": "string" },
+    "model_provider": { "type": "string" },
+    "sub_agent": { "type": "string" },
+    "tool_name": { "type": "string" },
+    "tool_call_id": { "type": "string" },
+    "action_event_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "finding_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "rule_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "deny_rule_id": { "type": "string", "minLength": 1 },
+    "deny_rule_version": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "decision": { "const": "deny" } }, "required": ["decision"] },
+      "then": {
+        "properties": {
+          "mode": { "const": "enforce" },
+          "reason": { "const": "enforce_rule_match" }
+        },
+        "required": ["deny_rule_id", "deny_rule_version"]
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "monitor" } }, "required": ["mode"] },
+      "then": {
+        "properties": {
+          "decision": { "const": "no_override" },
+          "reason": { "const": "monitor_mode" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": { "const": "enforce" },
+          "decision": { "const": "no_override" }
+        },
+        "required": ["mode", "decision"]
+      },
+      "then": {
+        "properties": {
+          "reason": { "enum": ["no_enforce_eligible_match", "fail_open"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "decision": { "const": "no_override" } },
+        "required": ["decision"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["deny_rule_id"] },
+            { "required": ["deny_rule_version"] }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "os", "arch", "username", "uid"],
+      "properties": {
+        "hostname": { "type": "string" },
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "uid": { "type": "string" },
+        "device_id": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

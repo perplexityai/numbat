@@ -1092,7 +1092,7 @@ func TestExitCodeDenyStderrContainsOnlyReason(t *testing.T) {
 	_, monitorErr, monitorCode := runCLIStdin(string(payload),
 		"hook", "pre_run_command", "--agent", "windsurf", "--rules-dir", dir,
 		"--emit", "all", "--output", "file", "--output-file", monitorRecords)
-	if monitorCode != 0 || !strings.Contains(monitorErr, "indicator catalog reached its safety limit") {
+	if monitorCode != 0 || !strings.Contains(monitorErr, "indicator analysis reached a safety limit") {
 		t.Fatalf("fixture did not produce the diagnostic: exit %d stderr %q", monitorCode, monitorErr)
 	}
 	findings := filepath.Join(t.TempDir(), "records.ndjson")
@@ -1109,7 +1109,7 @@ func TestExitCodeDenyStderrContainsOnlyReason(t *testing.T) {
 	if !strings.Contains(string(records), `"record_type":"finding"`) {
 		t.Fatalf("operator sink missing finding: %s", records)
 	}
-	if !strings.Contains(string(records), `"record_type":"diagnostic"`) || !strings.Contains(string(records), "indicator catalog reached its safety limit") {
+	if !strings.Contains(string(records), `"record_type":"diagnostic"`) || !strings.Contains(string(records), "indicator analysis reached a safety limit") {
 		t.Fatalf("operator sink missing diagnostic: %s", records)
 	}
 }

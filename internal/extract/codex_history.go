@@ -56,17 +56,16 @@ func (e CodexExtractor) extractHistory(data []byte, sha string, src Source) (*Re
 				res.diag(src.Path, line, "malformed history line")
 			} else if entry.Text != "" {
 				ev := model.Event{
-					SchemaVersion:  model.SchemaVersion,
-					CaseID:         src.CaseID,
-					EventID:        historyEventID("codex-hist", src.Path, line),
-					SourceAgent:    e.Agent(),
-					SourceType:     model.SourceArtifact,
-					Timestamp:      epochSecondsRFC3339(entry.TS),
-					SessionID:      entry.SessionID,
-					Actor:          model.ActorUser,
-					EventType:      model.EventPromptUser,
-					ContentPreview: preview(entry.Text),
-					Confidence:     model.ConfidenceHigh,
+					SchemaVersion: model.SchemaVersion,
+					CaseID:        src.CaseID,
+					EventID:       historyEventID("codex-hist", src.Path, line),
+					SourceAgent:   e.Agent(),
+					SourceType:    model.SourceArtifact,
+					Timestamp:     epochSecondsRFC3339(entry.TS),
+					SessionID:     entry.SessionID,
+					Actor:         model.ActorUser,
+					EventType:     model.EventPromptUser,
+					Confidence:    model.ConfidenceHigh,
 					Evidence: model.Evidence{
 						ArtifactType: "codex_history",
 						LocalPath:    src.Path,
@@ -74,6 +73,7 @@ func (e CodexExtractor) extractHistory(data []byte, sha string, src Source) (*Re
 						SHA256:       sha,
 					},
 				}
+				setMessageContent(&ev, src, entry.Text)
 				res.Events = append(res.Events, ev)
 			}
 		}

@@ -18,7 +18,7 @@ func writeManifestBundle(t *testing.T, files []ManifestFile) string {
 	t.Helper()
 	dir := t.TempDir()
 	m := Manifest{
-		SchemaVersion: "0.2.0",
+		SchemaVersion: "0.3.0",
 		CaseID:        "case-1",
 		CreatedAt:     "2026-06-10T12:00:00Z",
 		Tool:          "numbat",
@@ -57,7 +57,7 @@ func TestVerifyRejectsTraversalManifest(t *testing.T) {
 	}
 	// The manifest lists the secret by a traversal path, with its true digest, so
 	// only the path check (not a digest mismatch) can stop it.
-	m := Manifest{SchemaVersion: "0.2.0", CaseID: "c", Tool: "numbat", Files: []ManifestFile{
+	m := Manifest{SchemaVersion: "0.3.0", CaseID: "c", Tool: "numbat", Files: []ManifestFile{
 		{Path: "../secret.txt", SHA256: sha256Hex(secretBody)},
 	}}
 	raw, _ := json.Marshal(m)
@@ -135,7 +135,7 @@ func TestVerifyRejectsSymlinkEscapingBundle(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	m := Manifest{SchemaVersion: "0.2.0", CaseID: "c", Tool: "numbat", Files: []ManifestFile{
+	m := Manifest{SchemaVersion: "0.3.0", CaseID: "c", Tool: "numbat", Files: []ManifestFile{
 		{Path: "evidence/evil", SHA256: sha256Hex(body)},
 	}}
 	raw, _ := json.Marshal(m)
@@ -175,7 +175,7 @@ func TestVerifyRejectsSymlinkPointingInside(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
-	m := Manifest{SchemaVersion: "0.2.0", CaseID: "c", Tool: "numbat", Files: []ManifestFile{
+	m := Manifest{SchemaVersion: "0.3.0", CaseID: "c", Tool: "numbat", Files: []ManifestFile{
 		{Path: "evidence/alias", SHA256: sha256Hex(body)},
 	}}
 	raw, _ := json.Marshal(m)
@@ -216,7 +216,7 @@ func TestVerifyRejectsSymlinkedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := Manifest{
-		SchemaVersion: "0.2.0",
+		SchemaVersion: "0.3.0",
 		CaseID:        "case-1",
 		CreatedAt:     "2026-06-10T12:00:00Z",
 		Tool:          "numbat",
@@ -260,7 +260,7 @@ func TestValidateManifestEvidenceMetadata(t *testing.T) {
 			files = append(files, evidence)
 		}
 		return Manifest{
-			SchemaVersion: "0.2.0", CaseID: "case-1", CreatedAt: "2026-06-10T12:00:00Z",
+			SchemaVersion: "0.3.0", CaseID: "case-1", CreatedAt: "2026-06-10T12:00:00Z",
 			Tool: "numbat", ToolVersion: "test", EvidenceMode: mode, Files: files,
 		}
 	}
@@ -285,7 +285,7 @@ func TestValidateManifestEvidenceMetadata(t *testing.T) {
 
 func TestVerifyRejectsUnknownManifestField(t *testing.T) {
 	dir := t.TempDir()
-	raw := `{"schema_version":"0.2.0","case_id":"c","created_at":"2026-06-10T12:00:00Z","tool":"numbat","tool_version":"test","files":[],"surprise":true}`
+	raw := `{"schema_version":"0.3.0","case_id":"c","created_at":"2026-06-10T12:00:00Z","tool":"numbat","tool_version":"test","files":[],"surprise":true}`
 	if err := os.WriteFile(filepath.Join(dir, manifestName), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -194,7 +194,7 @@ func (e KimiCodeExtractor) mapLine(res *Result, src Source, sha string, st *kimi
 			ev.EventType = model.EventPromptUser
 			ev.Actor = model.ActorUser
 			ev.Confidence = model.ConfidenceHigh
-			ev.ContentPreview = preview(part.Text)
+			setMessageContent(&ev, src, part.Text)
 			ev.Evidence.JSONPointer = fmt.Sprintf("/input/%d", i)
 			res.Events = append(res.Events, ev)
 		}
@@ -225,7 +225,7 @@ func (e KimiCodeExtractor) mapLoopEvent(res *Result, src Source, sha string, st 
 			ev.EventType = model.EventMessageAssistant
 			ev.Actor = model.ActorAssistant
 			ev.Confidence = model.ConfidenceHigh
-			ev.ContentPreview = preview(event.Part.Text)
+			setMessageContent(&ev, src, event.Part.Text)
 			ev.Evidence.JSONPointer = "/event/part"
 			res.Events = append(res.Events, ev)
 		case "think":
@@ -236,7 +236,7 @@ func (e KimiCodeExtractor) mapLoopEvent(res *Result, src Source, sha string, st 
 			ev.EventType = model.EventMessageReasoning
 			ev.Actor = model.ActorAssistant
 			ev.Confidence = model.ConfidenceHigh
-			ev.ContentPreview = preview(event.Part.Think)
+			setMessageContent(&ev, src, event.Part.Think)
 			ev.Evidence.JSONPointer = "/event/part"
 			res.Events = append(res.Events, ev)
 		}

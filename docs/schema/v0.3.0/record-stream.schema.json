@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat NDJSON record",
+  "description": "One line from numbat's main record stream or diagnostic stream. Route on record_type for the precise schema.",
+  "oneOf": [
+    { "$ref": "event-record.schema.json" },
+    { "$ref": "finding-record.schema.json" },
+    { "$ref": "enforcement-record.schema.json" },
+    { "$ref": "indicator-record.schema.json" },
+    { "$ref": "scan-summary-record.schema.json" },
+    { "$ref": "diagnostic-record.schema.json" }
+  ]
+}

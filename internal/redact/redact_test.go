@@ -57,6 +57,22 @@ func TestStringMasksAssignments(t *testing.T) {
 	}
 }
 
+func TestStringMasksCredentialAfterLongAssignmentPrefix(t *testing.T) {
+	in := strings.Repeat("ordinary=value ", 4096) + "api_key=final-secret"
+	got := String(in)
+	if strings.Contains(got, "final-secret") || !strings.Contains(got, "ordinary=value") {
+		t.Fatalf("long-prefix masking failed")
+	}
+}
+
+func TestStringMasksWhitespaceObfuscatedCredentialKey(t *testing.T) {
+	in := "api" + strings.Repeat(" ", 256) + "_key=final-secret"
+	got := String(in)
+	if strings.Contains(got, "final-secret") || !strings.Contains(got, Mask) {
+		t.Fatalf("whitespace-obfuscated credential was not masked")
+	}
+}
+
 // TestStringMasksMultipleSecrets ensures every secret in one string is masked.
 func TestStringMasksMultipleSecrets(t *testing.T) {
 	in := `PASSWORD="a b c" and API_KEY=xyz123 and token ghp_0123456789abcdefghijklmnopqrstuvwxyz`

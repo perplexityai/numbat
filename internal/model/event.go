@@ -13,7 +13,7 @@ import (
 
 // SchemaVersion is the version of the event and finding schema. It is stamped
 // on every emitted record so receivers can route and migrate deterministically.
-const SchemaVersion = "0.2.0"
+const SchemaVersion = "0.3.0"
 
 // ToolName is the identifier emitted in records and reports.
 const ToolName = "numbat"
@@ -279,8 +279,7 @@ type Event struct {
 	URL string `json:"url,omitempty"`
 
 	// Model and ModelProvider name the model behind a session when the source
-	// records it. They are session-context join keys for monitoring; they carry
-	// no evidentiary weight.
+	// records it; Numbat does not infer them.
 	Model         string `json:"model,omitempty"`
 	ModelProvider string `json:"model_provider,omitempty"`
 
@@ -296,7 +295,19 @@ type Event struct {
 	SubAgent string `json:"sub_agent,omitempty"`
 
 	// ContentPreview is a bounded observed excerpt, redacted on every output path.
-	ContentPreview string `json:"content_preview,omitempty"`
+	ContentPreview          string `json:"content_preview,omitempty"`
+	ContentPreviewTruncated bool   `json:"content_preview_truncated,omitempty"`
+
+	// Content is populated only by an explicit full-content output projection.
+	// Parsers keep the unredacted analysis body in the non-serializable fields
+	// below so a default marshal cannot expose it accidentally.
+	Content          string `json:"content,omitempty"`
+	ContentBytes     int    `json:"content_bytes,omitempty"`
+	ContentTruncated bool   `json:"content_truncated,omitempty"`
+
+	analysisContent          string
+	analysisContentBytes     int
+	analysisContentTruncated bool
 
 	// Tags are coarse labels a parser may pre-attach; rules may add more.
 	Tags []string `json:"tags,omitempty"`
@@ -324,38 +335,94 @@ func NormalizeEventPath(p string) string {
 // evaluation. Field names match JSON tags (e.g. event.event_type).
 func (e Event) celView() map[string]any {
 	return map[string]any{
-		"source_agent":      e.SourceAgent,
-		"source_type":       e.SourceType,
-		"timestamp":         e.Timestamp,
-		"project_path":      e.ProjectPath,
-		"session_id":        e.SessionID,
-		"actor":             e.Actor,
-		"event_type":        string(e.EventType),
-		"tool_name":         e.ToolName,
-		"command":           e.Command,
-		"file_path":         e.FilePath,
-		"decision":          e.Decision,
-		"tool_call_id":      e.ToolCallID,
-		"exit_code":         exitCodeView(e.ExitCode),
-		"duration_ms":       int64PtrView(e.DurationMs),
-		"approval_required": boolPtrView(e.ApprovalRequired),
-		"approval_decision": e.ApprovalDecision,
-		"approval_reason":   e.ApprovalReason,
-		"diff_sha256":       e.DiffSHA256,
-		"diff_bytes":        e.DiffBytes,
-		"mcp_server":        e.MCPServer,
-		"mcp_tool":          e.MCPTool,
-		"url":               e.URL,
-		"model":             e.Model,
-		"model_provider":    e.ModelProvider,
-		"git_branch":        e.GitBranch,
-		"entrypoint":        e.Entrypoint,
-		"cli_version":       e.CLIVersion,
-		"sub_agent":         e.SubAgent,
-		"content_preview":   e.ContentPreview,
-		"tags":              toAnySlice(e.Tags),
-		"confidence":        e.Confidence,
+		"source_agent":              e.SourceAgent,
+		"source_type":               e.SourceType,
+		"timestamp":                 e.Timestamp,
+		"project_path":              e.ProjectPath,
+		"session_id":                e.SessionID,
+		"actor":                     e.Actor,
+		"event_type":                string(e.EventType),
+		"tool_name":                 e.ToolName,
+		"command":                   e.Command,
+		"file_path":                 e.FilePath,
+		"decision":                  e.Decision,
+		"tool_call_id":              e.ToolCallID,
+		"exit_code":                 exitCodeView(e.ExitCode),
+		"duration_ms":               int64PtrView(e.DurationMs),
+		"approval_required":         boolPtrView(e.ApprovalRequired),
+		"approval_decision":         e.ApprovalDecision,
+		"approval_reason":           e.ApprovalReason,
+		"diff_sha256":               e.DiffSHA256,
+		"diff_bytes":                e.DiffBytes,
+		"mcp_server":                e.MCPServer,
+		"mcp_tool":                  e.MCPTool,
+		"url":                       e.URL,
+		"model":                     e.Model,
+		"model_provider":            e.ModelProvider,
+		"git_branch":                e.GitBranch,
+		"entrypoint":                e.Entrypoint,
+		"cli_version":               e.CLIVersion,
+		"sub_agent":                 e.SubAgent,
+		"content_preview":           e.ContentPreview,
+		"content_preview_truncated": e.ContentPreviewTruncated,
+		"content":                   e.contentForAnalysis(),
+		"content_bytes":             e.contentBytesForAnalysis(),
+		"content_truncated":         e.contentTruncatedForAnalysis(),
+		"tags":                      toAnySlice(e.Tags),
+		"confidence":                e.Confidence,
 	}
+}
+
+// SetContent records a message preview and, when retain is true, a bounded body
+// for local analysis. It does not populate the emitted Content field.
+func (e *Event) SetContent(raw string, retain bool) {
+	e.ContentPreview, e.ContentPreviewTruncated = NormalizeContentPreviewWithTruncation(raw)
+	e.Content = ""
+	e.ContentBytes = 0
+	e.ContentTruncated = false
+	e.analysisContent = ""
+	e.analysisContentBytes = 0
+	e.analysisContentTruncated = false
+	if !retain || strings.TrimSpace(raw) == "" {
+		return
+	}
+	e.analysisContentBytes = len(raw)
+	e.analysisContent, e.analysisContentTruncated = LimitContent(raw)
+}
+
+// ContentForAnalysis returns the bounded body retained by a parser, or Content
+// when evaluating a caller-supplied event record.
+func (e Event) ContentForAnalysis() string { return e.contentForAnalysis() }
+
+// ContentTruncatedForAnalysis reports whether ContentForAnalysis omits bytes.
+func (e Event) ContentTruncatedForAnalysis() bool { return e.contentTruncatedForAnalysis() }
+
+// WithoutAnalysisContent returns a copy with the process-local message body
+// removed. Output projections call it after taking any explicitly requested
+// content so the returned event cannot expose the unredacted analysis copy.
+func (e Event) WithoutAnalysisContent() Event {
+	e.analysisContent = ""
+	e.analysisContentBytes = 0
+	e.analysisContentTruncated = false
+	return e
+}
+
+func (e Event) contentForAnalysis() string {
+	if e.analysisContent != "" {
+		return e.analysisContent
+	}
+	return e.Content
+}
+
+func (e Event) contentBytesForAnalysis() int {
+	if e.analysisContentBytes != 0 {
+		return e.analysisContentBytes
+	}
+	return e.ContentBytes
+}
+
+func (e Event) contentTruncatedForAnalysis() bool {
+	return e.analysisContentTruncated || e.ContentTruncated
 }
 
 // CELActivation returns the variable bindings for evaluating a rule against

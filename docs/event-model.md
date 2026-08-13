@@ -55,6 +55,19 @@ Some agents persist only one side, and long-running commands may emit more than
 one result update. An absent `exit_code` means the source did not provide one;
 it does not mean success.
 
+## Message content
+
+Prompt, assistant, and source-recorded reasoning events carry a normalized
+`content_preview` of at most 200 Unicode code points. Rules and indicator
+extraction can inspect the source text through `content`, bounded to 1 MiB and
+reported by `content_bytes` and `content_truncated`. This applies only when the
+source exposes conversation text; it does not retain file bodies, patch text,
+or arbitrary tool output.
+
+`content_preview_truncated` states that the preview omits text. A long token is
+kept as a rune-safe prefix rather than disappearing. Output redaction runs
+after local rule evaluation.
+
 ## MCP
 
 MCP is a facet of a tool action, not a separate event category. A qualified
@@ -107,4 +120,4 @@ the source can be reopened on the endpoint.
 
 See [Writing rules](rules.md) for the CEL field and event-type contracts,
 [Agent coverage](agent-coverage.md) for source-specific support, and the
-[record schemas](schema/v0.2.0/) for the emitted wire format.
+[record schemas](schema/v0.3.0/) for the emitted wire format.

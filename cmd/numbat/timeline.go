@@ -135,7 +135,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 			}
 			seenArtifacts[key] = struct{}{}
 			discovered++
-			evs, ok := readArtifactEvents(a, *caseID, profile, stderr)
+			evs, ok := readArtifactEvents(a, *caseID, profile, false, stderr)
 			if !ok {
 				continue
 			}
@@ -172,7 +172,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 // per-file tolerance: a missing extractor, an unreadable file, or a parse error
 // is a stderr diagnostic and yields ok=false so the caller skips it without
 // aborting the whole run. Per-line parse problems are diagnostics too.
-func readArtifactEvents(a discover.Artifact, caseID string, profile extract.Profile, stderr io.Writer) ([]model.Event, bool) {
+func readArtifactEvents(a discover.Artifact, caseID string, profile extract.Profile, captureContent bool, stderr io.Writer) ([]model.Event, bool) {
 	ex, ok := timelineExtractorFor(a.Agent)
 	if !ok {
 		fmt.Fprintf(stderr, "timeline: no extractor for agent %q (%s)\n", a.Agent, a.Path)
@@ -185,7 +185,12 @@ func readArtifactEvents(a discover.Artifact, caseID string, profile extract.Prof
 	}
 	defer f.Close()
 
-	res, err := extract.SafeExtract(ex, f, extract.Source{Path: a.Path, CaseID: caseID, Profile: profile})
+	res, err := extract.SafeExtract(ex, f, extract.Source{
+		Path:           a.Path,
+		CaseID:         caseID,
+		Profile:        profile,
+		CaptureContent: captureContent,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "timeline: parse %q: %v\n", a.Path, err)
 		return nil, false

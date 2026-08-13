@@ -105,8 +105,8 @@ func TestTimelineJSONShapeAndDeterminism(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatalf("json output not a single document: %v\n%s", err, out)
 	}
-	if report.SchemaVersion != "0.2.0" {
-		t.Errorf("schema_version = %q, want 0.2.0", report.SchemaVersion)
+	if report.SchemaVersion != "0.3.0" {
+		t.Errorf("schema_version = %q, want 0.3.0", report.SchemaVersion)
 	}
 	if len(report.Sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(report.Sessions))

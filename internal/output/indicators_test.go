@@ -127,6 +127,20 @@ func TestIndicatorsTrimMarkdownBoldFromURL(t *testing.T) {
 	}
 }
 
+func TestIndicatorsUseContentBeyondPreview(t *testing.T) {
+	var ev model.Event
+	ev.EventID = "deep-content"
+	ev.EventType = model.EventPromptUser
+	ev.SetContent(strings.Repeat("padding ", 40)+"https://deep.example/path", true)
+	if strings.Contains(ev.ContentPreview, "deep.example") {
+		t.Fatal("test indicator unexpectedly fits in preview")
+	}
+	inds := Indicators([]model.Event{ev})
+	if findInd(inds, IndicatorURL, "https://deep.example/path") == nil {
+		t.Fatalf("deep content indicator missing: %+v", inds)
+	}
+}
+
 func TestIndicatorsFirstLastSeenUsesTimeOrdering(t *testing.T) {
 	events := []model.Event{
 		{EventType: model.EventCommandExec, Command: "curl https://evil.example/later", EventID: "e1", Timestamp: "2026-06-02T10:00:00-05:00"},

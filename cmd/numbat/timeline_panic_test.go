@@ -33,7 +33,7 @@ func TestTimelineReadArtifactRecoversFromParserPanic(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	evs, ok := readArtifactEvents(discover.Artifact{Path: p, Agent: "panic-agent"}, "", extract.ProfileEvidence, &stderr)
+	evs, ok := readArtifactEvents(discover.Artifact{Path: p, Agent: "panic-agent"}, "", extract.ProfileEvidence, false, &stderr)
 	if ok {
 		t.Fatal("a panicking parser must yield ok=false (skipped), not a clean read")
 	}

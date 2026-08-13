@@ -31,6 +31,7 @@ type Engine struct {
 	env               *cel.Env
 	rules             []compiledRule
 	usesShellCommands bool
+	usesContent       bool
 }
 
 // compiledRule is one compiled rule of either shape: program is set for a
@@ -45,7 +46,10 @@ type compiledRule struct {
 type compiledExpression struct {
 	program           cel.Program
 	usesShellCommands bool
+	usesContent       bool
 }
+
+const contentRuleCostLimit uint64 = 10_000_000
 
 // SequenceRule is a compiled sequence rule ready for per-step evaluation. It
 // distills the validated spec (window, cap) next to the compiled step
@@ -57,6 +61,7 @@ type SequenceRule struct {
 	withinEvents      int           // 0 = no event-count window
 	maxMatches        int           // resolved, >= 1
 	usesShellCommands bool
+	usesContent       bool
 	adapter           types.Adapter
 }
 
@@ -132,6 +137,7 @@ func NewEngine(sources []Source) (*Engine, error) {
 		expressions       = map[string]compiledExpression{}
 		errs              []error
 		usesShellCommands bool
+		usesContent       bool
 	)
 	for _, source := range sources {
 		for i := range source.Rules {
@@ -161,12 +167,15 @@ func NewEngine(sources []Source) (*Engine, error) {
 			if c.program.usesShellCommands {
 				usesShellCommands = true
 			}
+			if c.program.usesContent || c.seq != nil && c.seq.usesContent {
+				usesContent = true
+			}
 		}
 	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
-	return &Engine{env: env, rules: compiled, usesShellCommands: usesShellCommands}, nil
+	return &Engine{env: env, rules: compiled, usesShellCommands: usesShellCommands, usesContent: usesContent}, nil
 }
 
 // sourceLabel renders a stable, unambiguous source label for diagnostics. The
@@ -280,6 +289,7 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, r Rule
 	}
 	steps := make([]compiledExpression, len(r.Sequence.Steps))
 	usesShellCommands := false
+	usesContent := false
 	for i, st := range r.Sequence.Steps {
 		prg, err := compileCachedExpr(env, expressions, st.Expr)
 		if err != nil {
@@ -287,6 +297,7 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, r Rule
 		}
 		steps[i] = prg
 		usesShellCommands = usesShellCommands || prg.usesShellCommands
+		usesContent = usesContent || prg.usesContent
 	}
 	within, err := r.Sequence.withinDuration()
 	if err != nil {
@@ -300,6 +311,7 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, r Rule
 		withinEvents:      r.Sequence.WithinEvents,
 		maxMatches:        r.Sequence.resolvedMaxMatches(),
 		usesShellCommands: usesShellCommands,
+		usesContent:       usesContent,
 		adapter:           env.CELTypeAdapter(),
 	}}, nil
 }
@@ -327,14 +339,32 @@ func compileExpr(env *cel.Env, expr string) (compiledExpression, error) {
 	if err := checkEventFields(ast); err != nil {
 		return compiledExpression{}, err
 	}
-	prg, err := env.Program(ast, cel.EvalOptions(cel.OptOptimize))
+	usesContent := astReferencesEventField(ast, "content") ||
+		astReferencesEventField(ast, "content_bytes") ||
+		astReferencesEventField(ast, "content_truncated")
+	programOptions := []cel.ProgramOption{cel.EvalOptions(cel.OptOptimize)}
+	if usesContent {
+		programOptions = append(programOptions, cel.CostLimit(contentRuleCostLimit))
+	}
+	prg, err := env.Program(ast, programOptions...)
 	if err != nil {
 		return compiledExpression{}, fmt.Errorf("program expr: %w", err)
 	}
 	return compiledExpression{
 		program:           prg,
 		usesShellCommands: astReferencesGlobal(ast, shellCommandsVariable),
+		usesContent:       usesContent,
 	}, nil
+}
+
+func astReferencesEventField(ast *cel.Ast, field string) bool {
+	found := false
+	walkEventFields(ast.NativeRep(), ast.NativeRep().Expr(), false, func(name string, literal bool) {
+		if literal && name == field {
+			found = true
+		}
+	})
+	return found
 }
 
 func astReferencesGlobal(ast *cel.Ast, name string) bool {
@@ -539,6 +569,10 @@ func isGlobalIdent(ast *celast.AST, expr celast.Expr, name string, shadowed bool
 
 // Len reports the number of compiled (enabled, valid) rules of both shapes.
 func (e *Engine) Len() int { return len(e.rules) }
+
+// UsesContent reports whether an enabled rule evaluates the bounded message
+// body instead of only its preview.
+func (e *Engine) UsesContent() bool { return e != nil && e.usesContent }
 
 // HasEnforceEligibleRules reports whether the compiled catalog contains at
 // least one enabled rule that may block in live hook enforce mode. Disabled

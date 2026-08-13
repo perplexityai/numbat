@@ -339,8 +339,12 @@ func maskCredentialValues(s string) string {
 	// them from the normalized view, then splice the raw string in one pass.
 	type span struct{ start, end int }
 	var spans []span
+	maskedThrough := 0
 	for p := 0; p < len(view); p++ {
 		if view[p].b != '=' {
+			continue
+		}
+		if view[p].raw < maskedThrough {
 			continue
 		}
 		start := keyStartNorm(view, p)
@@ -361,6 +365,7 @@ func maskCredentialValues(s string) string {
 		payloadStart := skipLeadingWrappers(s, maskStart)
 		rawValEnd := valueEnd(s, payloadStart)
 		spans = append(spans, span{maskSpanStart(s, maskStart, payloadStart, rawValEnd), rawValEnd})
+		maskedThrough = rawValEnd
 	}
 	if len(spans) == 0 {
 		return s

@@ -616,7 +616,7 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		ev.EventType = model.EventMessageReasoning
 		ev.Actor = model.ActorAssistant
 		ev.Confidence = model.ConfidenceHigh
-		ev.ContentPreview = preview(text)
+		setMessageContent(&ev, src, text)
 		ev.Evidence.JSONPointer = "/payload"
 		res.Events = append(res.Events, ev)
 	case "":
@@ -637,7 +637,7 @@ func (e CodexExtractor) emitMessage(res *Result, src Source, sha string, st *cod
 	}
 	ev := e.base(src, sha, st, line, ts, 0)
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(text)
+	setMessageContent(&ev, src, text)
 	ev.Evidence.JSONPointer = "/payload/content"
 	switch ri.Role {
 	case "user":
@@ -899,7 +899,7 @@ func (e CodexExtractor) emitUserPrompt(res *Result, src Source, sha string, st *
 	ev.EventType = model.EventPromptUser
 	ev.Actor = model.ActorUser
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(message)
+	setMessageContent(&ev, src, message)
 	ev.Evidence.JSONPointer = pointer
 	res.Events = append(res.Events, ev)
 }

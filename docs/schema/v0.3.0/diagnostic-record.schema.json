@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat diagnostic record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "run_id",
+    "endpoint",
+    "timestamp",
+    "level",
+    "message"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.3.0" },
+    "record_type": { "const": "diagnostic" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "endpoint": { "$ref": "#/$defs/endpoint" },
+    "timestamp": { "type": "string" },
+    "level": { "type": "string", "enum": ["info", "warn", "error"] },
+    "message": { "type": "string" }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "os", "arch", "username", "uid"],
+      "properties": {
+        "hostname": { "type": "string" },
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "uid": { "type": "string" },
+        "device_id": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

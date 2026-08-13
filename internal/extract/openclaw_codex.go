@@ -327,7 +327,7 @@ func (e OpenClawExtractor) emitCodexMessage(res *Result, src Source, sha string,
 	}
 	ev := e.base(src, sha, st, line, 0)
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(text)
+	setMessageContent(&ev, src, text)
 	ev.Evidence.JSONPointer = "/payload/content"
 	switch ri.Role {
 	case "user":
@@ -376,7 +376,7 @@ func (e OpenClawExtractor) emitCodexUserPrompt(res *Result, src Source, sha stri
 	ev.EventType = model.EventPromptUser
 	ev.Actor = model.ActorUser
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(message)
+	setMessageContent(&ev, src, message)
 	ev.Evidence.JSONPointer = pointer
 	res.appendEvent(st, ev, false)
 }

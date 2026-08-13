@@ -48,6 +48,15 @@ func TestSequenceRuleCompiles(t *testing.T) {
 	}
 }
 
+func TestSequenceRuleContentUsageIsReported(t *testing.T) {
+	eng := mustEngine(t, seqRule(func(r *Rule) {
+		r.Sequence.Steps[0].Expr = `event.event_type == "prompt.user" && event.content.contains("needle")`
+	}))
+	if !eng.UsesContent() {
+		t.Fatal("UsesContent = false for content sequence")
+	}
+}
+
 func TestSequenceRuleCanBeEnforceEligible(t *testing.T) {
 	eng := mustEngine(t, seqRule(func(r *Rule) {
 		r.Severity = model.SeverityMedium

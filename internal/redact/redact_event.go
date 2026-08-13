@@ -2,9 +2,9 @@ package redact
 
 import "github.com/perplexityai/numbat/internal/model"
 
-// Event returns a copy of ev with command, content, URL, path, approval, and MCP
-// fields routed through String. It is the shared output guard for event and
-// timeline records.
+// Event returns the default preview-only projection: observed fields are routed
+// through String and full message content is omitted. It is the shared output
+// guard for event and timeline records.
 //
 // Redaction runs on OUTPUT only: callers evaluate rules against the UNREDACTED
 // event first, then redact for emission, so detection is never affected. String
@@ -20,6 +20,9 @@ func Event(ev model.Event) model.Event {
 	ev.FilePath = String(ev.FilePath)
 	ev.URL = String(ev.URL)
 	ev.ContentPreview = String(ev.ContentPreview)
+	ev.Content = ""
+	ev.ContentBytes = 0
+	ev.ContentTruncated = false
 	ev.MCPServer = String(ev.MCPServer)
 	ev.MCPTool = String(ev.MCPTool)
 	ev.ProjectPath = String(ev.ProjectPath)

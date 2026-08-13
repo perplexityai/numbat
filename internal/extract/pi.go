@@ -181,7 +181,7 @@ func (e PiExtractor) mapMessage(res *Result, src Source, sha string, st *piState
 			ev.EventType = model.EventPromptUser
 			ev.Actor = model.ActorUser
 			ev.Confidence = model.ConfidenceHigh
-			ev.ContentPreview = preview(block.Text)
+			setMessageContent(&ev, src, block.Text)
 			ev.Evidence.JSONPointer = piContentPointer(entry.Message.Content, i)
 			res.Events = append(res.Events, ev)
 		}
@@ -227,7 +227,7 @@ func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *
 		ev.EventType = model.EventMessageAssistant
 		ev.Actor = model.ActorAssistant
 		ev.Confidence = model.ConfidenceHigh
-		ev.ContentPreview = preview(block.Text)
+		setMessageContent(&ev, src, block.Text)
 		ev.Evidence.JSONPointer = pointer
 		res.Events = append(res.Events, ev)
 	case piBlockThinking:
@@ -238,7 +238,7 @@ func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *
 		ev.EventType = model.EventMessageReasoning
 		ev.Actor = model.ActorAssistant
 		ev.Confidence = model.ConfidenceHigh
-		ev.ContentPreview = preview(block.Thinking)
+		setMessageContent(&ev, src, block.Thinking)
 		ev.Evidence.JSONPointer = pointer
 		res.Events = append(res.Events, ev)
 	case piBlockToolCall:
