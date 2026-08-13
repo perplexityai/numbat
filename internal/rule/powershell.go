@@ -476,6 +476,15 @@ func (a *shellAnalyzer) addPowerShellSegment(segment string, depth int, wrappers
 		a.report(errors.New("shell command analysis: unsupported or malformed PowerShell command"))
 		return
 	}
+	// The call operator admits a quoted token so "& 'C:\path with space.exe'"
+	// projects, but an empty quoted target carries no executable, assignment,
+	// or redirect. Such a command names nothing a rule can match, so drop it
+	// and mark the analysis uncertain rather than seating a phantom entry that
+	// still consumes one of the maxShellCommands slots.
+	if command.Executable == "" && len(command.Assignments) == 0 && len(command.Redirects) == 0 {
+		a.report(errors.New("shell command analysis: unsupported or malformed PowerShell command"))
+		return
+	}
 	if recognizedPowerShellAlias(command.Executable) {
 		command.enforcementUnsafe = true
 	}

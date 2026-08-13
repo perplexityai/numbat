@@ -1559,3 +1559,23 @@ func encodePowerShell(source string) string {
 	}
 	return base64.StdEncoding.EncodeToString(data)
 }
+
+// TestPowerShellEmptyCallOperatorTargetIsNotProjected covers the projection
+// invariant: the call operator admits a quoted token, but an empty quoted
+// target names nothing. It must not seat a phantom command that carries no
+// executable, assignment, or redirect and still consumes a maxShellCommands
+// slot. Found by FuzzAnalyzeShellCommands.
+func TestPowerShellEmptyCallOperatorTargetIsNotProjected(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{`@(&''&&`, `& ''`, `& ""`} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			commands, _, _ := analyzeShellCommands(source)
+			for i, command := range commands {
+				if command.Executable == "" && len(command.Assignments) == 0 && len(command.Redirects) == 0 {
+					t.Fatalf("command %d is an empty projection for %q: %#v", i, source, command)
+				}
+			}
+		})
+	}
+}

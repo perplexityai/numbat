@@ -104,14 +104,30 @@ jobs:
       # Bounded fuzzing: each target runs briefly to surface crashers without
       # turning into an open-ended job. The parsers and the redaction decoder
       # must survive arbitrary and malformed input without panicking.
+      #
+      # Every FuzzXxx target in the tree is listed here. A target that exists
+      # but is never run is a gap that looks like coverage: the shell-analysis
+      # target below was defined and unexercised, and a bounded run surfaced a
+      # projection-invariant failure in under three minutes.
       - name: fuzz extract parsers
         run: |
-          for t in FuzzClaudeExtract FuzzCodexExtract FuzzGeminiExtract FuzzPiExtract FuzzKimiCodeExtract; do
+          for t in FuzzClaudeExtract FuzzCodexExtract FuzzGeminiExtract FuzzPiExtract \
+                   FuzzKimiCodeExtract FuzzGeminiSessionExtract FuzzCursorExtract \
+                   FuzzWindsurfExtract FuzzOpenCodeExtract FuzzOpenClawExtract \
+                   FuzzCodexCodeModeExecCommand; do
             go test -run='^$' -fuzz="^${t}$" -fuzztime=30s ./internal/extract/
           done
 
       - name: fuzz redaction decoder
-        run: go test -run='^$' -fuzz='^FuzzString$' -fuzztime=30s ./internal/redact/
+        run: |
+          for t in FuzzString FuzzJSONProducesValidJSON; do
+            go test -run='^$' -fuzz="^${t}$" -fuzztime=30s ./internal/redact/
+          done
+
+      # Guards the command projection every shell rule matches against: a parse
+      # that silently drops a command is a detection gap, not just a crash.
+      - name: fuzz shell command analysis
+        run: go test -run='^$' -fuzz='^FuzzAnalyzeShellCommands$' -fuzztime=30s ./internal/rule/
 
       - name: fuzz OTLP decoder
         run: go test -run='^$' -fuzz='^FuzzOTLPLogs$' -fuzztime=30s ./internal/otel/
