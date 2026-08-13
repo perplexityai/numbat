@@ -33,6 +33,9 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   output or a known credential file to a data-bearing `curl` or `wget` request.
 - `exfil.curl_post_file` - a credential, browser-session, workload-token, or
   process-environment file is referenced in a curl data or form request.
+- `exfil.cloud_storage_upload` - a cloud storage CLI (`aws s3`, `gsutil`,
+  `gcloud storage`, `rclone`, `az storage`) transfers a known credential file to
+  a remote bucket or container.
 - `exfil.dns_tunnel_exec` - a DNS resolver is run with a query name built from
   command substitution or backticks.
 - `exfil.secret_read_and_egress_oneliner` - one command requests a

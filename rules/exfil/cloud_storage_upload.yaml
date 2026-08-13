@@ -1,0 +1,48 @@
+id: exfil.cloud_storage_upload
+version: "1.0"
+enabled: true
+title: Sensitive-file upload to cloud object storage requested
+description: |-
+  A cloud storage CLI requested transfer of a known credential file to a remote bucket or
+  container. Only a recognized credential source paired with a remote destination matches:
+  uploads of ordinary project files, downloads, listings, and help output are excluded.
+  curl and wget upload forms remain owned by curl_post_file and env_capture_to_network.
+severity: high
+expr: |-
+  (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
+  shell_commands.exists(command,
+    !command.argv.exists(arg, arg.matches("(?i)^(-h|--help|--version)$")) &&
+    (
+      (
+        command.name.matches("(?i)^aws$") &&
+        command.argv.exists(arg, arg == "s3") &&
+        command.argv.exists(arg, arg.matches("(?i)^(cp|sync|mv)$")) &&
+        command.argv.exists(arg, arg.matches("(?i)^s3://[^\\s]+$"))
+      ) ||
+      (
+        command.name.matches("(?i)^gsutil$") &&
+        command.argv.exists(arg, arg.matches("(?i)^(cp|rsync|mv)$")) &&
+        command.argv.exists(arg, arg.matches("(?i)^gs://[^\\s]+$"))
+      ) ||
+      (
+        command.name.matches("(?i)^gcloud$") &&
+        command.argv.exists(arg, arg == "storage") &&
+        command.argv.exists(arg, arg.matches("(?i)^(cp|rsync|mv)$")) &&
+        command.argv.exists(arg, arg.matches("(?i)^gs://[^\\s]+$"))
+      ) ||
+      (
+        command.name.matches("(?i)^rclone$") &&
+        command.argv.exists(arg, arg.matches("(?i)^(copy|copyto|sync|move|moveto)$")) &&
+        command.argv.exists(arg, arg.matches("^[A-Za-z0-9_-]+:[^\\s]*$"))
+      ) ||
+      (
+        command.name.matches("(?i)^az$") &&
+        command.argv.exists(arg, arg == "storage") &&
+        command.argv.exists(arg, arg.matches("(?i)^(upload|upload-batch)$"))
+      )
+    ) &&
+    command.arguments.exists(arg,
+      arg.value.matches("(?i)^(.*[/\\\\])?(\\.env(\\.(local|production|prod|development|dev|staging|test))?|\\.ssh[/\\\\]id_(rsa|dsa|ecdsa|ed25519)(_sk)?|\\.aws[/\\\\]credentials|\\.kube[/\\\\]config|kubeconfig|\\.npmrc|\\.pypirc|\\.docker[/\\\\]config\\.json|\\.config[/\\\\]gcloud[/\\\\]application_default_credentials\\.json|\\.config[/\\\\]gh[/\\\\]hosts\\.yml|\\.git-credentials|\\.netrc|\\.pgpass|\\.kaggle[/\\\\]kaggle\\.json)$")
+    )
+  )
+tags: [attack.t1567.002, credential_exfil]
