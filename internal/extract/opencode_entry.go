@@ -116,7 +116,8 @@ type openCodePart struct {
 	Hash  string   `json:"hash"`
 	Files []string `json:"files"`
 	// "text"/"reasoning" part field: the prose body.
-	Text string `json:"text"`
+	Text string       `json:"text"`
+	Time openCodeTime `json:"time"`
 }
 
 // openCodeState is a tool part's tagged-union state. Status selects the variant

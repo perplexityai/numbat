@@ -145,10 +145,11 @@ const (
 	openClawRoleCustom     = "custom"
 )
 
-// Stable OpenClaw persists normalized toolCall and text blocks. The snake_case
-// provider variants remain a compatibility path for older artifacts.
+// Stable OpenClaw persists normalized toolCall, text, and thinking blocks. The
+// snake_case provider variants remain a compatibility path for older artifacts.
 const (
 	openClawBlockText              = "text"
+	openClawBlockThinking          = "thinking"
 	openClawBlockToolCall          = "toolCall"
 	openClawBlockToolUseCamel      = "toolUse"
 	openClawBlockFunctionCall      = "functionCall"
@@ -239,6 +240,8 @@ type openClawMessage struct {
 type openClawBlock struct {
 	Type            string           `json:"type"`
 	Text            string           `json:"text"`
+	Thinking        string           `json:"thinking"`
+	Redacted        bool             `json:"redacted"`
 	Name            string           `json:"name"`
 	ID              string           `json:"id"`
 	ToolCallID      string           `json:"toolCallId"`

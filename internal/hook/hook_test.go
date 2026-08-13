@@ -27,6 +27,69 @@ func TestPromptRetainsBoundedAnalysisContent(t *testing.T) {
 	}
 }
 
+func TestFinalAssistantContentMappings(t *testing.T) {
+	tests := []struct {
+		agent  string
+		source string
+		field  string
+	}{
+		{AgentClaude, model.AgentClaudeCode, "last_assistant_message"},
+		{AgentCodex, model.AgentCodex, "last_assistant_message"},
+		{AgentGemini, model.AgentGeminiCLI, "prompt_response"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.agent, func(t *testing.T) {
+			ev := Map(LifecycleAssistant, tt.agent, tt.source, "e", map[string]any{tt.field: "final response"})
+			if ev.EventType != model.EventMessageAssistant || ev.ContentForAnalysis() != "final response" {
+				t.Fatalf("event = %+v, want assistant content", ev)
+			}
+		})
+	}
+}
+
+func TestMessagePartEventsPreserveTextAndReasoningOrder(t *testing.T) {
+	events := MapEvents(LifecycleAssistant, AgentPi, model.AgentPi, "e", map[string]any{
+		"message_parts": []any{
+			map[string]any{"type": "reasoning", "text": "consider evidence"},
+			map[string]any{"type": "text", "text": "   "},
+			map[string]any{"type": "text", "text": "final response"},
+		},
+	})
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(events), events)
+	}
+	if events[0].EventType != model.EventMessageReasoning || events[0].ContentForAnalysis() != "consider evidence" ||
+		events[1].EventType != model.EventMessageAssistant || events[1].ContentForAnalysis() != "final response" {
+		t.Fatalf("events = %+v, want ordered reasoning then assistant text", events)
+	}
+	for _, ev := range events {
+		if err := ev.Validate(); err != nil {
+			t.Errorf("event %s is invalid: %v", ev.EventID, err)
+		}
+	}
+}
+
+func TestSubagentStopPreservesFinalResponseAndBoundary(t *testing.T) {
+	for _, tt := range []struct {
+		agent  string
+		source string
+	}{{AgentClaude, model.AgentClaudeCode}, {AgentCodex, model.AgentCodex}} {
+		t.Run(tt.agent, func(t *testing.T) {
+			events := MapEvents(LifecycleSessionEnd, tt.agent, tt.source, "e", map[string]any{
+				"session_id":             "s1",
+				"agent_id":               "child-1",
+				"last_assistant_message": "subagent result",
+			})
+			if len(events) != 2 || events[0].EventType != model.EventMessageAssistant || events[1].EventType != model.EventSessionEnd {
+				t.Fatalf("events = %+v, want assistant then session.end", events)
+			}
+			if events[0].ContentForAnalysis() != "subagent result" || events[0].SubAgent != "child-1" {
+				t.Fatalf("assistant event = %+v", events[0])
+			}
+		})
+	}
+}
+
 // every hook-sourced event must be stamped source_type=hook and confidence
 // medium, with a thin hook evidence record that never fabricates a file/line —
 // the honesty constraint for live signals.

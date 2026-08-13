@@ -425,20 +425,26 @@ func TestOpenCodePatchInvalidHash(t *testing.T) {
 	}
 }
 
-// TestOpenCodeTextAndReasoningAreNoOps proves text and reasoning parts are
-// prose-only and OUT of scope for this forensic parser: they emit NO event and
-// store NO preview, so numbat never retains assistant prose or model reasoning.
-// Their absence is by design, so it is not a diagnostic gap either.
-func TestOpenCodeTextAndReasoningAreNoOps(t *testing.T) {
-	for _, body := range []string{
-		`{"type":"text","text":"here is the plan"}`,
-		`{"type":"reasoning","text":"let me think"}`,
-	} {
-		if r := extractOpenCode(t, body); len(r.Events) != 0 || len(r.Diagnostics) != 0 {
-			t.Errorf("default %s: want no events and no diagnostics, got events=%+v diags=%+v", body, r.Events, r.Diagnostics)
-		}
-		if r := extractOpenCodeWithReasoning(t, body, true); len(r.Events) != 0 || len(r.Diagnostics) != 0 {
-			t.Errorf("with reasoning %s: want no events and no diagnostics, got events=%+v diags=%+v", body, r.Events, r.Diagnostics)
+func TestOpenCodeReasoningIsOptInAndTextRemainsRoleSafe(t *testing.T) {
+	reasoning := `{"type":"reasoning","sessionID":"s1","text":"let me think","time":{"start":1700000000123}}`
+	if r := extractOpenCode(t, reasoning); len(r.Events) != 0 || len(r.Diagnostics) != 0 {
+		t.Fatalf("default reasoning: events=%+v diags=%+v", r.Events, r.Diagnostics)
+	}
+	r := extractOpenCodeWithReasoning(t, reasoning, true)
+	if len(r.Events) != 1 {
+		t.Fatalf("reasoning events = %+v", r.Events)
+	}
+	ev := r.Events[0]
+	if ev.EventType != model.EventMessageReasoning || ev.Actor != model.ActorAssistant ||
+		ev.SessionID != "s1" || ev.Timestamp != "2023-11-14T22:13:20.123Z" ||
+		ev.ContentPreview != "let me think" || ev.Evidence.JSONPointer != "/text" {
+		t.Fatalf("reasoning event = %+v", ev)
+	}
+
+	text := `{"type":"text","text":"role is in the sibling message file"}`
+	for _, includeReasoning := range []bool{false, true} {
+		if got := extractOpenCodeWithReasoning(t, text, includeReasoning); len(got.Events) != 0 || len(got.Diagnostics) != 0 {
+			t.Errorf("text part with include-reasoning=%t: events=%+v diags=%+v", includeReasoning, got.Events, got.Diagnostics)
 		}
 	}
 }
@@ -557,6 +563,7 @@ func TestOpenCodeEventsSatisfyContract(t *testing.T) {
 		`{"type":"tool","callID":"c7","tool":"x","state":{"status":"completed","input":{},"output":"y","time":{"start":1,"end":2}}}`,
 		`{"type":"shell","callID":"c8","command":"ls","output":"o"}`,
 		`{"type":"patch","hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","files":["/a"]}`,
+		`{"type":"reasoning","text":"considering evidence","time":{"start":1}}`,
 		`{"id":"m1","role":"user","time":{"created":1}}`,
 		`{"id":"m2","role":"assistant","time":{"created":1}}`,
 	}

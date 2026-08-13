@@ -56,21 +56,25 @@ type piEntry struct {
 }
 
 type piMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	ToolCallID string          `json:"toolCallId"`
-	ToolName   string          `json:"toolName"`
-	Command    string          `json:"command"`
-	Output     string          `json:"output"`
-	ExitCode   *int            `json:"exitCode"`
-	IsError    bool            `json:"isError"`
-	Timestamp  int64           `json:"timestamp"`
+	Role          string          `json:"role"`
+	Content       json.RawMessage `json:"content"`
+	Provider      string          `json:"provider"`
+	Model         string          `json:"model"`
+	ResponseModel string          `json:"responseModel"`
+	ToolCallID    string          `json:"toolCallId"`
+	ToolName      string          `json:"toolName"`
+	Command       string          `json:"command"`
+	Output        string          `json:"output"`
+	ExitCode      *int            `json:"exitCode"`
+	IsError       bool            `json:"isError"`
+	Timestamp     int64           `json:"timestamp"`
 }
 
 type piContentBlock struct {
 	Type      string                     `json:"type"`
 	Text      string                     `json:"text"`
 	Thinking  string                     `json:"thinking"`
+	Redacted  bool                       `json:"redacted"`
 	ID        string                     `json:"id"`
 	Name      string                     `json:"name"`
 	Arguments map[string]json.RawMessage `json:"arguments"`
@@ -192,7 +196,7 @@ func (e PiExtractor) mapMessage(res *Result, src Source, sha string, st *piState
 			return
 		}
 		for i, block := range blocks {
-			e.mapAssistantBlock(res, src, sha, st, line, ts, i, &block)
+			e.mapAssistantBlock(res, src, sha, st, line, ts, i, &entry.Message, &block)
 		}
 	case piRoleToolResult:
 		ev := e.base(src, sha, st, line, ts, 0)
@@ -216,7 +220,7 @@ func (e PiExtractor) mapMessage(res *Result, src Source, sha string, st *piState
 	}
 }
 
-func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *piState, line int, ts string, idx int, block *piContentBlock) {
+func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *piState, line int, ts string, idx int, message *piMessage, block *piContentBlock) {
 	pointer := fmt.Sprintf("/message/content/%d", idx)
 	switch block.Type {
 	case piBlockText:
@@ -227,17 +231,19 @@ func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *
 		ev.EventType = model.EventMessageAssistant
 		ev.Actor = model.ActorAssistant
 		ev.Confidence = model.ConfidenceHigh
+		stampPiModel(&ev, message)
 		setMessageContent(&ev, src, block.Text)
 		ev.Evidence.JSONPointer = pointer
 		res.Events = append(res.Events, ev)
 	case piBlockThinking:
-		if !src.IncludeReasoning || strings.TrimSpace(block.Thinking) == "" {
+		if !src.IncludeReasoning || block.Redacted || strings.TrimSpace(block.Thinking) == "" {
 			return
 		}
 		ev := e.base(src, sha, st, line, ts, idx)
 		ev.EventType = model.EventMessageReasoning
 		ev.Actor = model.ActorAssistant
 		ev.Confidence = model.ConfidenceHigh
+		stampPiModel(&ev, message)
 		setMessageContent(&ev, src, block.Thinking)
 		ev.Evidence.JSONPointer = pointer
 		res.Events = append(res.Events, ev)
@@ -247,6 +253,7 @@ func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *
 		ev.Confidence = model.ConfidenceHigh
 		ev.ToolName = block.Name
 		ev.ToolCallID = block.ID
+		stampPiModel(&ev, message)
 		ev.Evidence.JSONPointer = pointer
 		classifyPiTool(&ev, block.Name, block.Arguments)
 		if ev.EventType == model.EventCommandExec {
@@ -254,6 +261,14 @@ func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *
 		}
 		res.Events = append(res.Events, ev)
 	}
+}
+
+func stampPiModel(ev *model.Event, message *piMessage) {
+	ev.Model = message.ResponseModel
+	if ev.Model == "" {
+		ev.Model = message.Model
+	}
+	ev.ModelProvider = message.Provider
 }
 
 func (e PiExtractor) mapBashExecution(res *Result, src Source, sha string, st *piState, line int, ts string, entry *piEntry) {

@@ -77,6 +77,15 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
 
+With `--include-reasoning`, at-rest parsers map source-recorded reasoning from
+Claude Code, Codex, Gemini session journals, OpenClaw, Pi, Kimi Code, and legacy
+OpenCode part stores. Live assistant text is available from Claude Code and
+Codex stop callbacks, Gemini `AfterAgent`, and the generated Pi, OpenCode, and
+Kilo integrations.
+Pi, OpenCode, and Kilo also expose finalized reasoning parts when installed
+with `--include-reasoning`. numbat does not derive conversation text from
+tool output or recover hidden chain-of-thought.
+
 ## Permission and decision telemetry
 
 The enforcement column above says only whether numbat can synchronously deny an

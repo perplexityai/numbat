@@ -223,6 +223,36 @@ func TestHookFullContentWritesRedactedEvent(t *testing.T) {
 	}
 }
 
+func TestHookReasoningRequiresExplicitOptIn(t *testing.T) {
+	payload := `{"message_parts":[{"type":"reasoning","text":"private analysis"},{"type":"text","text":"final response"}]}`
+	tests := []struct {
+		name string
+		args []string
+		want []model.EventType
+	}{
+		{"default", nil, []model.EventType{model.EventMessageAssistant}},
+		{"included", []string{"--include-reasoning"}, []model.EventType{model.EventMessageReasoning, model.EventMessageAssistant}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := []string{"--agent", "pi", "--emit", "events"}
+			args = append(args, tt.args...)
+			var stdout, stderr bytes.Buffer
+			if code := runHookEvent("message_end", args, strings.NewReader(payload), &stdout, &stderr); code != 0 {
+				t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
+			}
+			events := decodeEventRecords(t, stderr.String())
+			got := make([]model.EventType, len(events))
+			for i := range events {
+				got[i] = events[i].EventType
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("event types = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHookInstallWiresFullContent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	_, errb, code := runCLI("hook", "install", "--agent", "claude", "--settings", path,
@@ -234,6 +264,22 @@ func TestHookInstallWiresFullContent(t *testing.T) {
 		if !strings.Contains(command, "--content=full") {
 			t.Fatalf("installed command missing full-content option: %q", command)
 		}
+	}
+}
+
+func TestHookInstallWiresReasoningOptIn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "numbat.ts")
+	_, errb, code := runCLI("hook", "install", "--agent", "pi", "--settings", path,
+		"--emit", "events", "--include-reasoning")
+	if code != 0 {
+		t.Fatalf("install exit = %d, stderr=%q", code, errb)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(body), `"--include-reasoning"`) != 2 {
+		t.Fatalf("installed Pi plugin does not carry the reasoning opt-in:\n%s", body)
 	}
 }
 

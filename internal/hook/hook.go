@@ -1037,11 +1037,8 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 	case LifecyclePromptSubmit:
 		ev.EventType = model.EventPromptUser
 		ev.Actor = model.ActorUser
-		// prompt.user carries only content_preview (a context field). Cursor's
-		// beforeSubmitPrompt may attach files; their paths are folded into the
-		// preview so the references are visible without inventing a field — the
-		// flat Event has no attachment list, and fabricating one would forge a
-		// shape the schema does not define.
+		// Cursor's beforeSubmitPrompt may attach files. Their paths are folded
+		// into the message text because the flat Event has no attachment list.
 		prompt := r.prompt()
 		if agent == AgentHermes && prompt == "" {
 			prompt = r.extraStr("user_message")
@@ -1067,8 +1064,8 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 			ev.Tags = append(ev.Tags, model.TagToolError)
 		}
 	case LifecycleFileRead:
-		// file.read names the path only — the read's content is never stored, in
-		// keeping with numbat's evidence-not-content philosophy.
+		// file.read names the path only; normalized events do not copy file
+		// contents returned by a read tool.
 		ev.EventType = model.EventFileRead
 		ev.FilePath = r.filePath()
 	case LifecycleFileWrite:
@@ -1137,10 +1134,13 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 		classifyHermesTool(&ev, &r, true)
 		ev.ToolCallID = r.extraStr("tool_call_id")
 	case LifecycleAssistant, LifecycleStop:
-		// Generated Pi/Amp integrations and OpenClaw's authorized model callback
-		// expose finalized assistant text.
 		ev.EventType = model.EventMessageAssistant
-		if agent == AgentOpenClaw || agent == AgentPi || agent == AgentAmp {
+		switch agent {
+		case AgentClaude, AgentCodex:
+			ev.SetContent(r.envStr("last_assistant_message", "lastAssistantMessage"), true)
+		case AgentGemini:
+			ev.SetContent(r.envStr("prompt_response", "promptResponse"), true)
+		case AgentOpenClaw, AgentPi, AgentAmp:
 			ev.SetContent(r.envStr("assistant_text", "assistantText"), true)
 		}
 	case LifecyclePermission:
@@ -1184,6 +1184,17 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 // event per path so file evidence remains first-class.
 func MapEvents(lc Lifecycle, agent, sourceAgent, eventID string, payload map[string]any) []model.Event {
 	base := mapEvent(lc, agent, sourceAgent, eventID, payload)
+	if lc == LifecycleAssistant && (agent == AgentPi || agent == AgentOpenCode || agent == AgentKilo) {
+		if events, ok := mapMessagePartEvents(base, eventID, payload); ok {
+			return events
+		}
+	}
+	if lc == LifecycleSessionEnd && (agent == AgentClaude || agent == AgentCodex) {
+		if text := firstString(payload, "last_assistant_message", "lastAssistantMessage"); strings.TrimSpace(text) != "" {
+			assistant := mapEvent(LifecycleAssistant, agent, sourceAgent, eventID+"-assistant", payload)
+			return []model.Event{assistant, base}
+		}
+	}
 	if agent == AgentCodex && lc == LifecycleCodexPreTool && base.ToolName == "apply_patch" {
 		return mapPatchEvents(base, eventID, firstString(newResolver(agent, payload).toolInput(), "command", "patch"))
 	}
@@ -1213,6 +1224,45 @@ func MapEvents(lc Lifecycle, agent, sourceAgent, eventID string, payload map[str
 		}
 	}
 	return []model.Event{base}
+}
+
+func mapMessagePartEvents(base model.Event, eventID string, payload map[string]any) ([]model.Event, bool) {
+	raw, ok := payload["message_parts"]
+	if !ok {
+		return nil, false
+	}
+	parts, ok := raw.([]any)
+	if !ok {
+		return []model.Event{base}, true
+	}
+	events := make([]model.Event, 0, len(parts))
+	for i, rawPart := range parts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, ok := part["text"].(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			continue
+		}
+		ev := base
+		ev.EventID = fmt.Sprintf("%s-%d", eventID, i+1)
+		kind, _ := part["type"].(string)
+		switch strings.ToLower(strings.TrimSpace(kind)) {
+		case "text":
+			ev.EventType = model.EventMessageAssistant
+		case "reasoning", "thinking":
+			ev.EventType = model.EventMessageReasoning
+		default:
+			continue
+		}
+		ev.SetContent(text, true)
+		events = append(events, ev)
+	}
+	if len(events) == 0 {
+		return []model.Event{base}, true
+	}
+	return events, true
 }
 
 func mapPatchEvents(base model.Event, eventID, patch string) []model.Event {
