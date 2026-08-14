@@ -247,7 +247,7 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
-github.com/google/cel-go v0.30.0 (LICENSE)
+github.com/google/cel-go v0.31.0 (LICENSE)
 ==============================================================================
 
 
@@ -485,7 +485,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
-github.com/klauspost/compress v1.19.1 (LICENSE)
+github.com/klauspost/compress v1.19.2 (LICENSE)
 ==============================================================================
 
 Copyright (c) 2012 The Go Authors. All rights reserved.
@@ -854,7 +854,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 (PATENTS)
 golang.org/x/sys v0.47.0 (PATENTS)
 golang.org/x/text v0.39.0 (PATENTS)
-google.golang.org/protobuf v1.36.11 (PATENTS)
+google.golang.org/protobuf v1.36.12 (PATENTS)
 ==============================================================================
 
 Additional IP Rights Grant (Patents)
@@ -915,7 +915,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
-google.golang.org/protobuf v1.36.11 (LICENSE)
+google.golang.org/protobuf v1.36.12 (LICENSE)
 ==============================================================================
 
 Copyright (c) 2018 The Go Authors. All rights reserved.
