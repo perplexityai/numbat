@@ -119,6 +119,17 @@ func TestEventWithContentBoundsRedactionExpansion(t *testing.T) {
 	}
 }
 
+func TestEventWithContentPreservesSourceSizeWhenBounded(t *testing.T) {
+	raw := strings.Repeat("x", model.ContentMaxBytes+1)
+	in := model.Event{EventID: "e-bounded", EventType: model.EventPromptUser}
+	in.SetContent(raw, true)
+
+	got := EventWithContent(in)
+	if len(got.Content) != model.ContentMaxBytes || got.ContentBytes != len(raw) || !got.ContentTruncated {
+		t.Fatalf("content metadata = %d/%d/%t", len(got.Content), got.ContentBytes, got.ContentTruncated)
+	}
+}
+
 // TestEventEmptyFieldsStayEmpty confirms Event is nil/empty-safe: an empty field
 // in yields an empty field out, so omitempty still drops it on emission.
 func TestEventEmptyFieldsStayEmpty(t *testing.T) {
