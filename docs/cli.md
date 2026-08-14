@@ -182,8 +182,9 @@ NUMBAT_HTTP_HMAC_KEY=... numbat scan \
   Project-path hashes are stable, unsalted join keys, not anonymization; treat
   them as pseudonymous endpoint metadata. Use `--emit all` when you need every
   contributing event. The in-memory catalog keeps at most 10,000 unique
-  indicators per run and 256 candidates from one field; reaching either limit
-  emits one warning and makes a scan summary `partial`.
+  indicators per run and 256 candidates from one field. Reaching either limit,
+  or inspecting a message body beyond the 1 MiB content bound, emits one
+  warning and makes a scan summary `partial`.
   `scan` emits one final record per `(type,value)`. `collect` emits a cumulative
   snapshot when the count changes; consumers should upsert by
   `(run_id,type,value)`.
@@ -229,10 +230,11 @@ assistant, and reasoning events; it requires `--emit events` or `--emit all`.
 redaction, while `content_truncated` reports that Numbat applied the bound.
 
 `--include-reasoning` adds reasoning summaries or thinking blocks that the
-source persisted. It does not recover hidden model chain-of-thought, and it is
-independent of `--content`: without `--content full`, reasoning events still
-carry only a preview. Rules and indicator extraction can inspect bounded
-message content without enabling full-content output.
+source persisted or exposed to a live integration. It does not recover hidden
+model chain-of-thought, and it is independent of `--content`: without
+`--content full`, reasoning events still carry only a preview. Rules and
+indicator extraction can inspect bounded message content without enabling
+full-content output.
 
 For compatibility, `scan` and `timeline` still accept `--profile`. Its `full`
 value enables `--include-reasoning`; it does not enable `--content full`.
@@ -554,6 +556,8 @@ below.
                              requires findings)
 --content preview|full       conversation content in event output (default preview;
                              full is redacted and bounded to 1 MiB)
+--include-reasoning          include source-recorded reasoning events when the
+                             integration exposes them
 --enforce                    opt-in enforce mode: block an action when a rule
                              marked enforce: true matches, including the final
                              action of a sequence. Off by default: monitor mode
@@ -623,6 +627,8 @@ default. This agent process deadline is separate from the hook handler's
                              findings)
 --content preview|full       conversation content installed hook commands emit
                              (default preview; full requires events or all)
+--include-reasoning          include source-recorded reasoning events when the
+                             integration exposes them
 --output SINK                record sink installed hook commands use:
                              stdout, file, or http (repeatable; default file;
                              stdout cannot be combined and writes records to

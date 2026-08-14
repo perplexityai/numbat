@@ -111,7 +111,8 @@ events or indicators are selected, the default becomes
 `--output-file PATH`; repeat `--emit findings|events|indicators`, or use
 `--emit all`. Event records use bounded previews by default; add
 `--content full` to retain bounded, redacted conversation text when the agent
-exposes it. Repeat
+exposes it. Add `--include-reasoning` for source-exposed Pi, OpenCode, and
+Kilo reasoning; hidden model chain-of-thought is not reconstructed. Repeat
 `--output file --output http --http-url URL` to keep the file and also attempt
 direct HTTP delivery. Direct HTTP alone is not durable: it has bounded in-memory
 buffering, but no disk spool. numbat does not rotate output files itself; for

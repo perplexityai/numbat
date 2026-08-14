@@ -34,7 +34,8 @@ func piPluginSourceWithArgs(binary string, runtimeArgs []string, enforce bool) s
 	b.WriteString("import { spawn, spawnSync } from \"node:child_process\";\n\n")
 	b.WriteString("const NUMBAT_BIN = " + jsString(binary) + ";\n")
 	b.WriteString("const EXTRA_ARGS = " + jsArgs(extra) + ";\n")
-	b.WriteString("const ENFORCE = " + fmt.Sprintf("%t", enforce) + ";\n\n")
+	b.WriteString("const ENFORCE = " + fmt.Sprintf("%t", enforce) + ";\n")
+	b.WriteString("const INCLUDE_REASONING = EXTRA_ARGS.includes(\"--include-reasoning\");\n\n")
 	b.WriteString(`function body(ctx, payload) {
   return {
     cwd: ctx?.cwd,
@@ -93,12 +94,22 @@ export default function (pi) {
   });
   pi.on("message_end", async (event, ctx) => {
     if (event.message.role !== "assistant") return;
-    const content = event.message.content;
-    const assistant_text = typeof content === "string" ? content : Array.isArray(content)
-      ? content.filter((block) => block?.type === "text" && typeof block.text === "string")
-          .map((block) => block.text).join("\n")
-      : "";
-    if (assistant_text) forward("assistant", body(ctx, { assistant_text }));
+    const message_parts = event.message.content.flatMap((block) => {
+      if (block?.type === "text" && typeof block.text === "string" && block.text) {
+        return [{ type: "text", text: block.text }];
+      }
+      if (INCLUDE_REASONING && block?.type === "thinking" && !block.redacted &&
+          typeof block.thinking === "string" && block.thinking) {
+        return [{ type: "reasoning", text: block.thinking }];
+      }
+      return [];
+    });
+    if (message_parts.length) forward("assistant", body(ctx, {
+      model: event.message.responseModel ?? event.message.model,
+      model_provider: event.message.provider,
+      timestamp: event.message.timestamp,
+      message_parts,
+    }));
   });
   pi.on("session_shutdown", async (event, ctx) => {
     forward("session-end", body(ctx, { reason: event.reason }));

@@ -343,11 +343,29 @@ func (e OpenClawExtractor) mapMessage(res *Result, src Source, sha string, st *o
 			e.emitToolResult(res, src, sha, st, line, i, c)
 		case openClawBlockText:
 			e.emitText(res, src, sha, st, line, i, role, stringContent, c)
+		case openClawBlockThinking:
+			if role == openClawRoleAssistant && src.IncludeReasoning && !c.Redacted {
+				e.emitThinking(res, src, sha, st, line, i, c)
+			}
 		default:
-			// image / document / thinking and any future block kind are not activity
+			// Image, document, and future block kinds are not activity
 			// numbat models yet; ignore quietly to avoid diagnostic noise.
 		}
 	}
+}
+
+func (e OpenClawExtractor) emitThinking(res *Result, src Source, sha string, st *openClawState, line, block int, c *openClawBlock) {
+	text := strings.TrimSpace(c.Thinking)
+	if text == "" {
+		return
+	}
+	ev := e.base(src, sha, st, line, block)
+	ev.EventType = model.EventMessageReasoning
+	ev.Actor = model.ActorAssistant
+	ev.Confidence = model.ConfidenceHigh
+	setMessageContent(&ev, src, text)
+	ev.Evidence.JSONPointer = fmt.Sprintf("/message/content/%d/thinking", block)
+	res.appendEvent(st, ev, false)
 }
 
 // emitNativeBashExecution maps OpenClaw's stable interactive shell transcript

@@ -68,10 +68,16 @@ func TestOpenCodeInstallWritesObserveOnlyPlugin(t *testing.T) {
 	if !strings.Contains(src, "detached") || !strings.Contains(src, "unref") {
 		t.Errorf("plugin must spawn detached + unref (fire-and-forget)")
 	}
-	for _, want := range []string{"SESSION_CONTEXT", "MAX_CONTEXTS", `"chat.message"`, `"chat.params"`, `"message.updated"`, `forward("prompt-submit"`, `forward("assistant"`, "modelProvider", "subAgent", "info.directory", "new Date().toISOString()"} {
+	for _, want := range []string{"SESSION_CONTEXT", "MAX_CONTEXTS", "MAX_ACTIVE_MESSAGES", `"chat.message"`, `"chat.params"`, `"message.updated"`, `"message.part.updated"`, `"message.removed"`, `forward("prompt-submit"`, `forward("assistant"`, "message_parts", "INCLUDE_REASONING", "part.time?.end", "!part.ignored", "modelProvider", "subAgent", "info.directory", "new Date().toISOString()"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("plugin missing session context field %q", want)
 		}
+	}
+	if strings.Contains(src, ".slice(0, 4096)") {
+		t.Error("plugin must let numbat apply and report the shared content bound")
+	}
+	if !strings.Contains(src, `const body = { timestamp: new Date().toISOString(), ...payload };`) {
+		t.Error("plugin must preserve a source timestamp supplied by the payload")
 	}
 	info, err := os.Stat(path)
 	if err != nil {

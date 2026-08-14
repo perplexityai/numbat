@@ -9,7 +9,7 @@ import (
 
 const piSessionFixture = `{"type":"session","version":3,"id":"s-pi","timestamp":"2026-07-22T09:00:00.000Z","cwd":"/work/repo"}
 {"type":"message","id":"u1","parentId":null,"timestamp":"2026-07-22T09:00:01.000Z","message":{"role":"user","content":"inspect the repo","timestamp":1784710801000}}
-{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-07-22T09:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I will inspect it."},{"type":"thinking","thinking":"private chain"},{"type":"toolCall","id":"call-bash","name":"bash","arguments":{"command":"git status --short"}},{"type":"toolCall","id":"call-read","name":"read","arguments":{"path":"README.md"}},{"type":"toolCall","id":"call-write","name":"edit","arguments":{"path":"main.go","oldText":"a","newText":"b"}},{"type":"toolCall","id":"call-ext","name":"lookup","arguments":{"query":"x"}}],"timestamp":1784710802000}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-07-22T09:00:02.000Z","message":{"role":"assistant","provider":"openai","model":"requested-model","responseModel":"resolved-model","content":[{"type":"text","text":"I will inspect it."},{"type":"thinking","thinking":"private chain"},{"type":"toolCall","id":"call-bash","name":"bash","arguments":{"command":"git status --short"}},{"type":"toolCall","id":"call-read","name":"read","arguments":{"path":"README.md"}},{"type":"toolCall","id":"call-write","name":"edit","arguments":{"path":"main.go","oldText":"a","newText":"b"}},{"type":"toolCall","id":"call-ext","name":"lookup","arguments":{"query":"x"}}],"timestamp":1784710802000}}
 {"type":"message","id":"r1","parentId":"a1","timestamp":"2026-07-22T09:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-bash","toolName":"bash","content":[{"type":"text","text":"failed"}],"isError":true,"timestamp":1784710803000}}
 {"type":"message","id":"b1","parentId":"r1","timestamp":"2026-07-22T09:00:04.000Z","message":{"role":"bashExecution","command":"pwd","output":"/work/repo\n","exitCode":0,"timestamp":1784710804000}}
 `
@@ -64,6 +64,9 @@ func TestPiExtractMapsDocumentedSessionRecords(t *testing.T) {
 	if got := res.Events[3]; got.ToolName != "bash" || got.ToolCallID != "call-bash" || got.Command != "git status --short" {
 		t.Errorf("bash call = %+v", got)
 	}
+	if got := res.Events[2]; got.Model != "resolved-model" || got.ModelProvider != "openai" {
+		t.Errorf("assistant model context = %+v", got)
+	}
 	if got := res.Events[4]; got.FilePath != "README.md" || got.ToolName != "read" {
 		t.Errorf("read call = %+v", got)
 	}
@@ -84,7 +87,7 @@ func TestPiExtractMapsDocumentedSessionRecords(t *testing.T) {
 	}
 }
 
-func TestPiExtractFullProfileIncludesReasoning(t *testing.T) {
+func TestPiExtractIncludesRequestedReasoning(t *testing.T) {
 	res, err := (PiExtractor{}).Extract(strings.NewReader(piSessionFixture), Source{
 		Path:             "/home/u/.pi/agent/sessions/s.jsonl",
 		IncludeReasoning: true,
@@ -98,8 +101,23 @@ func TestPiExtractFullProfileIncludesReasoning(t *testing.T) {
 			reasoning = append(reasoning, ev)
 		}
 	}
-	if len(reasoning) != 1 || reasoning[0].ContentPreview != "private chain" {
+	if len(reasoning) != 1 || reasoning[0].ContentPreview != "private chain" ||
+		reasoning[0].Model != "resolved-model" || reasoning[0].ModelProvider != "openai" {
 		t.Fatalf("reasoning = %+v", reasoning)
+	}
+}
+
+func TestPiExtractOmitsProviderRedactedReasoning(t *testing.T) {
+	fixture := `{"type":"session","version":3,"id":"s","cwd":"/p"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"filtered payload","redacted":true}]}}`
+	res, err := (PiExtractor{}).Extract(strings.NewReader(fixture), Source{IncludeReasoning: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range res.Events {
+		if ev.EventType == model.EventMessageReasoning {
+			t.Fatalf("provider-redacted reasoning was emitted: %+v", ev)
+		}
 	}
 }
 

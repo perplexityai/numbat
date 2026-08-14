@@ -17,7 +17,12 @@ const openClawPath = "/cases/openclaw/agents/a1/sessions/s1.jsonl"
 // extractOpenClaw parses body as an OpenClaw session transcript at openClawPath.
 func extractOpenClaw(t *testing.T, body string) *Result {
 	t.Helper()
-	res, err := OpenClawExtractor{}.Extract(strings.NewReader(body), Source{Path: openClawPath, CaseID: "case-claw"})
+	return extractOpenClawSource(t, body, Source{Path: openClawPath, CaseID: "case-claw"})
+}
+
+func extractOpenClawSource(t *testing.T, body string, src Source) *Result {
+	t.Helper()
+	res, err := OpenClawExtractor{}.Extract(strings.NewReader(body), src)
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -80,6 +85,23 @@ func TestOpenClawStringContentRoles(t *testing.T) {
 	}
 	if asst.EventType != model.EventMessageAssistant || asst.Actor != model.ActorAssistant {
 		t.Errorf("assistant = %q/%q, want message.assistant/assistant", asst.EventType, asst.Actor)
+	}
+}
+
+func TestOpenClawThinkingIsOptIn(t *testing.T) {
+	body := withHeader(`{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"visible thought"},{"type":"thinking","thinking":"filtered thought","redacted":true},{"type":"text","text":"final"}]}}`)
+	if got := extractOpenClaw(t, body); len(got.Events) != 1 || got.Events[0].EventType != model.EventMessageAssistant {
+		t.Fatalf("default events = %+v", got.Events)
+	}
+	res := extractOpenClawSource(t, body, Source{
+		Path:             openClawPath,
+		IncludeReasoning: true,
+		CaptureContent:   true,
+	})
+	if len(res.Events) != 2 || res.Events[0].EventType != model.EventMessageReasoning ||
+		res.Events[0].ContentForAnalysis() != "visible thought" ||
+		res.Events[1].EventType != model.EventMessageAssistant {
+		t.Fatalf("reasoning events = %+v", res.Events)
 	}
 }
 
@@ -831,6 +853,26 @@ func TestOpenClawCodexResponseItemParity(t *testing.T) {
 			t.Errorf("json_pointer = %q, want /payload/arguments", ev.Evidence.JSONPointer)
 		}
 	})
+}
+
+func TestOpenClawCodexReasoningIsOptIn(t *testing.T) {
+	body := strings.Join([]string{
+		`{"timestamp":"t","type":"session_meta","payload":{"id":"cx-r","cwd":"/w"}}`,
+		`{"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"source summary"}]}}`,
+	}, "\n")
+	if got := extractOpenClaw(t, body); len(got.Events) != 0 {
+		t.Fatalf("default reasoning events = %+v", got.Events)
+	}
+	res := extractOpenClawSource(t, body, Source{
+		Path:             openClawPath,
+		CaseID:           "case-claw",
+		IncludeReasoning: true,
+		CaptureContent:   true,
+	})
+	if len(res.Events) != 1 || res.Events[0].EventType != model.EventMessageReasoning ||
+		res.Events[0].ContentForAnalysis() != "source summary" {
+		t.Fatalf("reasoning events = %+v", res.Events)
+	}
 }
 
 func TestOpenClawEmbeddedCodexCodeModeParity(t *testing.T) {

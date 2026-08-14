@@ -88,6 +88,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	var emitValues multiFlag
 	fs.Var(&emitValues, "emit", emitFlagHelp()+"; enforce mode requires findings")
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events when the integration exposes them")
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
@@ -108,7 +109,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full] [--include-reasoning] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -191,24 +192,25 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	}
 
 	deny, reason, denyAgent, err := handleHook(event, lc, *agentFlag, sourceAgent, stdin, stderr, hookOptions{
-		caseID:     *caseID,
-		sel:        sel,
-		content:    content,
-		stateDB:    *stateDB,
-		modes:      outputValues,
-		file:       *outputFile,
-		httpURL:    *httpURL,
-		httpBatch:  *httpBatch,
-		httpTO:     *httpTimeout,
-		httpAuth:   *httpAuth,
-		httpSig:    *httpSigHeader,
-		httpTS:     *httpTSHeader,
-		insecure:   *httpAllowInsecure,
-		gzip:       *httpGzip,
-		ruleDirs:   rf.dirs,
-		noBuiltin:  rf.noBuiltin,
-		enforce:    *enforceFlag,
-		visitFlags: fs,
+		caseID:           *caseID,
+		sel:              sel,
+		content:          content,
+		includeReasoning: *includeReasoning,
+		stateDB:          *stateDB,
+		modes:            outputValues,
+		file:             *outputFile,
+		httpURL:          *httpURL,
+		httpBatch:        *httpBatch,
+		httpTO:           *httpTimeout,
+		httpAuth:         *httpAuth,
+		httpSig:          *httpSigHeader,
+		httpTS:           *httpTSHeader,
+		insecure:         *httpAllowInsecure,
+		gzip:             *httpGzip,
+		ruleDirs:         rf.dirs,
+		noBuiltin:        rf.noBuiltin,
+		enforce:          *enforceFlag,
+		visitFlags:       fs,
 	})
 	if err != nil {
 		if *enforceFlag {
@@ -244,24 +246,25 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 
 // hookOptions carries the parsed live-handler settings.
 type hookOptions struct {
-	caseID     string
-	sel        emitSelection
-	content    contentMode
-	stateDB    string
-	modes      []string
-	file       string
-	httpURL    string
-	httpBatch  int
-	httpTO     time.Duration
-	httpAuth   string
-	httpSig    string
-	httpTS     string
-	insecure   bool
-	gzip       bool
-	ruleDirs   multiFlag
-	noBuiltin  bool
-	enforce    bool
-	visitFlags *flag.FlagSet
+	caseID           string
+	sel              emitSelection
+	content          contentMode
+	includeReasoning bool
+	stateDB          string
+	modes            []string
+	file             string
+	httpURL          string
+	httpBatch        int
+	httpTO           time.Duration
+	httpAuth         string
+	httpSig          string
+	httpTS           string
+	insecure         bool
+	gzip             bool
+	ruleDirs         multiFlag
+	noBuiltin        bool
+	enforce          bool
+	visitFlags       *flag.FlagSet
 }
 
 // handleHook maps one payload through the shared pipeline. A deny is returned
@@ -364,6 +367,15 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	sequenceUnavailable := stateErr != nil
 
 	events := hook.MapEvents(lc, agent, sourceAgent, hookEventID(run), payload)
+	if !opts.includeReasoning {
+		filtered := events[:0]
+		for _, ev := range events {
+			if ev.EventType != model.EventMessageReasoning {
+				filtered = append(filtered, ev)
+			}
+		}
+		events = filtered
+	}
 	responseAgent := agent
 	if agent == hook.AgentCopilot && len(events) > 0 && events[0].SourceAgent == hook.AgentVSCode {
 		responseAgent = hook.AgentVSCode

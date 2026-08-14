@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
 )
@@ -118,11 +119,11 @@ func (e OpenCodeExtractor) extractMessage(res *Result, src Source, sha string, m
 
 // extractPart maps a part file to events by its part kind. A tool part is the
 // primary signal; a legacy shell part is a direct command/output; a patch part
-// is a structured multi-file edit. A text or reasoning part is prose-only and
-// deliberately OUT of scope for this forensic parser — it is an explicit no-op
-// (no event, no preview) so numbat never retains assistant prose or model
-// reasoning. An unmodeled part kind records a diagnostic so coverage never
-// silently drops a part numbat is expected to map.
+// is a structured multi-file edit. A reasoning part is assistant-only in
+// OpenCode's schema and is emitted when explicitly requested. A text part
+// carries no role and remains a no-op until it can be joined to its message.
+// An unmodeled part kind records a diagnostic so coverage never silently drops
+// a part numbat is expected to map.
 func (e OpenCodeExtractor) extractPart(res *Result, src Source, sha string, trimmed []byte) {
 	var part openCodePart
 	if err := json.Unmarshal(trimmed, &part); err != nil {
@@ -136,10 +137,20 @@ func (e OpenCodeExtractor) extractPart(res *Result, src Source, sha string, trim
 		e.emitShellPart(res, src, sha, &part)
 	case openCodePartPatch:
 		e.emitPatchPart(res, src, sha, &part)
-	case openCodePartText, openCodePartReasoning:
-		// Prose-only parts: intentionally ignored to keep the capture surface
-		// minimal — no event, no preview, not even a diagnostic (their absence
-		// is by design, not a coverage gap).
+	case openCodePartReasoning:
+		if !src.IncludeReasoning || strings.TrimSpace(part.Text) == "" {
+			return
+		}
+		ev := e.base(src, sha, 0, part.SessionID, epochMillisRFC3339(part.Time.Start))
+		ev.EventType = model.EventMessageReasoning
+		ev.Actor = model.ActorAssistant
+		ev.Confidence = model.ConfidenceHigh
+		ev.Evidence.JSONPointer = "/text"
+		setMessageContent(&ev, src, part.Text)
+		res.Events = append(res.Events, ev)
+	case openCodePartText:
+		// Text parts can belong to user or assistant messages, but the part file
+		// does not carry that role. Do not guess it from content or path.
 	default:
 		// A file, step-start/finish, snapshot, agent, retry, compaction, or
 		// subtask part carries no forensic signal numbat maps. Surface the gap

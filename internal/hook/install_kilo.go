@@ -35,13 +35,64 @@ func kiloPluginSourceWithArgs(binary string, runtimeArgs []string, enforce bool)
 	b.WriteString("import type { Plugin } from \"@kilocode/plugin\";\n\n")
 	b.WriteString("const NUMBAT_BIN = " + jsString(binary) + ";\n")
 	b.WriteString("const EXTRA_ARGS = " + jsArgs(extra) + ";\n")
-	b.WriteString("const ENFORCE = " + fmt.Sprintf("%t", enforce) + ";\n\n")
-	b.WriteString(`function promptText(parts) {
+	b.WriteString("const ENFORCE = " + fmt.Sprintf("%t", enforce) + ";\n")
+	b.WriteString("const INCLUDE_REASONING = EXTRA_ARGS.includes(\"--include-reasoning\");\n\n")
+	b.WriteString(`const MAX_CONTEXTS = 4096;
+const MAX_ACTIVE_MESSAGES = 256;
+const ASSISTANT_PARTS = new Map();
+const COMPLETED_MESSAGES = new Set();
+
+function rememberBounded(set, key) {
+  if (!key || set.has(key)) return false;
+  if (set.size >= MAX_CONTEXTS) set.delete(set.values().next().value);
+  set.add(key);
+  return true;
+}
+
+function rememberAssistant(message) {
+  if (!message?.id || ASSISTANT_PARTS.has(message.id)) return;
+  if (ASSISTANT_PARTS.size >= MAX_ACTIVE_MESSAGES) {
+    ASSISTANT_PARTS.delete(ASSISTANT_PARTS.keys().next().value);
+  }
+  ASSISTANT_PARTS.set(message.id, { sessionID: message.sessionID, parts: new Map() });
+}
+
+function rememberMessagePart(part) {
+  const parts = ASSISTANT_PARTS.get(part?.messageID)?.parts;
+  if (!part?.id || !parts || !part.time?.end) return;
+  const isText = part.type === "text" && !part.synthetic && !part.ignored;
+  const isReasoning = INCLUDE_REASONING && part.type === "reasoning";
+  if ((!isText && !isReasoning) || typeof part.text !== "string" || !part.text) return;
+  parts.set(part.id, { type: part.type, text: part.text });
+}
+
+function takeMessageParts(messageID) {
+  const parts = Array.from(ASSISTANT_PARTS.get(messageID)?.parts?.entries() || [])
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([, part]) => part);
+  ASSISTANT_PARTS.delete(messageID);
+  return parts;
+}
+
+function forgetMessage(messageID) {
+  ASSISTANT_PARTS.delete(messageID);
+}
+
+function forgetMessagePart(input) {
+  ASSISTANT_PARTS.get(input?.messageID)?.parts?.delete(input?.partID);
+}
+
+function forgetSession(sessionID) {
+  for (const [messageID, state] of ASSISTANT_PARTS) {
+    if (state.sessionID === sessionID) ASSISTANT_PARTS.delete(messageID);
+  }
+}
+
+function promptText(parts) {
   return (parts || [])
-    .filter((part) => part?.type === "text" && !part.synthetic)
+    .filter((part) => part?.type === "text" && !part.synthetic && !part.ignored)
     .map((part) => part.text || "")
-    .join("\n")
-    .slice(0, 4096);
+    .join("\n");
 }
 
 function forward(lifecycle, payload) {
@@ -101,11 +152,27 @@ const server: Plugin = async ({ directory }) => ({
       forward("session-start", { session_id: info?.id, cwd: info?.directory || directory });
     } else if (event?.type === "session.deleted") {
       forward("session-end", { session_id: info?.id, cwd: info?.directory || directory });
-    } else if (event?.type === "message.updated" && info?.role === "assistant" && info?.time?.completed && !info?.summary) {
+      forgetSession(info?.id);
+    } else if (event?.type === "message.updated") {
+      if (info?.role !== "assistant" || info?.summary) return;
+      if (!info?.time?.completed) {
+        rememberAssistant(info);
+        return;
+      }
+      if (!rememberBounded(COMPLETED_MESSAGES, info.id)) return;
+      rememberAssistant(info);
       forward("assistant", {
         session_id: info?.sessionID, cwd: info?.path?.cwd || directory,
         sub_agent: info?.agent, model: info?.modelID, model_provider: info?.providerID,
+        timestamp: info?.time?.completed,
+        message_parts: takeMessageParts(info.id),
       });
+    } else if (event?.type === "message.part.updated") {
+      rememberMessagePart(event?.properties?.part);
+    } else if (event?.type === "message.part.removed") {
+      forgetMessagePart(event?.properties);
+    } else if (event?.type === "message.removed") {
+      forgetMessage(event?.properties?.messageID);
     }
   },
 });

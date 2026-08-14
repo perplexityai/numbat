@@ -20,7 +20,7 @@ func TestPiInstallLifecycleAndForeignCollision(t *testing.T) {
 		t.Fatalf("install/status = %+v / %+v", rep, Status(AgentPi, path))
 	}
 	body := readTestFile(t, path)
-	for _, want := range []string{piPluginMarker, `pi.on("tool_call"`, `pi.on("message_end"`, `pi.on("tool_result"`, "tool_result: event.details", "spawnSync", `--enforce`, `sessionManager?.getSessionId`} {
+	for _, want := range []string{piPluginMarker, `pi.on("tool_call"`, `pi.on("message_end"`, `pi.on("tool_result"`, "tool_result: event.details", "message_parts", `block?.type === "thinking"`, "!block.redacted", "event.message.responseModel", "event.message.provider", "event.message.timestamp", "INCLUDE_REASONING", "spawnSync", `--enforce`, `sessionManager?.getSessionId`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Pi extension missing %q", want)
 		}
@@ -562,6 +562,11 @@ func TestKiloInstallUsesOwnedGlobalPlugin(t *testing.T) {
 		kiloPluginMarker,
 		`import type { Plugin } from "@kilocode/plugin"`,
 		`"tool.execute.before"`,
+		`"message.part.updated"`,
+		`"message.removed"`,
+		`message_parts`,
+		`INCLUDE_REASONING`,
+		`part.time?.end`,
 		`spawnSync`,
 		`throw new Error(reason)`,
 		`export default { id: "numbat", server }`,
@@ -571,6 +576,9 @@ func TestKiloInstallUsesOwnedGlobalPlugin(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("Kilo plugin missing %q", want)
 		}
+	}
+	if strings.Contains(body, ".slice(0, 4096)") {
+		t.Error("Kilo plugin must let numbat apply and report the shared content bound")
 	}
 	if strings.Count(body, `"--enforce"`) != 1 {
 		t.Fatalf("Kilo plugin should carry one global enforce arg: %s", body)

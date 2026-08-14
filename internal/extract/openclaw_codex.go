@@ -78,9 +78,8 @@ func (e OpenClawExtractor) mapCodexLine(res *Result, src Source, sha string, st 
 // for the variant. The mapping mirrors the Codex extractor (codex.go
 // mapResponseItem) but routes through OpenClaw's event id/state so call↔result
 // correlation and the tool-activity counter stay consistent with the native
-// path. Reasoning/prose are emitted as message events (no preview beyond the
-// prose norm); unknown variants are skipped quietly so a format addition is not
-// flagged as corruption.
+// path. Reasoning follows Source.IncludeReasoning; unknown variants are skipped
+// quietly so a format addition is not flagged as corruption.
 func (e OpenClawExtractor) mapCodexResponseItem(res *Result, src Source, sha string, st *openClawState, line int, payload json.RawMessage) {
 	var ri codexResponseItem
 	if err := json.Unmarshal(payload, &ri); err != nil {
@@ -246,9 +245,20 @@ func (e OpenClawExtractor) mapCodexResponseItem(res *Result, src Source, sha str
 		ev.Evidence.JSONPointer = "/payload"
 		res.appendEvent(st, ev, true)
 	case codexRIReasoning:
-		// Model reasoning is context, not an action record (mirrors Claude's
-		// thinking-block handling and Codex's reasoning posture). It is prose, so it
-		// is a NO-OP under data minimization — recognized, never previewed.
+		if !src.IncludeReasoning {
+			return
+		}
+		text := strings.TrimSpace(decodeCodexReasoningText(ri.Summary, ri.Content))
+		if text == "" {
+			return
+		}
+		ev := e.base(src, sha, st, line, 0)
+		ev.EventType = model.EventMessageReasoning
+		ev.Actor = model.ActorAssistant
+		ev.Confidence = model.ConfidenceHigh
+		setMessageContent(&ev, src, text)
+		ev.Evidence.JSONPointer = "/payload"
+		res.appendEvent(st, ev, false)
 	case codexRICompaction, codexRICompactionSummary, codexRIContextCompaction:
 		// History-compaction inner variants carry only opaque encrypted content;
 		// an explicit, recognized no-op.
