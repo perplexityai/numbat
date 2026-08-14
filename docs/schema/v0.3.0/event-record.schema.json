@@ -112,7 +112,11 @@
     "content_preview": { "type": "string", "maxLength": 200 },
     "content_preview_truncated": { "type": "boolean" },
     "content": { "type": "string", "minLength": 1 },
-    "content_bytes": { "type": "integer", "minimum": 1 },
+    "content_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Mapped message-body byte count before Numbat's 1 MiB bound and output redaction"
+    },
     "content_truncated": { "type": "boolean" },
     "tags": {
       "type": "array",
