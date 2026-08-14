@@ -53,14 +53,15 @@ type Finding struct {
 	// what fired, not just the rule title. Sensitive values (command, file_path,
 	// url, content_preview) are routed through redact.String; event_type and
 	// actor are closed-vocabulary enums emitted verbatim.
-	ObservedEventType      string `json:"observed_event_type,omitempty"`
-	ObservedActor          string `json:"observed_actor,omitempty"`
-	ObservedCommand        string `json:"observed_command,omitempty"`
-	ObservedFilePath       string `json:"observed_file_path,omitempty"`
-	ObservedURL            string `json:"observed_url,omitempty"`
-	ObservedMCPServer      string `json:"observed_mcp_server,omitempty"`
-	ObservedMCPTool        string `json:"observed_mcp_tool,omitempty"`
-	ObservedContentPreview string `json:"observed_content_preview,omitempty"`
+	ObservedEventType               string `json:"observed_event_type,omitempty"`
+	ObservedActor                   string `json:"observed_actor,omitempty"`
+	ObservedCommand                 string `json:"observed_command,omitempty"`
+	ObservedFilePath                string `json:"observed_file_path,omitempty"`
+	ObservedURL                     string `json:"observed_url,omitempty"`
+	ObservedMCPServer               string `json:"observed_mcp_server,omitempty"`
+	ObservedMCPTool                 string `json:"observed_mcp_tool,omitempty"`
+	ObservedContentPreview          string `json:"observed_content_preview,omitempty"`
+	ObservedContentPreviewTruncated bool   `json:"observed_content_preview_truncated,omitempty"`
 
 	Tags         []string   `json:"tags,omitempty"`
 	EvidenceRefs []Evidence `json:"evidence_refs"`

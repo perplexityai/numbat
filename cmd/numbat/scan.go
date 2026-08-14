@@ -165,8 +165,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return failScan(em, err.Error())
 		}
 	}
+	captureContent := sel.indicators || sel.findings && eng != nil && eng.UsesContent()
 
-	sc := &scanner{emit: em, caseID: *caseID, sel: sel, profile: profile}
+	sc := &scanner{emit: em, caseID: *caseID, sel: sel, profile: profile, captureContent: captureContent}
 	if sel.indicators {
 		sc.indicators = output.NewIndicatorAccumulator()
 	}
@@ -442,14 +443,15 @@ func parseProfile(v string) (extract.Profile, error) {
 
 // scanner holds per-run artifact-processing state.
 type scanner struct {
-	emit       *output.Emitter
-	caseID     string
-	sel        emitSelection
-	profile    extract.Profile
-	pipe       *pipeline.Pipeline
-	indicators *output.IndicatorAccumulator
-	parsed     int
-	failed     int
+	emit           *output.Emitter
+	caseID         string
+	sel            emitSelection
+	profile        extract.Profile
+	captureContent bool
+	pipe           *pipeline.Pipeline
+	indicators     *output.IndicatorAccumulator
+	parsed         int
+	failed         int
 	// lookup is overridden only by tests.
 	lookup func(agent string) (extract.Extractor, bool)
 }
@@ -489,7 +491,12 @@ func (s *scanner) scanArtifact(a discover.Artifact) {
 	}
 	defer f.Close()
 
-	res, err := extract.SafeExtract(ex, f, extract.Source{Path: a.Path, CaseID: s.caseID, Profile: s.profile})
+	res, err := extract.SafeExtract(ex, f, extract.Source{
+		Path:           a.Path,
+		CaseID:         s.caseID,
+		Profile:        s.profile,
+		CaptureContent: s.captureContent,
+	})
 	if err != nil {
 		s.emit.Diag("error", fmt.Sprintf("parse %q: %v", a.Path, err))
 		s.failed++

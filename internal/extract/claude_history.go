@@ -64,18 +64,17 @@ func (e ClaudeExtractor) extractHistory(data []byte, sha string, src Source) (*R
 				res.diag(src.Path, line, "malformed history line")
 			} else if entry.Display != "" {
 				ev := model.Event{
-					SchemaVersion:  model.SchemaVersion,
-					CaseID:         src.CaseID,
-					EventID:        historyEventID("claude-hist", src.Path, line),
-					SourceAgent:    e.Agent(),
-					SourceType:     model.SourceArtifact,
-					Timestamp:      epochMillisRFC3339(entry.Timestamp),
-					ProjectPath:    entry.Project,
-					SessionID:      entry.SessionID,
-					Actor:          model.ActorUser,
-					EventType:      model.EventPromptUser,
-					ContentPreview: preview(entry.Display),
-					Confidence:     model.ConfidenceHigh,
+					SchemaVersion: model.SchemaVersion,
+					CaseID:        src.CaseID,
+					EventID:       historyEventID("claude-hist", src.Path, line),
+					SourceAgent:   e.Agent(),
+					SourceType:    model.SourceArtifact,
+					Timestamp:     epochMillisRFC3339(entry.Timestamp),
+					ProjectPath:   entry.Project,
+					SessionID:     entry.SessionID,
+					Actor:         model.ActorUser,
+					EventType:     model.EventPromptUser,
+					Confidence:    model.ConfidenceHigh,
 					Evidence: model.Evidence{
 						ArtifactType: "claude_history",
 						LocalPath:    src.Path,
@@ -83,6 +82,7 @@ func (e ClaudeExtractor) extractHistory(data []byte, sha string, src Source) (*R
 						SHA256:       sha,
 					},
 				}
+				setMessageContent(&ev, src, entry.Display)
 				res.Events = append(res.Events, ev)
 			}
 		}

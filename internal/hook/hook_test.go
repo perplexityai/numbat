@@ -16,6 +16,17 @@ func TestPreviewDoesNotCutToken(t *testing.T) {
 	}
 }
 
+func TestPromptRetainsBoundedAnalysisContent(t *testing.T) {
+	prompt := strings.Repeat("padding ", 40) + "needle-after-preview"
+	ev := Map(LifecyclePromptSubmit, AgentClaude, model.AgentClaudeCode, "e", map[string]any{"prompt": prompt})
+	if strings.Contains(ev.ContentPreview, "needle-after-preview") {
+		t.Fatal("test needle unexpectedly fits in preview")
+	}
+	if !strings.Contains(ev.ContentForAnalysis(), "needle-after-preview") {
+		t.Fatal("hook analysis content omitted text beyond preview")
+	}
+}
+
 // every hook-sourced event must be stamped source_type=hook and confidence
 // medium, with a thin hook evidence record that never fabricates a file/line —
 // the honesty constraint for live signals.

@@ -122,6 +122,13 @@ type Source struct {
 	// Profile selects the capture depth. The zero value ("") is treated as
 	// ProfileEvidence so existing callers keep evidence-only behavior.
 	Profile Profile
+	// CaptureContent retains bounded prompt, assistant, and reasoning bodies for
+	// local rules or indicator extraction. Default output still uses previews.
+	CaptureContent bool
+}
+
+func setMessageContent(ev *model.Event, src Source, raw string) {
+	ev.SetContent(raw, src.CaptureContent)
 }
 
 // fullProfile reports whether the source requests the full capture profile.

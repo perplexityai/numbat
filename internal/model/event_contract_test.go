@@ -52,7 +52,7 @@ func TestValidatePassesValidEvents(t *testing.T) {
 	code := 0
 	valid := []Event{
 		validEvent(Event{EventID: "a", EventType: EventSessionStart, Model: "claude", GitBranch: "main", CLIVersion: "1.0", SubAgent: "code-reviewer"}),
-		validEvent(Event{EventID: "b", EventType: EventPromptUser, Actor: ActorUser, ContentPreview: "hello"}),
+		validEvent(Event{EventID: "b", EventType: EventPromptUser, Actor: ActorUser, ContentPreview: "hello", Content: "hello", ContentBytes: 5}),
 		validEvent(Event{EventID: "c", EventType: EventMessageAssistant, Actor: ActorAssistant, ContentPreview: "hi"}),
 		validEvent(Event{EventID: "d", EventType: EventCommandExec, Command: "cat .env", ToolName: "Bash", ToolCallID: "t1"}),
 		validEvent(Event{EventID: "e", EventType: EventCommandResult, ToolCallID: "t1", ExitCode: &code}),
@@ -81,6 +81,20 @@ func TestValidateRejectsOutOfContractField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mcp_server") || !strings.Contains(err.Error(), string(EventFileWrite)) {
 		t.Errorf("error should name the field and type: %v", err)
+	}
+}
+
+func TestValidateRejectsContentOnActionEvent(t *testing.T) {
+	tests := []Event{
+		validEvent(Event{EventID: "emitted", EventType: EventFileRead, FilePath: "/x/file", Content: "file body", ContentBytes: 9}),
+		validEvent(Event{EventID: "analysis", EventType: EventFileRead, FilePath: "/x/file"}),
+	}
+	tests[1].SetContent("file body", true)
+	for _, ev := range tests {
+		err := ev.Validate()
+		if err == nil || !strings.Contains(err.Error(), "content") {
+			t.Fatalf("Validate(%s) error = %v, want out-of-contract content", ev.EventID, err)
+		}
 	}
 }
 
@@ -189,7 +203,7 @@ func TestValidateAcceptsToolResultToolName(t *testing.T) {
 // The additive fields are registered on the CEL event view so a rule can
 // reference them at load time without an unknown-field error.
 func TestAdditiveFieldsAreInCELFieldSet(t *testing.T) {
-	for _, f := range []string{"duration_ms", "approval_required", "approval_decision", "approval_reason", "diff_sha256", "diff_bytes", "sub_agent"} {
+	for _, f := range []string{"duration_ms", "approval_required", "approval_decision", "approval_reason", "diff_sha256", "diff_bytes", "sub_agent", "content", "content_bytes", "content_truncated", "content_preview_truncated"} {
 		if !IsCELField(f) {
 			t.Errorf("event field %q not registered for CEL", f)
 		}
@@ -236,6 +250,12 @@ func TestValidateRejectsMalformedSchemaFields(t *testing.T) {
 		{"bad diff sha", func(e *Event) { e.DiffSHA256 = "abc" }, "diff_sha256"},
 		{"uppercase diff sha", func(e *Event) { e.DiffSHA256 = strings.ToUpper(validSHA256) }, "diff_sha256"},
 		{"negative diff bytes", func(e *Event) { e.DiffBytes = -1 }, "diff_bytes"},
+		{"negative content bytes", func(e *Event) { e.ContentBytes = -1 }, "content_bytes"},
+		{"overlong content preview", func(e *Event) { e.ContentPreview = strings.Repeat("x", ContentPreviewMaxRunes+1) }, "content_preview"},
+		{"oversized content", func(e *Event) { e.Content = strings.Repeat("x", ContentMaxBytes+1) }, "content exceeds"},
+		{"content without byte count", func(e *Event) { e.Content = "hello" }, "content_bytes"},
+		{"byte count without content", func(e *Event) { e.ContentBytes = 5 }, "requires content"},
+		{"truncation without content", func(e *Event) { e.ContentTruncated = true }, "requires content"},
 		{"negative duration", func(e *Event) {
 			e.EventType = EventCommandResult
 			e.FilePath = ""

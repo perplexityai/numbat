@@ -255,7 +255,7 @@ func (e GeminiExtractor) emitGeminiSessionMessage(res *Result, src Source, sha, 
 		ev := e.sessionEvent(src, sha, message.ID, fmt.Sprintf("text:%d", i), state.line,
 			geminiSessionContentPointer(message.Content, state.pointer, i))
 		ev.Timestamp, ev.SessionID = message.Timestamp, sessionID
-		ev.ContentPreview = preview(strings.TrimSpace(part.Text))
+		setMessageContent(&ev, src, strings.TrimSpace(part.Text))
 		if role == geminiRoleUser {
 			ev.Actor, ev.EventType = model.ActorUser, model.EventPromptUser
 		} else {
@@ -275,7 +275,7 @@ func (e GeminiExtractor) emitGeminiSessionMessage(res *Result, src Source, sha, 
 				fmt.Sprintf("%s/thoughts/%d", state.pointer, i))
 			ev.Timestamp, ev.SessionID = thought.Timestamp, sessionID
 			ev.Actor, ev.EventType = model.ActorAssistant, model.EventMessageReasoning
-			ev.ContentPreview = preview(content)
+			setMessageContent(&ev, src, content)
 			e.stampGeminiSessionModel(&ev, src, message.Model)
 			res.Events = append(res.Events, ev)
 		}

@@ -127,7 +127,7 @@ func (e GeminiExtractor) extractLogs(res *Result, src Source, sha string, trimme
 		ev.EventType = model.EventPromptUser
 		ev.Actor = model.ActorUser
 		ev.Confidence = model.ConfidenceHigh
-		ev.ContentPreview = preview(clean)
+		setMessageContent(&ev, src, clean)
 		ev.Evidence.JSONPointer = fmt.Sprintf("/%d/message", i)
 		res.Events = append(res.Events, ev)
 	}
@@ -233,7 +233,7 @@ func (e GeminiExtractor) emitText(res *Result, src Source, sha, ptrRoot, role st
 	}
 	ev := e.base(src, sha, msgIdx, partIdx, 0)
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(clean)
+	setMessageContent(&ev, src, clean)
 	ev.Evidence.JSONPointer = geminiPartPointer(ptrRoot, msgIdx, partIdx, "text")
 	switch role {
 	case geminiRoleUser:

@@ -1,1 +1,1 @@
-{"schema_version":"0.2.0","event_id":"c1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"terraform destroy -auto-approve","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+{"schema_version":"0.3.0","event_id":"c1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"terraform destroy -auto-approve","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}

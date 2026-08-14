@@ -64,6 +64,47 @@ func TestEngineNoMatch(t *testing.T) {
 	}
 }
 
+func TestEngineContentSeesBeyondPreview(t *testing.T) {
+	eng := mustEngine(t, Rule{
+		ID:       "t.content",
+		Severity: model.SeverityHigh,
+		Expr:     `event.event_type == "prompt.user" && event.content.contains("needle-after-preview")`,
+	})
+	if !eng.UsesContent() {
+		t.Fatal("UsesContent = false, want true")
+	}
+	var ev model.Event
+	ev.EventType = model.EventPromptUser
+	ev.SetContent(strings.Repeat("padding ", 40)+"needle-after-preview", true)
+	if strings.Contains(ev.ContentPreview, "needle-after-preview") {
+		t.Fatal("test needle unexpectedly fits in preview")
+	}
+	matches, err := eng.Eval(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches = %+v, want one content match", matches)
+	}
+}
+
+func TestEngineContentCostLimit(t *testing.T) {
+	eng := mustEngine(t, Rule{
+		ID:       "t.content_cost",
+		Severity: model.SeverityHigh,
+		Expr:     `event.content.matches("` + strings.Repeat("x", 500) + `")`,
+	})
+	var ev model.Event
+	ev.SetContent(strings.Repeat("y", model.ContentMaxBytes), true)
+	matches, err := eng.Eval(ev)
+	if err == nil || !strings.Contains(err.Error(), "evaluation failed") {
+		t.Fatalf("Eval error = %v, want bounded content evaluation failure", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches = %+v, want none", matches)
+	}
+}
+
 func TestEngineShellCommandsUsesExecutableStatements(t *testing.T) {
 	eng := mustEngine(t, Rule{
 		ID:       "t.scheduler",

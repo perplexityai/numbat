@@ -394,7 +394,7 @@ func (e ClaudeExtractor) mapUser(res *Result, src Source, sha string, st *claude
 	ev.EventType = model.EventPromptUser
 	ev.Actor = model.ActorUser
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(text)
+	setMessageContent(&ev, src, text)
 	ev.Evidence.JSONPointer = "/message/content"
 	res.Events = append(res.Events, ev)
 }
@@ -416,7 +416,7 @@ func (e ClaudeExtractor) mapAssistant(res *Result, src Source, sha string, st *c
 			ev.EventType = model.EventMessageAssistant
 			ev.Actor = model.ActorAssistant
 			ev.Confidence = model.ConfidenceHigh
-			ev.ContentPreview = preview(s)
+			setMessageContent(&ev, src, s)
 			ev.Evidence.JSONPointer = fmt.Sprintf("/message/content/%d", i)
 			res.Events = append(res.Events, ev)
 		case "tool_use":
@@ -441,7 +441,7 @@ func (e ClaudeExtractor) mapAssistant(res *Result, src Source, sha string, st *c
 			ev.EventType = model.EventMessageReasoning
 			ev.Actor = model.ActorAssistant
 			ev.Confidence = model.ConfidenceHigh
-			ev.ContentPreview = preview(s)
+			setMessageContent(&ev, src, s)
 			ev.Evidence.JSONPointer = fmt.Sprintf("/message/content/%d", i)
 			res.Events = append(res.Events, ev)
 		default:

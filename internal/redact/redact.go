@@ -339,6 +339,7 @@ func maskCredentialValues(s string) string {
 	// them from the normalized view, then splice the raw string in one pass.
 	type span struct{ start, end int }
 	var spans []span
+	maskedThrough := 0
 	for p := 0; p < len(view); p++ {
 		if view[p].b != '=' {
 			continue
@@ -347,20 +348,21 @@ func maskCredentialValues(s string) string {
 		if !candidateIsTarget(view, start, p) {
 			continue
 		}
-		// The mask begins at the raw END of the '=' token: one past the WHOLE
-		// raw escape when the '=' only appears after percent-decoding (`%3d`,
-		// `%253d`, deep), or one past a literal '='. Using rawEnd (not raw+1)
-		// keeps the mask from starting inside the escape and leaking the secret
-		// tail.
-		maskStart := view[p].rawEnd
-		// payloadStart skips the FULL leading run of wrapper/terminator bytes
-		// (quote/bracket/'>') before locating the value run. Balanced quote
-		// wrappers are preserved for readability (PASSWORD="[redacted]" stays
-		// quoted), but unbalanced wrappers and bracket-like bytes are masked too
-		// so token=> cannot leak the lone ">" value.
-		payloadStart := skipLeadingWrappers(s, maskStart)
+		// Locate the raw payload through normalized assignment padding and leading
+		// wrappers. This covers literal and encoded whitespace without starting a
+		// mask inside a percent escape. Balanced quotes remain readable.
+		maskStart, payloadStart := credentialValueStarts(view, p)
+		// A later credential assignment may begin inside an earlier value span.
+		// Skip it only when its payload is already covered; a quoted payload can
+		// begin beyond the earlier span and therefore needs its own mask.
+		if view[p].raw < maskedThrough && payloadStart <= maskedThrough {
+			continue
+		}
 		rawValEnd := valueEnd(s, payloadStart)
 		spans = append(spans, span{maskSpanStart(s, maskStart, payloadStart, rawValEnd), rawValEnd})
+		if rawValEnd > maskedThrough {
+			maskedThrough = rawValEnd
+		}
 	}
 	if len(spans) == 0 {
 		return s
@@ -396,6 +398,32 @@ func maskSpanStart(s string, maskStart, payloadStart, rawValEnd int) int {
 		}
 	}
 	return maskStart
+}
+
+func credentialValueStarts(view []normChar, eq int) (maskStart, payloadStart int) {
+	i := eq + 1
+	for i < len(view) && view[i].b == wsMarker {
+		i++
+	}
+	if i == len(view) {
+		return view[len(view)-1].rawEnd, view[len(view)-1].rawEnd
+	}
+	maskStart = view[i].raw
+	for i < len(view) && isLeadingWrapper(view[i].b) {
+		i++
+	}
+	if i == len(view) {
+		return maskStart, view[len(view)-1].rawEnd
+	}
+	return maskStart, view[i].raw
+}
+
+func isLeadingWrapper(b byte) bool {
+	switch b {
+	case '"', '\'', '`', '<', '>', '\\':
+		return true
+	}
+	return false
 }
 
 // keyStartNorm returns the start of the maximal candidate before eq. wsMarker is
@@ -471,20 +499,6 @@ func candidateIsTarget(view []normChar, start, end int) bool {
 		}
 	}
 	return false
-}
-
-// skipLeadingWrappers advances over a full quote/bracket/escape run so masking
-// cannot stop before the actual value.
-func skipLeadingWrappers(s string, pos int) int {
-	for pos < len(s) {
-		switch s[pos] {
-		case '"', '\'', '`', '<', '>', '\\':
-			pos++
-		default:
-			return pos
-		}
-	}
-	return pos
 }
 
 // valueEnd returns the index one past the end of the credential value that

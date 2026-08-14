@@ -219,7 +219,7 @@ func (p *Pipeline) Process(ev model.Event, source string) error {
 	}
 	if p.sel.Indicators {
 		if p.indicators.Add(ev) {
-			p.emit.Diag("warn", "indicator catalog reached its safety limit; additional unique indicators are omitted")
+			p.emit.Diag("warn", "indicator analysis reached a safety limit; some candidates may be omitted")
 		}
 	}
 	return nil

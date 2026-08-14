@@ -22,17 +22,20 @@ const (
 // is left untouched and detection-only fields are unchanged.
 func TestEventRedactsObservedFields(t *testing.T) {
 	in := model.Event{
-		EventID:        "e1",
-		EventType:      model.EventCommandExec,
-		ToolName:       "Bash",
-		Command:        "aws configure set aws_access_key_id " + canaryAWS,
-		FilePath:       "/home/u/keys/" + canaryOpen,
-		URL:            canaryQuery,
-		ContentPreview: "leaked key " + canaryPEM + " tail",
-		MCPServer:      "server_api_key=" + canaryOpen,
-		MCPTool:        "tool_password=" + canaryAWS,
-		ProjectPath:    "/home/u/project",
-		ApprovalReason: "credential " + canaryOpen,
+		EventID:          "e1",
+		EventType:        model.EventCommandExec,
+		ToolName:         "Bash",
+		Command:          "aws configure set aws_access_key_id " + canaryAWS,
+		FilePath:         "/home/u/keys/" + canaryOpen,
+		URL:              canaryQuery,
+		ContentPreview:   "leaked key " + canaryPEM + " tail",
+		MCPServer:        "server_api_key=" + canaryOpen,
+		MCPTool:          "tool_password=" + canaryAWS,
+		ProjectPath:      "/home/u/project",
+		ApprovalReason:   "credential " + canaryOpen,
+		Content:          "full body " + canaryOpen,
+		ContentBytes:     64,
+		ContentTruncated: true,
 	}
 	got := Event(in)
 
@@ -49,6 +52,9 @@ func TestEventRedactsObservedFields(t *testing.T) {
 	}
 	if got.ProjectPath != "/home/u/project" {
 		t.Errorf("ProjectPath = %q, want readable path", got.ProjectPath)
+	}
+	if got.Content != "" || got.ContentBytes != 0 || got.ContentTruncated {
+		t.Errorf("default projection retained full content: %+v", got)
 	}
 	// Closed-vocabulary / non-secret fields are copied verbatim.
 	if got.ToolName != "Bash" || got.EventType != model.EventCommandExec || got.EventID != "e1" {

@@ -300,15 +300,15 @@ func TestExtractClaudeContentEdgeCases(t *testing.T) {
 	}
 }
 
-func TestExtractClaudeContentPreviewDropsOverlongToken(t *testing.T) {
+func TestExtractClaudeContentPreviewKeepsOverlongTokenPrefix(t *testing.T) {
 	long := strings.Repeat("a", previewMax+50)
 	res := extractFixture(t, `{"type":"user","uuid":"u","message":{"role":"user","content":"`+long+`"}}`)
 	if len(res.Events) != 1 {
 		t.Fatalf("got %d events, want 1", len(res.Events))
 	}
 	got := res.Events[0].ContentPreview
-	if got != "" {
-		t.Errorf("preview = %q, want empty rather than a partial token", got)
+	if got != long[:previewMax] {
+		t.Errorf("preview = %q, want rune-safe prefix", got)
 	}
 }
 

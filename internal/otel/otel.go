@@ -297,13 +297,13 @@ func classify(ev *model.Event, a *attrs, rec logRecord) bool {
 		ev.EventType = model.EventMessageAssistant
 		ev.Model = a.str(attrGenAIRespModel, attrGenAIReqModel)
 		ev.ModelProvider = a.str(attrGenAIProvider, attrGenAISystem)
-		ev.ContentPreview = preview(firstNonEmpty(a.str(attrGenAIOutput), bodyText(rec)))
+		ev.SetContent(firstNonEmpty(a.str(attrGenAIOutput), bodyText(rec)), true)
 		return true
 
 	case name == "gen_ai.user.message" || a.has(attrGenAIPrompt, attrGenAIInput):
 		ev.EventType = model.EventPromptUser
 		ev.Actor = model.ActorUser
-		ev.ContentPreview = preview(firstNonEmpty(a.str(attrGenAIPrompt, attrGenAIInput), bodyText(rec)))
+		ev.SetContent(firstNonEmpty(a.str(attrGenAIPrompt, attrGenAIInput), bodyText(rec)), true)
 		return true
 
 	case a.has(attrApprovalDecision, attrApprovalRequired, attrPermissionDecision):

@@ -91,9 +91,16 @@ func (a *IndicatorAccumulator) Add(ev model.Event) bool {
 		return false
 	}
 	wasTruncated := a.truncated
+	if ev.ContentTruncatedForAnalysis() {
+		a.truncated = true
+	}
 	a.mine(ev.URL, ev, false)
 	a.mine(ev.Command, ev, false)
-	a.mine(ev.ContentPreview, ev, true)
+	content := ev.ContentForAnalysis()
+	if content == "" {
+		content = ev.ContentPreview
+	}
+	a.mine(content, ev, true)
 	return !wasTruncated && a.truncated
 }
 

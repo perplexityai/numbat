@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat scan_summary record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "run_id",
+    "endpoint",
+    "status",
+    "artifacts_scanned",
+    "events_emitted",
+    "findings_emitted",
+    "indicators_emitted",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.3.0" },
+    "record_type": { "const": "scan_summary" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "endpoint": { "$ref": "#/$defs/endpoint" },
+    "status": { "type": "string", "enum": ["complete", "partial", "error"] },
+    "artifacts_scanned": { "type": "integer", "minimum": 0 },
+    "events_emitted": { "type": "integer", "minimum": 0 },
+    "findings_emitted": { "type": "integer", "minimum": 0 },
+    "indicators_emitted": { "type": "integer", "minimum": 0 },
+    "diagnostics": { "type": "integer", "minimum": 0 },
+    "http_batches_sent": { "type": "integer", "minimum": 0 },
+    "http_records_sent": { "type": "integer", "minimum": 0 },
+    "http_last_status": { "type": "integer", "minimum": 0 },
+    "http_failed": { "type": "boolean" }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "os", "arch", "username", "uid"],
+      "properties": {
+        "hostname": { "type": "string" },
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "uid": { "type": "string" },
+        "device_id": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

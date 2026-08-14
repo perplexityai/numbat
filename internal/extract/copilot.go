@@ -210,7 +210,7 @@ func (e CopilotExtractor) emitMessage(res *Result, src Source, sha string, line 
 	ev.EventType = etype
 	ev.Actor = actor
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(text)
+	setMessageContent(&ev, src, text)
 	ev.Evidence.JSONPointer = pointer
 	res.Events = append(res.Events, ev)
 	*block++

@@ -531,7 +531,7 @@ func (e OpenClawExtractor) emitText(res *Result, src Source, sha string, st *ope
 	}
 	ev := e.base(src, sha, st, line, block)
 	ev.Confidence = model.ConfidenceHigh
-	ev.ContentPreview = preview(clean)
+	setMessageContent(&ev, src, clean)
 	if stringContent || c.Synthesized {
 		ev.Evidence.JSONPointer = "/message/content"
 	} else {

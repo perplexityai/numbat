@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat event record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "run_id",
+    "endpoint",
+    "event_id",
+    "source_agent",
+    "source_type",
+    "event_type",
+    "confidence",
+    "evidence"
+  ],
+  "dependentRequired": {
+    "content": ["content_bytes"],
+    "content_bytes": ["content"],
+    "content_truncated": ["content", "content_bytes"]
+  },
+  "properties": {
+    "schema_version": { "const": "0.3.0" },
+    "record_type": { "const": "event" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "endpoint": { "$ref": "#/$defs/endpoint" },
+    "case_id": { "type": "string" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "source_agent": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "cowork",
+        "codex",
+        "gemini-cli",
+        "cursor",
+        "windsurf",
+        "copilot",
+        "vscode",
+        "opencode",
+        "openclaw",
+        "antigravity",
+        "factory",
+        "grok",
+        "devin-cli",
+        "hermes",
+        "kimi-code",
+        "pi",
+        "qwen-code",
+        "cline",
+        "amp",
+        "auggie",
+        "kiro",
+        "goose",
+        "kilo",
+        "openhands",
+        "crush",
+        "junie",
+        "unknown"
+      ]
+    },
+    "source_type": { "type": "string", "enum": ["artifact", "hook", "otel"] },
+    "timestamp": { "type": "string" },
+    "project_path": { "type": "string" },
+    "session_id": { "type": "string" },
+    "actor": { "type": "string", "enum": ["user", "assistant", "system", "tool"] },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "session.start",
+        "session.end",
+        "prompt.user",
+        "message.assistant",
+        "tool.call",
+        "tool.result",
+        "command.exec",
+        "command.result",
+        "file.read",
+        "file.write",
+        "file.delete",
+        "permission.requested",
+        "permission.approved",
+        "permission.denied",
+        "config.agent",
+        "config.mcp",
+        "network.indicator",
+        "message.reasoning"
+      ]
+    },
+    "tool_name": { "type": "string" },
+    "command": { "type": "string" },
+    "file_path": { "type": "string" },
+    "decision": { "type": "string", "enum": ["allowed", "denied", "asked"] },
+    "tool_call_id": { "type": "string" },
+    "diff_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "diff_bytes": { "type": "integer", "minimum": 0 },
+    "exit_code": { "type": "integer" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "approval_required": { "type": "boolean" },
+    "approval_decision": { "type": "string", "enum": ["allowed", "denied", "asked"] },
+    "approval_reason": { "type": "string" },
+    "mcp_server": { "type": "string" },
+    "mcp_tool": { "type": "string" },
+    "url": { "type": "string" },
+    "model": { "type": "string" },
+    "model_provider": { "type": "string" },
+    "git_branch": { "type": "string" },
+    "entrypoint": { "type": "string" },
+    "cli_version": { "type": "string" },
+    "sub_agent": { "type": "string" },
+    "content_preview": { "type": "string", "maxLength": 200 },
+    "content_preview_truncated": { "type": "boolean" },
+    "content": { "type": "string", "minLength": 1 },
+    "content_bytes": { "type": "integer", "minimum": 1 },
+    "content_truncated": { "type": "boolean" },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "evidence": { "$ref": "#/$defs/evidence" }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "os", "arch", "username", "uid"],
+      "properties": {
+        "hostname": { "type": "string" },
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "uid": { "type": "string" },
+        "device_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_type"],
+      "properties": {
+        "artifact_type": { "type": "string", "minLength": 1 },
+        "local_path": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "rowid": { "type": "integer", "minimum": 1 },
+        "json_pointer": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

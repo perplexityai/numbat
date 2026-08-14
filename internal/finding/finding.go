@@ -186,8 +186,13 @@ func observed(ev model.Event, f *model.Finding) bool {
 	if ev.URL != "" {
 		f.ObservedURL, changed = redactValue(ev.URL, changed)
 	}
+	f.ObservedContentPreviewTruncated = ev.ContentPreviewTruncated
 	if ev.ContentPreview != "" {
-		f.ObservedContentPreview, changed = redactValue(ev.ContentPreview, changed)
+		redacted := redact.String(ev.ContentPreview)
+		changed = changed || redacted != ev.ContentPreview
+		var outputTruncated bool
+		f.ObservedContentPreview, outputTruncated = model.NormalizeContentPreviewWithTruncation(redacted)
+		f.ObservedContentPreviewTruncated = f.ObservedContentPreviewTruncated || outputTruncated
 	}
 	return changed
 }

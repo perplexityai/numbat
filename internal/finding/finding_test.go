@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/rule"
@@ -178,6 +179,19 @@ func TestObservedRedactsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(f.ObservedURL, "[redacted]") {
 		t.Errorf("observed_url = %q, want masked token", f.ObservedURL)
+	}
+}
+
+func TestObservedContentPreviewCarriesTruncation(t *testing.T) {
+	m := sampleMatch()
+	m.Event.EventType = model.EventPromptUser
+	m.Event.FilePath = ""
+	m.Event.ContentPreview = strings.Repeat("Authorization: Bearer x ", 8)
+	f := FromMatch(m, Options{})
+	if utf8.RuneCountInString(f.ObservedContentPreview) > model.ContentPreviewMaxRunes ||
+		!f.ObservedContentPreviewTruncated || !f.Redacted {
+		t.Fatalf("finding preview = %d runes, truncated=%t redacted=%t",
+			utf8.RuneCountInString(f.ObservedContentPreview), f.ObservedContentPreviewTruncated, f.Redacted)
 	}
 }
 

@@ -74,6 +74,7 @@ Use the simplest input that preserves the distinction your rule needs:
 | --- | --- |
 | File, URL, MCP, approval, model, or other normalized fields | `event.<field>` |
 | A literal check over the original command text | `event.command` |
+| Prompt, assistant, or source-recorded reasoning text | `event.content` |
 | Parsed executable names, arguments, pipes, redirects, or wrappers | `shell_commands` |
 | Ordered activity across multiple events | `sequence` |
 
@@ -174,6 +175,13 @@ That gate avoids matching both the request and result for sources that emit
 both. A custom rule may use only `command.exec` when it cares strictly about
 requested actions, or only `command.result` when completion matters.
 
+For conversation events, `event.content` is the unredacted, whitespace-
+preserving text numbat received, bounded to 1 MiB per event. It is independent
+of the 200-rune `event.content_preview`; use `event.content_truncated` when a
+rule must reject incomplete input. `event.content_bytes` is the number of bytes
+numbat received before applying its bound. These fields do not cause file
+bodies, patches, or arbitrary tool output to be retained.
+
 ### Event fields
 
 The CEL `event` map always contains every key below. `exit_code`, `duration_ms`,
@@ -185,7 +193,9 @@ uses `0`, and `tags` uses an empty list.
 | `event.actor` | string | `event.approval_decision` | string |
 | `event.approval_reason` | string | `event.approval_required` | bool|null |
 | `event.cli_version` | string | `event.command` | string |
-| `event.confidence` | string | `event.content_preview` | string |
+| `event.confidence` | string | `event.content` | string |
+| `event.content_bytes` | int | `event.content_preview` | string |
+| `event.content_preview_truncated` | bool | `event.content_truncated` | bool |
 | `event.decision` | string | `event.diff_bytes` | int |
 | `event.diff_sha256` | string | `event.duration_ms` | int|null |
 | `event.entrypoint` | string | `event.event_type` | string |
@@ -199,7 +209,7 @@ uses `0`, and `tags` uses an empty list.
 | `event.tool_call_id` | string | `event.tool_name` | string |
 | `event.url` | string |  |  |
 
-The [event schema](schema/v0.2.0/event-record.schema.json) defines closed values
+The [event schema](schema/v0.3.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and
 `confidence`.
 
@@ -212,8 +222,9 @@ syntax such as `event.command`.
 ### Event-type fields
 
 Context fields such as source, timestamp, project, session, actor, model,
-branch, entrypoint, sub-agent, content preview, tags, and confidence are valid
-on every event type. Non-empty action fields follow this compatibility table:
+branch, entrypoint, sub-agent, preview, tags, and confidence are valid on every
+event type. Full `content` fields are valid only on conversation events.
+Non-empty action fields follow this compatibility table:
 
 | Event type | Allowed action fields |
 | --- | --- |
@@ -483,7 +494,7 @@ numbat rules test \
 
 Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
-See the [event schema](schema/v0.2.0/event-record.schema.json) for required
+See the [event schema](schema/v0.3.0/event-record.schema.json) for required
 fields.
 
 ## Sequence rules

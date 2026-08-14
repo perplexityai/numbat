@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // eventFields is the co-occurrence contract for discriminating fields. Envelope
@@ -13,10 +14,11 @@ var eventFields = map[EventType][]string{
 	EventSessionStart: {},
 	EventSessionEnd:   {},
 
-	// Conversation turns carry only content_preview (a context field, ungated).
-	EventPromptUser:       {},
-	EventMessageAssistant: {},
-	EventMessageReasoning: {},
+	// Conversation turns may carry a bounded message body in addition to the
+	// preview shared by every event.
+	EventPromptUser:       {"content", "content_bytes", "content_truncated"},
+	EventMessageAssistant: {"content", "content_bytes", "content_truncated"},
+	EventMessageReasoning: {"content", "content_bytes", "content_truncated"},
 
 	// Tool identity, correlation, and structured target fields.
 	EventToolCall: {"tool_name", "tool_call_id", "mcp_server", "mcp_tool", "url", "file_path", "decision"},
@@ -66,6 +68,9 @@ var valueBearingFields = []struct {
 	{"approval_required", func(e Event) bool { return e.ApprovalRequired != nil }},
 	{"approval_decision", func(e Event) bool { return e.ApprovalDecision != "" }},
 	{"approval_reason", func(e Event) bool { return e.ApprovalReason != "" }},
+	{"content", func(e Event) bool { return e.Content != "" || e.analysisContent != "" }},
+	{"content_bytes", func(e Event) bool { return e.ContentBytes != 0 || e.analysisContentBytes != 0 }},
+	{"content_truncated", func(e Event) bool { return e.ContentTruncated || e.analysisContentTruncated }},
 }
 
 // Validate enforces identity, closed vocabularies, hashes, counters, and field
@@ -136,6 +141,33 @@ func (e Event) Validate() error {
 	}
 	if e.DurationMs != nil && *e.DurationMs < 0 {
 		return fmt.Errorf("event %s: invalid duration_ms %d", e.EventID, *e.DurationMs)
+	}
+	if e.ContentBytes < 0 {
+		return fmt.Errorf("event %s: invalid content_bytes %d", e.EventID, e.ContentBytes)
+	}
+	if utf8.RuneCountInString(e.ContentPreview) > ContentPreviewMaxRunes {
+		return fmt.Errorf("event %s: content_preview exceeds %d runes", e.EventID, ContentPreviewMaxRunes)
+	}
+	if len(e.Content) > ContentMaxBytes {
+		return fmt.Errorf("event %s: content exceeds %d bytes", e.EventID, ContentMaxBytes)
+	}
+	if len(e.analysisContent) > ContentMaxBytes {
+		return fmt.Errorf("event %s: analysis content exceeds %d bytes", e.EventID, ContentMaxBytes)
+	}
+	if e.Content != "" && e.ContentBytes == 0 {
+		return fmt.Errorf("event %s: content requires content_bytes", e.EventID)
+	}
+	if e.Content == "" && (e.ContentBytes != 0 || e.ContentTruncated) {
+		return fmt.Errorf("event %s: content metadata requires content", e.EventID)
+	}
+	if e.analysisContent != "" && e.analysisContentBytes == 0 {
+		return fmt.Errorf("event %s: analysis content requires content_bytes", e.EventID)
+	}
+	if e.analysisContent == "" && (e.analysisContentBytes != 0 || e.analysisContentTruncated) {
+		return fmt.Errorf("event %s: analysis content metadata requires content", e.EventID)
+	}
+	if e.Content != "" && e.analysisContent != "" {
+		return fmt.Errorf("event %s: content has both emitted and analysis values", e.EventID)
 	}
 	allow := make(map[string]struct{}, len(allowed))
 	for _, f := range allowed {

@@ -147,13 +147,13 @@ func classifyAgentAlias(ev *model.Event, a *attrs, rec logRecord, name string) b
 	case claudeUserPrompt:
 		ev.EventType = model.EventPromptUser
 		ev.Actor = model.ActorUser
-		ev.ContentPreview = preview(a.str(attrPrompt))
+		ev.SetContent(a.str(attrPrompt), true)
 		return true
 
 	case claudeAssistantResponse:
 		ev.EventType = model.EventMessageAssistant
 		ev.Model = a.str(attrModel)
-		ev.ContentPreview = preview(a.str(attrClaudeResponse))
+		ev.SetContent(a.str(attrClaudeResponse), true)
 		return true
 
 	case claudeToolResult:
@@ -179,10 +179,9 @@ func classifyAgentAlias(ev *model.Event, a *attrs, rec logRecord, name string) b
 	case codexUserPrompt, geminiUserPrompt, qwenUserPrompt:
 		ev.EventType = model.EventPromptUser
 		ev.Actor = model.ActorUser
-		// prompt is "[REDACTED]" unless the agent was configured to log it; either
-		// way content_preview is routed through secret redaction downstream at
-		// finding emission (preview() only normalizes whitespace and truncates).
-		ev.ContentPreview = preview(firstNonEmpty(a.str(attrPrompt, attrGenAIPrompt), bodyText(rec)))
+		// prompt is "[REDACTED]" unless the agent was configured to log it.
+		// Numbat still applies its output redaction to mapped message content.
+		ev.SetContent(firstNonEmpty(a.str(attrPrompt, attrGenAIPrompt), bodyText(rec)), true)
 		return true
 
 	case codexToolDecision:
@@ -215,7 +214,7 @@ func classifyAgentAlias(ev *model.Event, a *attrs, rec logRecord, name string) b
 		ev.EventType = model.EventMessageAssistant
 		ev.Model = a.str(attrModel, attrGenAIRespModel, attrGenAIReqModel)
 		ev.ModelProvider = a.str(attrGenAIProvider, attrGenAISystem)
-		ev.ContentPreview = preview(a.str(attrResponseText))
+		ev.SetContent(a.str(attrResponseText), true)
 		return true
 
 	case geminiConversationFinished, qwenConversationFinished:
