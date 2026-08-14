@@ -883,7 +883,7 @@ shall terminate as of the date such litigation is filed.
 ==============================================================================
 golang.org/x/sys v0.47.0 (LICENSE)
 golang.org/x/text v0.39.0 (LICENSE)
-Go standard library release toolchain: Go 1.26.5 (LICENSE)
+Go standard library release toolchain: Go 1.26.6 (LICENSE)
 ==============================================================================
 
 Copyright 2009 The Go Authors.
