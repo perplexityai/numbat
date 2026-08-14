@@ -40,7 +40,7 @@ synchronous pre-action hooks; see the [enforcement guide](docs/enforcement.md).
 
 [Download a release](https://github.com/perplexityai/numbat/releases) for macOS, Linux,
 or Windows on amd64 or arm64. Each release includes SHA-256 checksums. You can
-also install with Go 1.26.5 or newer:
+also install with Go 1.26.6 or newer:
 
 ```
 go install github.com/perplexityai/numbat/cmd/numbat@latest

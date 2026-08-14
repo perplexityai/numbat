@@ -1,6 +1,6 @@
 module github.com/perplexityai/numbat
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/google/cel-go v0.30.0
