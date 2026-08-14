@@ -98,17 +98,6 @@ func SafeExtract(ex Extractor, r io.Reader, src Source) (res *Result, err error)
 	return res, err
 }
 
-// Profile selects how much an extractor emits. The default (evidence) yields
-// only forensic evidence events; full additionally yields model reasoning
-// (message.reasoning) and session-context fields (model/provider) that are
-// monitoring join keys, not evidence.
-type Profile string
-
-const (
-	ProfileEvidence Profile = "evidence"
-	ProfileFull     Profile = "full"
-)
-
 // Source carries the provenance of one artifact. Keeping it separate from the
 // byte reader lets callers parse embedded fixtures, network sources, or real
 // files through the same Extractor without the parser knowing the difference.
@@ -119,9 +108,9 @@ type Source struct {
 	// CaseID, when set, is stamped on every emitted event so findings from one
 	// investigation share an identifier.
 	CaseID string
-	// Profile selects the capture depth. The zero value ("") is treated as
-	// ProfileEvidence so existing callers keep evidence-only behavior.
-	Profile Profile
+	// IncludeReasoning emits source-recorded reasoning summaries or thinking
+	// blocks. It never infers hidden chain-of-thought.
+	IncludeReasoning bool
 	// CaptureContent retains bounded prompt, assistant, and reasoning bodies for
 	// local rules or indicator extraction. Default output still uses previews.
 	CaptureContent bool
@@ -130,9 +119,6 @@ type Source struct {
 func setMessageContent(ev *model.Event, src Source, raw string) {
 	ev.SetContent(raw, src.CaptureContent)
 }
-
-// fullProfile reports whether the source requests the full capture profile.
-func (s Source) fullProfile() bool { return s.Profile == ProfileFull }
 
 // Result is the output of parsing one artifact.
 type Result struct {

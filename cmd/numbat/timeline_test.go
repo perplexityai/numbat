@@ -125,6 +125,54 @@ func TestTimelineJSONShapeAndDeterminism(t *testing.T) {
 	}
 }
 
+func TestTimelineFullContentRequiresJSONAndIsExplicit(t *testing.T) {
+	p := writeTranscript(t, timelineTranscript)
+	_, errb, code := runCLI("timeline", "--path", p, "--content", "full")
+	if code != 2 || !strings.Contains(errb, "--content full requires --format json") {
+		t.Fatalf("text mode: exit=%d stderr=%q", code, errb)
+	}
+
+	out, errb, code := runCLI("timeline", "--path", p, "--format", "json", "--content", "full")
+	if code != 0 {
+		t.Fatalf("json mode: exit=%d stderr=%q", code, errb)
+	}
+	var report timelineReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range report.Sessions {
+		for _, ev := range session.Events {
+			if ev.EventType == model.EventPromptUser {
+				if ev.Content != "read the env then build" || ev.ContentBytes != len(ev.Content) {
+					t.Fatalf("prompt content = %q bytes=%d", ev.Content, ev.ContentBytes)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("prompt event not found")
+}
+
+func TestTimelineDeprecatedFullProfileIncludesReasoning(t *testing.T) {
+	p := writeTranscript(t, emitTranscript)
+	out, errb, code := runCLI("timeline", "--path", p, "--format", "json", "--profile", "full")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, errb)
+	}
+	var report timelineReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range report.Sessions {
+		for _, ev := range session.Events {
+			if ev.EventType == model.EventMessageReasoning {
+				return
+			}
+		}
+	}
+	t.Fatal("deprecated --profile full did not include reasoning")
+}
+
 func TestTimelineOpenCodeKeepsSessionAndToolTimes(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, ".local", "share", "opencode", "storage", "part", "m1", "p1.json")

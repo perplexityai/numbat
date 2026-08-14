@@ -99,9 +99,7 @@ func (e OpenCodeExtractor) extractMessage(res *Result, src Source, sha string, m
 	ev.Confidence = model.ConfidenceHigh
 	ev.Evidence.JSONPointer = "/role"
 	ev.ProjectPath = message.Path.CWD
-	if src.fullProfile() {
-		ev.Model, ev.ModelProvider = message.modelIdentity()
-	}
+	ev.Model, ev.ModelProvider = message.modelIdentity()
 	switch message.Role {
 	case openCodeRoleUser:
 		ev.EventType = model.EventPromptUser

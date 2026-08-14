@@ -161,6 +161,8 @@ type StatsReporter interface {
 type Emitter struct {
 	runID    string
 	endpoint Endpoint
+	// fullContent is fixed by a constructor option before concurrent use.
+	fullContent bool
 
 	mu                sync.Mutex
 	sink              Sink
@@ -171,6 +173,15 @@ type Emitter struct {
 	indicatorsEmitted int
 	diagnostics       int
 	recordErrors      int
+}
+
+// EmitterOption configures an Emitter before it is used.
+type EmitterOption func(*Emitter)
+
+// WithFullContent includes redacted, bounded conversation content in event
+// records. The default projection emits only content_preview.
+func WithFullContent() EmitterOption {
+	return func(e *Emitter) { e.fullContent = true }
 }
 
 // Stats is a point-in-time snapshot of emitter counters.
@@ -186,36 +197,44 @@ type Stats struct {
 // diags. runID is stamped on every emitted line for correlation. If records is
 // already a Sink it is used directly; otherwise it is wrapped in a no-op-close
 // adapter so a bare io.Writer (stdout, a test buffer) keeps working unchanged.
-func New(records, diags io.Writer, runID string) *Emitter {
+func New(records, diags io.Writer, runID string, opts ...EmitterOption) *Emitter {
 	sink, ok := records.(Sink)
 	if !ok {
 		sink = nopCloseSink{records}
 	}
-	return NewWithSink(sink, diags, runID)
+	return NewWithSink(sink, diags, runID, opts...)
 }
 
 // NewWithSink constructs an Emitter writing records to an explicit Sink. The
 // sink is closed by Emitter.Close (which must be called last, after the
 // terminal scan_summary, so a batching sink flushes its final batch).
-func NewWithSink(sink Sink, diags io.Writer, runID string) *Emitter {
-	return &Emitter{
+func NewWithSink(sink Sink, diags io.Writer, runID string, opts ...EmitterOption) *Emitter {
+	e := &Emitter{
 		runID:    runID,
 		endpoint: defaultEndpoint(),
 		sink:     sink,
 		diags:    json.NewEncoder(diags),
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // NewWithSinkAndDiagnostics constructs an Emitter that writes diagnostics as
 // records on sink. It is for runtimes where stderr belongs to the invoking host
 // rather than the operator.
-func NewWithSinkAndDiagnostics(sink Sink, runID string) *Emitter {
-	return &Emitter{
+func NewWithSinkAndDiagnostics(sink Sink, runID string, opts ...EmitterOption) *Emitter {
+	e := &Emitter{
 		runID:             runID,
 		endpoint:          defaultEndpoint(),
 		sink:              sink,
 		diagnosticsInSink: true,
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // nopCloseSink adapts a bare io.Writer to a Sink whose Close is a no-op, so the
@@ -276,7 +295,13 @@ func (e *Emitter) EmitFinding(f model.Finding) error {
 func (e *Emitter) EmitEvent(ev model.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := e.emitLocked(RecordEvent, redact.Event(ev)); err != nil {
+	var projected model.Event
+	if e.fullContent {
+		projected = redact.EventWithContent(ev)
+	} else {
+		projected = redact.Event(ev)
+	}
+	if err := e.emitLocked(RecordEvent, projected); err != nil {
 		e.recordErrors++
 		return err
 	}

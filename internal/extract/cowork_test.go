@@ -15,9 +15,9 @@ const coworkFixture = `{"type":"user","uuid":"cu1","sessionId":"cw-1","timestamp
 {"type":"assistant","uuid":"ca1","sessionId":"cw-1","timestamp":"2026-06-03T09:00:01Z","cwd":"/home/dev/proj","message":{"role":"assistant","content":[{"type":"thinking","thinking":"I should run go test."},{"type":"tool_use","id":"ct1","name":"Bash","input":{"command":"go test ./..."}}]}}
 {"type":"user","uuid":"cu2","sessionId":"cw-1","timestamp":"2026-06-03T09:00:05Z","cwd":"/home/dev/proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"ct1","content":"ok"}]},"toolUseResult":{"stdout":"ok","exit_code":0}}`
 
-func extractCowork(t *testing.T, body string, profile Profile) *Result {
+func extractCowork(t *testing.T, body string, includeReasoning bool) *Result {
 	t.Helper()
-	res, err := CoworkExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/audit.jsonl", CaseID: "case-cw", Profile: profile})
+	res, err := CoworkExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/audit.jsonl", CaseID: "case-cw", IncludeReasoning: includeReasoning})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -28,7 +28,7 @@ func extractCowork(t *testing.T, body string, profile Profile) *Result {
 // parser, but every event must carry the cowork source identity and the
 // cowork artifact type — never claude-code.
 func TestExtractCoworkMapsShapesWithCoworkIdentity(t *testing.T) {
-	res := extractCowork(t, coworkFixture, ProfileFull)
+	res := extractCowork(t, coworkFixture, true)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}
@@ -84,13 +84,12 @@ func TestExtractCoworkMapsShapesWithCoworkIdentity(t *testing.T) {
 	assertUniqueEventIDs(t, res.Events)
 }
 
-// The default (evidence) profile must withhold model reasoning, exactly as the
-// Claude core does, so the thinking block yields no event.
-func TestExtractCoworkEvidenceProfileDropsReasoning(t *testing.T) {
-	res := extractCowork(t, coworkFixture, ProfileEvidence)
+// Reasoning is omitted by default, exactly as in the Claude core.
+func TestExtractCoworkDefaultDropsReasoning(t *testing.T) {
+	res := extractCowork(t, coworkFixture, false)
 	for _, ev := range res.Events {
 		if ev.EventType == model.EventMessageReasoning {
-			t.Fatalf("reasoning event leaked under evidence profile: %+v", ev)
+			t.Fatalf("reasoning event leaked by default: %+v", ev)
 		}
 	}
 }

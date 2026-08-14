@@ -231,7 +231,7 @@ func (e PiExtractor) mapAssistantBlock(res *Result, src Source, sha string, st *
 		ev.Evidence.JSONPointer = pointer
 		res.Events = append(res.Events, ev)
 	case piBlockThinking:
-		if !src.fullProfile() || strings.TrimSpace(block.Thinking) == "" {
+		if !src.IncludeReasoning || strings.TrimSpace(block.Thinking) == "" {
 			return
 		}
 		ev := e.base(src, sha, st, line, ts, idx)

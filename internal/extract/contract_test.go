@@ -11,17 +11,17 @@ import (
 // asserts each emitted event passes model.Event.Validate(). This is the proof
 // that the event_type→field co-occurrence contract (model.eventFields) matches
 // what the parsers actually emit: if a parser sets a value-bearing field the
-// contract does not allow for that event_type, Validate fails here. The full
-// profile is used so reasoning and session-context fields are exercised too.
+// contract does not allow for that event_type, Validate fails here. Reasoning
+// is included so its event shape is exercised too.
 //
 // If this fails, the allow-list is wrong — fix model.eventFields to match real
 // parser output; never loosen Validate to a no-op.
 func TestEmittedEventsSatisfyContract(t *testing.T) {
-	pi, err := (PiExtractor{}).Extract(strings.NewReader(piSessionFixture), Source{Profile: ProfileFull})
+	pi, err := (PiExtractor{}).Extract(strings.NewReader(piSessionFixture), Source{IncludeReasoning: true})
 	if err != nil {
 		t.Fatalf("extract Pi fixture: %v", err)
 	}
-	kimi, err := (KimiCodeExtractor{}).Extract(strings.NewReader(kimiWireFixture), Source{Profile: ProfileFull})
+	kimi, err := (KimiCodeExtractor{}).Extract(strings.NewReader(kimiWireFixture), Source{IncludeReasoning: true})
 	if err != nil {
 		t.Fatalf("extract Kimi fixture: %v", err)
 	}
@@ -31,15 +31,15 @@ func TestEmittedEventsSatisfyContract(t *testing.T) {
 		agent  string
 		events []model.Event
 	}{
-		{"claude", model.AgentClaudeCode, extractFixtureProfile(t, claudeFixture, ProfileFull).Events},
-		{"cowork", model.AgentCowork, extractCowork(t, coworkFixture, ProfileFull).Events},
-		{"codex", model.AgentCodex, extractCodexProfile(t, codexFixture, ProfileFull).Events},
+		{"claude", model.AgentClaudeCode, extractFixtureWithReasoning(t, claudeFixture, true).Events},
+		{"cowork", model.AgentCowork, extractCowork(t, coworkFixture, true).Events},
+		{"codex", model.AgentCodex, extractCodexWithReasoning(t, codexFixture, true).Events},
 		{"gemini", model.AgentGeminiCLI, extractGemini(t, geminiArrayFixture).Events},
-		{"gemini-session", model.AgentGeminiCLI, extractGeminiSession(t, geminiSessionFixture, ProfileFull).Events},
-		{"cursor", model.AgentCursor, extractCursor(t, cursorFixture, ProfileFull).Events},
-		{"windsurf", model.AgentWindsurf, extractWindsurf(t, windsurfFixture, ProfileFull).Events},
-		{"copilot", model.AgentCopilot, extractCopilot(t, copilotFixture, ProfileFull).Events},
-		{"opencode", model.AgentOpenCode, extractOpenCodeProfile(t, `{"type":"tool","callID":"c1","tool":"bash","state":{"status":"error","input":{"command":"go test ./..."},"error":"tests failed"}}`, ProfileFull).Events},
+		{"gemini-session", model.AgentGeminiCLI, extractGeminiSession(t, geminiSessionFixture, true).Events},
+		{"cursor", model.AgentCursor, extractCursor(t, cursorFixture).Events},
+		{"windsurf", model.AgentWindsurf, extractWindsurf(t, windsurfFixture).Events},
+		{"copilot", model.AgentCopilot, extractCopilot(t, copilotFixture).Events},
+		{"opencode", model.AgentOpenCode, extractOpenCodeWithReasoning(t, `{"type":"tool","callID":"c1","tool":"bash","state":{"status":"error","input":{"command":"go test ./..."},"error":"tests failed"}}`, true).Events},
 		{"openclaw", model.AgentOpenClaw, extractOpenClaw(t, withHeader(`{"type":"message","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./..."}}]}}`)).Events},
 		{"pi", model.AgentPi, pi.Events},
 		{"kimi-code", model.AgentKimiCode, kimi.Events},

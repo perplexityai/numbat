@@ -87,6 +87,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	caseID := fs.String("case-id", "", "case identifier stamped on every emitted event and derived finding")
 	var emitValues multiFlag
 	fs.Var(&emitValues, "emit", emitFlagHelp()+"; enforce mode requires findings")
+	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
@@ -107,7 +108,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -135,6 +136,15 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	}
 	sel, err := parseEmit(emitValues)
 	if err != nil {
+		fmt.Fprintf(stderr, "hook: %v\n", err)
+		return 0
+	}
+	content, err := parseContentMode(*contentFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "hook: %v\n", err)
+		return 0
+	}
+	if err := validateContentSelection(content, sel); err != nil {
 		fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 0
 	}
@@ -183,6 +193,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	deny, reason, denyAgent, err := handleHook(event, lc, *agentFlag, sourceAgent, stdin, stderr, hookOptions{
 		caseID:     *caseID,
 		sel:        sel,
+		content:    content,
 		stateDB:    *stateDB,
 		modes:      outputValues,
 		file:       *outputFile,
@@ -235,6 +246,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 type hookOptions struct {
 	caseID     string
 	sel        emitSelection
+	content    contentMode
 	stateDB    string
 	modes      []string
 	file       string
@@ -300,9 +312,9 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	run := runID()
 	var em *output.Emitter
 	if opts.enforce {
-		em = output.NewWithSinkAndDiagnostics(sink, run)
+		em = output.NewWithSinkAndDiagnostics(sink, run, contentEmitterOptions(opts.content)...)
 	} else {
-		em = output.NewWithSink(sink, stderr, run)
+		em = output.NewWithSink(sink, stderr, run, contentEmitterOptions(opts.content)...)
 	}
 	closeWithDiagnostic := func(err error) error {
 		em.Diag("error", err.Error())

@@ -16,9 +16,9 @@ import (
 const windsurfFixture = `{"type":"user","id":"wu1","trajectoryId":"traj-1","timestamp":"2026-06-03T10:00:00Z","cwd":"/home/dev/proj","content":"why is the auth middleware failing?"}
 {"type":"assistant","id":"wa1","trajectoryId":"traj-1","timestamp":"2026-06-03T10:00:01Z","cwd":"/home/dev/proj","content":[{"type":"text","text":"Let me run the tests."},{"type":"tool_call","name":"run_command","callId":"t1","input":{"command":"go test ./..."}},{"type":"tool_result","callId":"t1","exitCode":1,"isError":true}]}`
 
-func extractWindsurf(t *testing.T, body string, profile Profile) *Result {
+func extractWindsurf(t *testing.T, body string) *Result {
 	t.Helper()
-	res, err := WindsurfExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/windsurf.jsonl", CaseID: "case-ws", Profile: profile})
+	res, err := WindsurfExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/windsurf.jsonl", CaseID: "case-ws"})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -30,7 +30,7 @@ func extractWindsurf(t *testing.T, body string, profile Profile) *Result {
 // code — every event stamped with the windsurf source identity and the windsurf
 // artifact type. This is the headline correlation+exit-code proof.
 func TestExtractWindsurfMapsShapesWithWindsurfIdentity(t *testing.T) {
-	res := extractWindsurf(t, windsurfFixture, ProfileEvidence)
+	res := extractWindsurf(t, windsurfFixture)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}
@@ -107,7 +107,7 @@ func TestExtractWindsurfMapsShapesWithWindsurfIdentity(t *testing.T) {
 func TestExtractWindsurfNonCommandResultAndError(t *testing.T) {
 	const body = `{"type":"assistant","id":"a","trajectoryId":"c","content":[{"type":"tool_call","name":"read_code","callId":"r1","input":{"file_path":"/etc/hosts"}}]}
 {"type":"tool","id":"b","trajectoryId":"c","toolResult":{"callId":"r1","isError":true}}`
-	res := extractWindsurf(t, body, ProfileEvidence)
+	res := extractWindsurf(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 2 {
 		t.Fatalf("got %d activity events, want 2:\n%s", len(acts), dumpEvents(res.Events))
@@ -127,7 +127,7 @@ func TestExtractWindsurfNonCommandResultAndError(t *testing.T) {
 // and the network tag, mirroring the Cursor/Claude classifiers.
 func TestExtractWindsurfReadURLNetworkIndicator(t *testing.T) {
 	const body = `{"type":"assistant","id":"a","trajectoryId":"c","content":[{"type":"tool_call","name":"read_url_content","callId":"w1","input":{"url":"https://example.com/x"}}]}`
-	res := extractWindsurf(t, body, ProfileEvidence)
+	res := extractWindsurf(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 1 {
 		t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(res.Events))
@@ -147,7 +147,7 @@ func TestExtractWindsurfReadURLNetworkIndicator(t *testing.T) {
 func TestExtractWindsurfReadURLRejectsNonHTTPScheme(t *testing.T) {
 	const bad = "file:///etc/passwd"
 	const body = `{"type":"assistant","id":"a","trajectoryId":"c","content":[{"type":"tool_call","name":"read_url_content","callId":"w1","input":{"url":"file:///etc/passwd"}}]}`
-	acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+	acts := activityEvents(extractWindsurf(t, body).Events)
 	if len(acts) != 1 {
 		t.Fatalf("got %d activity events, want 1", len(acts))
 	}
@@ -172,7 +172,7 @@ func TestExtractWindsurfToleratesMalformedLine(t *testing.T) {
 	const body = `{"type":"user","id":"u","trajectoryId":"c","content":"hello"}
 {not json}
 {"type":"assistant","id":"a","trajectoryId":"c","content":"hi"}`
-	res := extractWindsurf(t, body, ProfileEvidence)
+	res := extractWindsurf(t, body)
 	if len(res.Diagnostics) != 1 {
 		t.Fatalf("got %d diagnostics, want 1: %+v", len(res.Diagnostics), res.Diagnostics)
 	}
@@ -190,7 +190,7 @@ func TestExtractWindsurfToleratesMalformedLine(t *testing.T) {
 func TestExtractWindsurfCrossRecordCommandCorrelation(t *testing.T) {
 	const body = `{"type":"assistant","id":"a","trajectoryId":"c","content":[{"type":"tool_call","name":"run_command","callId":"s1","input":{"command":"ls -la"}}]}
 {"type":"tool","id":"t","trajectoryId":"c","toolResult":{"callId":"s1","exitCode":0}}`
-	res := extractWindsurf(t, body, ProfileEvidence)
+	res := extractWindsurf(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 2 {
 		t.Fatalf("got %d activity events, want 2:\n%s", len(acts), dumpEvents(res.Events))
@@ -229,7 +229,7 @@ func TestExtractWindsurfSameRecordTopLevelCorrelationOrdering(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res := extractWindsurf(t, tc.body, ProfileEvidence)
+			res := extractWindsurf(t, tc.body)
 			acts := activityEvents(res.Events)
 			if len(acts) != 2 {
 				t.Fatalf("got %d activity events, want 2:\n%s", len(acts), dumpEvents(res.Events))
@@ -263,7 +263,7 @@ func TestExtractWindsurfSameRecordTopLevelCorrelationOrdering(t *testing.T) {
 func TestExtractWindsurfJSONPointersAreSourceFaithful(t *testing.T) {
 	t.Run("plain_string_content", func(t *testing.T) {
 		const body = `{"type":"user","id":"u","trajectoryId":"c","content":"hello"}`
-		acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractWindsurf(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/content" {
 			t.Fatalf("plain-string content pointer = %q, want /content:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -271,7 +271,7 @@ func TestExtractWindsurfJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("flat_text_body", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","trajectoryId":"c","text":"just text"}`
-		acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractWindsurf(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/text" {
 			t.Fatalf("flat text pointer = %q, want /text:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -279,7 +279,7 @@ func TestExtractWindsurfJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_toolCall", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","trajectoryId":"c","toolCall":{"name":"read_code","callId":"r1","input":{"file_path":"/x"}}}`
-		acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractWindsurf(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/toolCall" {
 			t.Fatalf("top-level toolCall pointer = %q, want /toolCall:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -287,7 +287,7 @@ func TestExtractWindsurfJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_toolCalls_list", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","trajectoryId":"c","toolCalls":[{"name":"read_code","callId":"r1","input":{"file_path":"/x"}}]}`
-		acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractWindsurf(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/toolCalls/0" {
 			t.Fatalf("top-level toolCalls[0] pointer = %q, want /toolCalls/0:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -295,7 +295,7 @@ func TestExtractWindsurfJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_toolResult", func(t *testing.T) {
 		const body = `{"type":"tool","id":"t","trajectoryId":"c","toolResult":{"callId":"r1","isError":true}}`
-		acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractWindsurf(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/toolResult" {
 			t.Fatalf("top-level toolResult pointer = %q, want /toolResult:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -303,7 +303,7 @@ func TestExtractWindsurfJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_output", func(t *testing.T) {
 		const body = `{"type":"tool","id":"t","trajectoryId":"c","output":{"callId":"r1","status":"ok"}}`
-		acts := activityEvents(extractWindsurf(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractWindsurf(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/output" {
 			t.Fatalf("top-level output pointer = %q, want /output:\n%s", ptrOf(acts), dumpEvents(acts))
 		}

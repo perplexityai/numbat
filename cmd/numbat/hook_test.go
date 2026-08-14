@@ -192,6 +192,51 @@ func TestHookDoesNotAcceptProfileFlag(t *testing.T) {
 	}
 }
 
+func TestHookFullContentWritesRedactedEvent(t *testing.T) {
+	outFile := filepath.Join(t.TempDir(), "records.ndjson")
+	secret := "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	prompt := strings.Repeat("ordinary context ", 20) + secret
+	payload, err := json.Marshal(map[string]any{
+		"hookEventName": "UserPromptSubmitted",
+		"prompt":        prompt,
+		"cwd":           "/proj",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runCLIStdin(string(payload), "hook", "UserPromptSubmitted",
+		"--agent", "copilot", "--emit", "events", "--content", "full",
+		"--output", "file", "--output-file", outFile)
+	if code != 0 || strings.TrimSpace(stdout) != "{}" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ev model.Event
+	if err := json.Unmarshal(bytes.TrimSpace(data), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.EventType != model.EventPromptUser || ev.Content == "" || strings.Contains(ev.Content, secret) || ev.ContentBytes != len(prompt) {
+		t.Fatalf("hook event content = %+v", ev)
+	}
+}
+
+func TestHookInstallWiresFullContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	_, errb, code := runCLI("hook", "install", "--agent", "claude", "--settings", path,
+		"--emit", "events", "--content", "full")
+	if code != 0 {
+		t.Fatalf("install exit = %d, stderr=%q", code, errb)
+	}
+	for _, command := range claudeInstalledCommands(t, path) {
+		if !strings.Contains(command, "--content=full") {
+			t.Fatalf("installed command missing full-content option: %q", command)
+		}
+	}
+}
+
 // A finding produced by a hook event is written to the configured sink, not to
 // stdout (stdout is reserved for the passthrough the agent reads). With
 // --output=file the secrets rule fires on `cat .env` and the finding lands in

@@ -44,8 +44,9 @@ enforce-capable pre-action callbacks. Join an
 response was delivered or honored by the host.
 
 Use `--emit all --output-file ~/.numbat/live.ndjson` when you want the complete
-live event stream. Use repeated `--output` flags when you also want a direct HTTP
-delivery attempt:
+live event stream. It uses conversation previews by default; add
+`--content full` only when bounded, redacted message text is required. Use
+repeated `--output` flags when you also want a direct HTTP delivery attempt:
 
 ```bash
 numbat hook install --agent claude \

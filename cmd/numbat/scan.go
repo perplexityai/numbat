@@ -35,7 +35,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	caseID := fs.String("case-id", "", "case identifier stamped on every emitted event and derived finding")
 	var emitValues multiFlag
 	fs.Var(&emitValues, "emit", emitFlagHelp())
-	profileFlag := fs.String("profile", string(extract.ProfileEvidence), "capture depth: evidence (no reasoning/model context)|full")
+	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
+	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout))
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
@@ -50,7 +52,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--profile evidence|full] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
+		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--content preview|full] [--include-reasoning] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
 		fmt.Fprintln(stderr, "\nScans supported on-disk agent artifacts and emits redacted findings, events, or indicators as NDJSON.")
 		fmt.Fprintf(stderr, "Automatic-discovery agents: %s.\n", artifactAgentUsage())
 		fmt.Fprintln(stderr, "Preserve vendor directory layouts when scanning copied or mounted artifacts.")
@@ -86,8 +88,19 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
-	profile, err := parseProfile(*profileFlag)
+	content, err := parseContentMode(*contentFlag)
 	if err != nil {
+		fmt.Fprintf(stderr, "scan: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	reasoning, err := applyDeprecatedProfile(*profileFlag, *includeReasoning)
+	if err != nil {
+		fmt.Fprintf(stderr, "scan: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	if err := validateContentSelection(content, sel); err != nil {
 		fmt.Fprintf(stderr, "scan: %v\n", err)
 		fs.Usage()
 		return 2
@@ -99,7 +112,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Resolve the output sink up front. A bad output/auth combination is a CLI
-	// error (like --emit/--profile above): it returns 2 without a scan_summary,
+	// error (like --emit/--content above): it returns 2 without a scan_summary,
 	// because no scan was attempted. stdout is the default sink and wraps the
 	// provided writer without taking ownership of it.
 	// Collect the http-only flags the operator actually passed, so buildSink can
@@ -133,7 +146,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Runtime failures get a summary; usage errors above do not start a scan.
-	em := output.NewWithSink(sink, stderr, runID())
+	em := output.NewWithSink(sink, stderr, runID(), contentEmitterOptions(content)...)
 
 	roots := []string(paths)
 	if len(roots) == 0 {
@@ -165,9 +178,15 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return failScan(em, err.Error())
 		}
 	}
-	captureContent := sel.indicators || sel.findings && eng != nil && eng.UsesContent()
+	captureContent := content == contentFull || sel.indicators || sel.findings && eng != nil && eng.UsesContent()
 
-	sc := &scanner{emit: em, caseID: *caseID, sel: sel, profile: profile, captureContent: captureContent}
+	sc := &scanner{
+		emit:             em,
+		caseID:           *caseID,
+		sel:              sel,
+		includeReasoning: reasoning,
+		captureContent:   captureContent,
+	}
 	if sel.indicators {
 		sc.indicators = output.NewIndicatorAccumulator()
 	}
@@ -427,31 +446,17 @@ func (s emitSelection) defaultFindingsOnly() bool {
 	return s.findings && !s.events && !s.indicators
 }
 
-// parseProfile validates the --profile flag and maps it onto an extract.Profile.
-// The default (evidence) yields only forensic evidence; full additionally yields
-// model reasoning and session-context join keys.
-func parseProfile(v string) (extract.Profile, error) {
-	switch extract.Profile(v) {
-	case extract.ProfileEvidence:
-		return extract.ProfileEvidence, nil
-	case extract.ProfileFull:
-		return extract.ProfileFull, nil
-	default:
-		return "", fmt.Errorf("invalid --profile %q: want evidence|full", v)
-	}
-}
-
 // scanner holds per-run artifact-processing state.
 type scanner struct {
-	emit           *output.Emitter
-	caseID         string
-	sel            emitSelection
-	profile        extract.Profile
-	captureContent bool
-	pipe           *pipeline.Pipeline
-	indicators     *output.IndicatorAccumulator
-	parsed         int
-	failed         int
+	emit             *output.Emitter
+	caseID           string
+	sel              emitSelection
+	includeReasoning bool
+	captureContent   bool
+	pipe             *pipeline.Pipeline
+	indicators       *output.IndicatorAccumulator
+	parsed           int
+	failed           int
 	// lookup is overridden only by tests.
 	lookup func(agent string) (extract.Extractor, bool)
 }
@@ -492,10 +497,10 @@ func (s *scanner) scanArtifact(a discover.Artifact) {
 	defer f.Close()
 
 	res, err := extract.SafeExtract(ex, f, extract.Source{
-		Path:           a.Path,
-		CaseID:         s.caseID,
-		Profile:        s.profile,
-		CaptureContent: s.captureContent,
+		Path:             a.Path,
+		CaseID:           s.caseID,
+		IncludeReasoning: s.includeReasoning,
+		CaptureContent:   s.captureContent,
 	})
 	if err != nil {
 		s.emit.Diag("error", fmt.Sprintf("parse %q: %v", a.Path, err))

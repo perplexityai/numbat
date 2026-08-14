@@ -101,7 +101,7 @@ type claudeAttachment struct {
 // claudeMessage is the user/assistant message envelope. content is either a
 // plain string (simple user prompts) or an array of typed content blocks; the
 // custom unmarshaler normalizes both into Content. Model is the assistant
-// message's model id, a session join key surfaced under the full profile.
+// message's model id, a source-recorded session join key.
 type claudeMessage struct {
 	Role    string
 	Model   string

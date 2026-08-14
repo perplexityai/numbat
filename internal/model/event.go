@@ -394,6 +394,10 @@ func (e *Event) SetContent(raw string, retain bool) {
 // when evaluating a caller-supplied event record.
 func (e Event) ContentForAnalysis() string { return e.contentForAnalysis() }
 
+// ContentBytesForAnalysis returns the mapped message-body byte count recorded
+// before Numbat's content bound was applied.
+func (e Event) ContentBytesForAnalysis() int { return e.contentBytesForAnalysis() }
+
 // ContentTruncatedForAnalysis reports whether ContentForAnalysis omits bytes.
 func (e Event) ContentTruncatedForAnalysis() bool { return e.contentTruncatedForAnalysis() }
 

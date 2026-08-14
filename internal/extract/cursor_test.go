@@ -16,9 +16,9 @@ const cursorFixture = `{"type":"user","id":"cu1","conversationId":"cur-1","times
 {"type":"assistant","id":"ca1","conversationId":"cur-1","timestamp":"2026-06-03T10:00:01Z","cwd":"/home/dev/proj","content":[{"type":"text","text":"Let me search for it."},{"type":"tool_call","name":"Shell","callId":"t1","input":{"command":"grep -r authMiddleware src/"}}]}
 {"type":"tool","id":"ct1","conversationId":"cur-1","timestamp":"2026-06-03T10:00:02Z","cwd":"/home/dev/proj","toolResult":{"callId":"t1","exitCode":0}}`
 
-func extractCursor(t *testing.T, body string, profile Profile) *Result {
+func extractCursor(t *testing.T, body string) *Result {
 	t.Helper()
-	res, err := CursorExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/transcript.jsonl", CaseID: "case-cur", Profile: profile})
+	res, err := CursorExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/transcript.jsonl", CaseID: "case-cur"})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -29,7 +29,7 @@ func extractCursor(t *testing.T, body string, profile Profile) *Result {
 // and the correlated command.result — every event stamped with the cursor
 // source identity and the cursor artifact type.
 func TestExtractCursorMapsShapesWithCursorIdentity(t *testing.T) {
-	res := extractCursor(t, cursorFixture, ProfileEvidence)
+	res := extractCursor(t, cursorFixture)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}
@@ -95,7 +95,7 @@ func TestExtractCursorCurrentMessageEnvelope(t *testing.T) {
 	const body = `{"role":"user","message":{"content":[{"type":"text","text":"inspect the readme"}]}}
 {"role":"assistant","message":{"content":[{"type":"text","text":"I will open it."},{"type":"tool_use","name":"Read","input":{"path":"/workspace/README.md"}}]}}
 {"type":"turn_ended","status":"success"}`
-	res := extractCursor(t, body, ProfileEvidence)
+	res := extractCursor(t, body)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}
@@ -127,7 +127,7 @@ func TestExtractCursorCurrentMessageEnvelope(t *testing.T) {
 }
 
 func TestExtractCursorToleratesNonObjectMessageEnvelope(t *testing.T) {
-	res := extractCursor(t, `{"type":"system","message":"bookkeeping"}`, ProfileEvidence)
+	res := extractCursor(t, `{"type":"system","message":"bookkeeping"}`)
 	if len(res.Diagnostics) != 0 || len(res.Events) != 0 {
 		t.Fatalf("scalar message produced output: events=%s diagnostics=%+v", dumpEvents(res.Events), res.Diagnostics)
 	}
@@ -135,7 +135,7 @@ func TestExtractCursorToleratesNonObjectMessageEnvelope(t *testing.T) {
 
 func TestExtractCursorDiagnosesMultipleContentBodies(t *testing.T) {
 	const body = `{"role":"assistant","content":"top-level text","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"/workspace/hidden.txt"}}]}}`
-	res := extractCursor(t, body, ProfileEvidence)
+	res := extractCursor(t, body)
 	if len(res.Diagnostics) != 1 || !strings.Contains(res.Diagnostics[0].Msg, "multiple content bodies") {
 		t.Fatalf("diagnostics = %+v, want one multiple-content warning", res.Diagnostics)
 	}
@@ -151,7 +151,7 @@ func TestExtractCursorDiagnosesMultipleContentBodies(t *testing.T) {
 func TestExtractCursorNonCommandResultAndError(t *testing.T) {
 	const body = `{"type":"assistant","id":"a","conversationId":"c","content":[{"type":"tool_call","name":"Read","callId":"r1","input":{"file_path":"/etc/hosts"}}]}
 {"type":"tool","id":"b","conversationId":"c","toolResult":{"callId":"r1","isError":true}}`
-	res := extractCursor(t, body, ProfileEvidence)
+	res := extractCursor(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 2 {
 		t.Fatalf("got %d activity events, want 2:\n%s", len(acts), dumpEvents(res.Events))
@@ -171,7 +171,7 @@ func TestExtractCursorNonCommandResultAndError(t *testing.T) {
 // network tag, mirroring the Claude classifier.
 func TestExtractCursorWebFetchNetworkIndicator(t *testing.T) {
 	const body = `{"type":"assistant","id":"a","conversationId":"c","content":[{"type":"tool_call","name":"web_fetch","callId":"w1","input":{"url":"https://example.com/x"}}]}`
-	res := extractCursor(t, body, ProfileEvidence)
+	res := extractCursor(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 1 {
 		t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(res.Events))
@@ -191,7 +191,7 @@ func TestExtractCursorWebFetchNetworkIndicator(t *testing.T) {
 func TestExtractCursorWebFetchRejectsNonHTTPScheme(t *testing.T) {
 	const bad = "file:///etc/passwd"
 	const body = `{"type":"assistant","id":"a","conversationId":"c","content":[{"type":"tool_call","name":"web_fetch","callId":"w1","input":{"url":"file:///etc/passwd"}}]}`
-	acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+	acts := activityEvents(extractCursor(t, body).Events)
 	if len(acts) != 1 {
 		t.Fatalf("got %d activity events, want 1", len(acts))
 	}
@@ -216,7 +216,7 @@ func TestExtractCursorToleratesMalformedLine(t *testing.T) {
 	const body = `{"type":"user","id":"u","conversationId":"c","content":"hello"}
 {not json}
 {"type":"assistant","id":"a","conversationId":"c","content":"hi"}`
-	res := extractCursor(t, body, ProfileEvidence)
+	res := extractCursor(t, body)
 	if len(res.Diagnostics) != 1 {
 		t.Fatalf("got %d diagnostics, want 1: %+v", len(res.Diagnostics), res.Diagnostics)
 	}
@@ -233,7 +233,7 @@ func TestExtractCursorToleratesMalformedLine(t *testing.T) {
 // exit code and inverts the order.
 func TestExtractCursorSameRecordCommandCorrelation(t *testing.T) {
 	const body = `{"type":"assistant","id":"a","conversationId":"c","content":[{"type":"text","text":"running it"},{"type":"tool_call","name":"Shell","callId":"s1","input":{"command":"go test ./..."}},{"type":"tool_result","callId":"s1","exitCode":2}]}`
-	res := extractCursor(t, body, ProfileEvidence)
+	res := extractCursor(t, body)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}
@@ -268,7 +268,7 @@ func TestExtractCursorSameRecordCommandCorrelation(t *testing.T) {
 func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 	t.Run("content_array_blocks", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","conversationId":"c","content":[{"type":"text","text":"hi"},{"type":"tool_call","name":"Shell","callId":"s1","input":{"command":"ls"}},{"type":"tool_result","callId":"s1","exitCode":0}]}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		wantPtr := []string{"/content/0", "/content/1", "/content/2"}
 		if len(acts) != len(wantPtr) {
 			t.Fatalf("got %d events, want %d:\n%s", len(acts), len(wantPtr), dumpEvents(acts))
@@ -282,7 +282,7 @@ func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("plain_string_content", func(t *testing.T) {
 		const body = `{"type":"user","id":"u","conversationId":"c","content":"hello"}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/content" {
 			t.Fatalf("plain-string content pointer = %q, want /content:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -290,7 +290,7 @@ func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("flat_text_body", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","conversationId":"c","text":"just text"}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/text" {
 			t.Fatalf("flat text pointer = %q, want /text:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -298,7 +298,7 @@ func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_toolCall", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","conversationId":"c","toolCall":{"name":"Read","callId":"r1","input":{"file_path":"/x"}}}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/toolCall" {
 			t.Fatalf("top-level toolCall pointer = %q, want /toolCall:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -306,7 +306,7 @@ func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_toolCalls_list", func(t *testing.T) {
 		const body = `{"type":"assistant","id":"a","conversationId":"c","toolCalls":[{"name":"Read","callId":"r1","input":{"file_path":"/x"}}]}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/toolCalls/0" {
 			t.Fatalf("top-level toolCalls[0] pointer = %q, want /toolCalls/0:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -314,7 +314,7 @@ func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_toolResult", func(t *testing.T) {
 		const body = `{"type":"tool","id":"t","conversationId":"c","toolResult":{"callId":"r1","isError":true}}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/toolResult" {
 			t.Fatalf("top-level toolResult pointer = %q, want /toolResult:\n%s", ptrOf(acts), dumpEvents(acts))
 		}
@@ -322,7 +322,7 @@ func TestExtractCursorJSONPointersAreSourceFaithful(t *testing.T) {
 
 	t.Run("top_level_output", func(t *testing.T) {
 		const body = `{"type":"tool","id":"t","conversationId":"c","output":{"callId":"r1","status":"ok"}}`
-		acts := activityEvents(extractCursor(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCursor(t, body).Events)
 		if len(acts) != 1 || acts[0].Evidence.JSONPointer != "/output" {
 			t.Fatalf("top-level output pointer = %q, want /output:\n%s", ptrOf(acts), dumpEvents(acts))
 		}

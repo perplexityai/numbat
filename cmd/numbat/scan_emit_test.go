@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/perplexityai/numbat/internal/model"
 )
 
 // recordTypes returns the record_type of every NDJSON line on stdout, in order.
@@ -33,6 +36,28 @@ func countType(types []string, want string) int {
 		}
 	}
 	return n
+}
+
+func decodeEventRecords(t *testing.T, out string) []model.Event {
+	t.Helper()
+	var events []model.Event
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var envelope struct {
+			RecordType string `json:"record_type"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.RecordType != "event" {
+			continue
+		}
+		var ev model.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, ev)
+	}
+	return events
 }
 
 // scanSummary is the subset of the terminal scan_summary record the tests assert
@@ -75,7 +100,7 @@ func decodeSummary(t *testing.T, out string) scanSummary {
 
 // A transcript whose assistant turn thinks, fetches a URL, calls an MCP tool,
 // reads .env (fires the secrets rule) and cats it. Exercises events, findings,
-// indicators, and the evidence/full profile split in one fixture.
+// indicators, and optional reasoning in one fixture.
 const emitTranscript = `{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-06-02T10:00:00Z","cwd":"/home/dev/proj","message":{"role":"user","content":"read the env"}}
 {"type":"assistant","uuid":"a1","sessionId":"s1","timestamp":"2026-06-02T10:00:01Z","cwd":"/home/dev/proj","message":{"role":"assistant","content":[{"type":"thinking","thinking":"I will read the env file"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/home/dev/proj/.env"}},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"cat .env"}},{"type":"tool_use","id":"t3","name":"WebFetch","input":{"url":"https://evil.example/x","prompt":"grab"}},{"type":"tool_use","id":"t4","name":"mcp__db__query","input":{"q":"SELECT 1"}}]}}`
 
@@ -244,41 +269,123 @@ func TestParseEmitRejectsAliases(t *testing.T) {
 	}
 }
 
-// The evidence profile (default) must NOT surface model reasoning: a
-// message.reasoning event is opt-in to the full profile only.
-func TestScanProfileEvidenceOmitsReasoning(t *testing.T) {
+// Reasoning is omitted unless explicitly requested.
+func TestScanOmitsReasoningByDefault(t *testing.T) {
 	p := writeTranscript(t, emitTranscript)
 	out, _, code := runCLI("scan", "--path", p, "--emit", "events")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
 	if strings.Contains(out, `"event_type":"message.reasoning"`) {
-		t.Errorf("evidence profile leaked reasoning:\n%s", out)
+		t.Errorf("default scan leaked reasoning:\n%s", out)
 	}
 }
 
-// The full profile surfaces model reasoning as a message.reasoning event.
-func TestScanProfileFullIncludesReasoning(t *testing.T) {
+func TestScanIncludeReasoning(t *testing.T) {
+	p := writeTranscript(t, emitTranscript)
+	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--include-reasoning")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(out, `"event_type":"message.reasoning"`) {
+		t.Errorf("--include-reasoning did not surface reasoning:\n%s", out)
+	}
+}
+
+func TestScanDeprecatedFullProfileIncludesReasoningOnly(t *testing.T) {
 	p := writeTranscript(t, emitTranscript)
 	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--profile", "full")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(out, `"event_type":"message.reasoning"`) {
-		t.Errorf("full profile did not surface reasoning:\n%s", out)
+	for _, ev := range decodeEventRecords(t, out) {
+		if ev.EventType != model.EventMessageReasoning {
+			continue
+		}
+		if ev.Content != "" {
+			t.Fatalf("deprecated --profile full emitted full content: %q", ev.Content)
+		}
+		return
+	}
+	t.Fatal("deprecated --profile full did not include reasoning")
+}
+
+func TestScanDeprecatedEvidenceProfileOmitsReasoning(t *testing.T) {
+	p := writeTranscript(t, emitTranscript)
+	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--profile", "evidence")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(out, `"event_type":"message.reasoning"`) {
+		t.Fatalf("deprecated --profile evidence included reasoning:\n%s", out)
 	}
 }
 
-// An invalid --profile value is a usage error (exit 2).
-func TestScanProfileInvalidValue(t *testing.T) {
+func TestScanRejectsInvalidDeprecatedProfile(t *testing.T) {
+	_, errb, code := runCLI("scan", "--profile", "everything")
+	if code != 2 || !strings.Contains(errb, `invalid --profile "everything": want evidence|full`) {
+		t.Fatalf("exit=%d stderr=%q", code, errb)
+	}
+}
+
+func TestScanFullContentIsExplicitBoundedAndRedacted(t *testing.T) {
+	secret := "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	raw := strings.Repeat("ordinary context ", 20) + secret + "\nfinal line"
+	body := `{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":` + strconv.Quote(raw) + `}}`
+	p := writeTranscript(t, body)
+
+	previewOut, _, code := runCLI("scan", "--path", p, "--emit", "events")
+	if code != 0 {
+		t.Fatalf("preview exit = %d", code)
+	}
+	preview := decodeEventRecords(t, previewOut)
+	if len(preview) == 0 || preview[1].EventType != model.EventPromptUser {
+		t.Fatalf("preview events = %+v", preview)
+	}
+	if preview[1].Content != "" || !preview[1].ContentPreviewTruncated || strings.Contains(previewOut, secret) {
+		t.Fatalf("default projection exposed or misreported content:\n%s", previewOut)
+	}
+
+	fullOut, _, code := runCLI("scan", "--path", p, "--emit", "events", "--content", "full")
+	if code != 0 {
+		t.Fatalf("full exit = %d", code)
+	}
+	full := decodeEventRecords(t, fullOut)
+	if len(full) == 0 || full[1].EventType != model.EventPromptUser {
+		t.Fatalf("full events = %+v", full)
+	}
+	got := full[1]
+	if got.Content == "" || strings.Contains(got.Content, secret) || !strings.Contains(got.Content, "[redacted]") {
+		t.Fatalf("full content omitted or unredacted: %q", got.Content)
+	}
+	if got.ContentBytes != len(raw) || got.ContentTruncated {
+		t.Fatalf("content metadata = %d/%v, want %d/false", got.ContentBytes, got.ContentTruncated, len(raw))
+	}
+}
+
+func TestScanFullContentRequiresEvents(t *testing.T) {
 	p := writeTranscript(t, emitTranscript)
-	_, errb, code := runCLI("scan", "--path", p, "--profile", "bogus")
-	if code != 2 {
-		t.Fatalf("exit = %d, want 2", code)
+	_, errb, code := runCLI("scan", "--path", p, "--content", "full")
+	if code != 2 || !strings.Contains(errb, "--content full requires --emit events or --emit all") {
+		t.Fatalf("exit=%d stderr=%q", code, errb)
 	}
-	if !strings.Contains(errb, "invalid --profile") {
-		t.Errorf("stderr missing profile error: %q", errb)
+}
+
+func TestScanReasoningCanEmitFullContent(t *testing.T) {
+	p := writeTranscript(t, emitTranscript)
+	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--include-reasoning", "--content", "full")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
 	}
+	for _, ev := range decodeEventRecords(t, out) {
+		if ev.EventType == model.EventMessageReasoning {
+			if ev.Content != "I will read the env file" {
+				t.Fatalf("reasoning content = %q", ev.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("reasoning event not emitted")
 }
 
 // --emit events surfaces the typed fields the new wiring populates: a WebFetch

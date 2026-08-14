@@ -46,10 +46,11 @@ separators on every operating system so one rule works across platforms.
 Context fields such as `model`, `model_provider`, and `entrypoint` are
 source-specific and omitted when the source does not record them.
 
-Conversation events always use a bounded `content_preview`. Optional `content`,
-`content_bytes`, and truncation fields describe the fuller source text when the
-caller explicitly requests it; file bodies, patches, and arbitrary tool output
-are outside this contract.
+Conversation events always use a bounded `content_preview`. With
+`--content full`, `content` is redacted and bounded to 1 MiB. `content_bytes`
+records the mapped body size before that bound and output redaction, while
+`content_truncated` reports omitted bytes. File bodies, patches, and arbitrary
+tool output are outside this contract.
 
 On findings, `timestamp` is the matched event's activity time (the completing
 event for a sequence) and may be absent when that event has no valid timestamp.

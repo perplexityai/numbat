@@ -78,6 +78,37 @@ func TestEmitFindingNDJSON(t *testing.T) {
 	}
 }
 
+func TestEmitEventContentProjection(t *testing.T) {
+	raw := strings.Repeat("prefix ", 35) + "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	ev := model.Event{SchemaVersion: model.SchemaVersion, EventID: "ev-content", EventType: model.EventPromptUser}
+	ev.SetContent(raw, true)
+
+	var preview, full bytes.Buffer
+	if err := New(&preview, io.Discard, "run-preview").EmitEvent(ev); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(&full, io.Discard, "run-full", WithFullContent()).EmitEvent(ev); err != nil {
+		t.Fatal(err)
+	}
+
+	var previewRecord, fullRecord model.Event
+	if err := json.Unmarshal(preview.Bytes(), &previewRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(full.Bytes(), &fullRecord); err != nil {
+		t.Fatal(err)
+	}
+	if previewRecord.Content != "" || previewRecord.ContentBytes != 0 {
+		t.Fatalf("default emitter retained content: %+v", previewRecord)
+	}
+	if fullRecord.Content == "" || strings.Contains(fullRecord.Content, "sk-abcdefghijklmnopqrstuvwxyz0123456789") {
+		t.Fatalf("full emitter omitted or leaked content: %+v", fullRecord)
+	}
+	if fullRecord.ContentBytes != len(raw) {
+		t.Fatalf("content_bytes = %d, want %d", fullRecord.ContentBytes, len(raw))
+	}
+}
+
 func TestDiagnosticsCanShareRecordSink(t *testing.T) {
 	var records bytes.Buffer
 	e := NewWithSinkAndDiagnostics(nopCloseSink{&records}, "run1")

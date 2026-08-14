@@ -18,9 +18,9 @@ const copilotFixture = `{"type":"UserPromptSubmitted","id":"cu1","sessionId":"se
 {"hookEventName":"PreToolUse","id":"ct1","sessionId":"sess-1","timestamp":"2026-06-03T10:00:02Z","cwd":"/home/dev/proj","toolName":"ShellCommand","toolCallId":"t1","toolArgs":"{\"command\":\"go test ./...\"}"}
 {"hookEventName":"PostToolUse","id":"ct1r","sessionId":"sess-1","timestamp":"2026-06-03T10:00:03Z","cwd":"/home/dev/proj","toolName":"ShellCommand","toolCallId":"t1","exitCode":1,"error":"tests failed"}`
 
-func extractCopilot(t *testing.T, body string, profile Profile) *Result {
+func extractCopilot(t *testing.T, body string) *Result {
 	t.Helper()
-	res, err := CopilotExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/copilot.jsonl", CaseID: "case-cp", Profile: profile})
+	res, err := CopilotExtractor{}.Extract(strings.NewReader(body), Source{Path: "/cases/copilot.jsonl", CaseID: "case-cp"})
 	if err != nil {
 		t.Fatalf("Extract returned error: %v", err)
 	}
@@ -32,7 +32,7 @@ func extractCopilot(t *testing.T, body string, profile Profile) *Result {
 // code — every event stamped with the copilot source identity and the copilot
 // artifact type. This is the headline correlation+exit-code proof.
 func TestExtractCopilotMapsShapesWithCopilotIdentity(t *testing.T) {
-	res := extractCopilot(t, copilotFixture, ProfileEvidence)
+	res := extractCopilot(t, copilotFixture)
 	if len(res.Diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
 	}
@@ -116,7 +116,7 @@ func TestExtractCopilotMapsShapesWithCopilotIdentity(t *testing.T) {
 // TestExtractCopilotMapsShapesWithCopilotIdentity.
 func TestExtractCopilotOrphanResultStaysToolResult(t *testing.T) {
 	const body = `{"hookEventName":"PostToolUse","id":"x","sessionId":"c","toolName":"ShellCommand","toolCallId":"orphan","exitCode":0}`
-	res := extractCopilot(t, body, ProfileEvidence)
+	res := extractCopilot(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 1 {
 		t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(res.Events))
@@ -135,7 +135,7 @@ func TestExtractCopilotOrphanResultStaysToolResult(t *testing.T) {
 func TestExtractCopilotNonCommandResultAndError(t *testing.T) {
 	const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"ReadFile","toolCallId":"r1","toolArgs":"{\"path\":\"/etc/hosts\"}"}
 {"hookEventName":"PostToolUse","id":"b","sessionId":"c","toolName":"ReadFile","toolCallId":"r1","isError":true}`
-	res := extractCopilot(t, body, ProfileEvidence)
+	res := extractCopilot(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 2 {
 		t.Fatalf("got %d activity events, want 2:\n%s", len(acts), dumpEvents(res.Events))
@@ -155,7 +155,7 @@ func TestExtractCopilotNonCommandResultAndError(t *testing.T) {
 // policy mirrored from the live hook.
 func TestExtractCopilotReadNeverStoresContent(t *testing.T) {
 	const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"ReadFile","toolArgs":"{\"path\":\"/proj/.env\",\"content\":\"SECRET=abc\"}"}`
-	res := extractCopilot(t, body, ProfileEvidence)
+	res := extractCopilot(t, body)
 	acts := activityEvents(res.Events)
 	if len(acts) != 1 {
 		t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(res.Events))
@@ -173,7 +173,7 @@ func TestExtractCopilotReadNeverStoresContent(t *testing.T) {
 func TestExtractCopilotNetworkIndicator(t *testing.T) {
 	t.Run("web_fetch", func(t *testing.T) {
 		const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"WebFetch","toolArgs":"{\"url\":\"https://example.com/x\"}"}`
-		acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCopilot(t, body).Events)
 		if len(acts) != 1 {
 			t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(acts))
 		}
@@ -187,7 +187,7 @@ func TestExtractCopilotNetworkIndicator(t *testing.T) {
 	})
 	t.Run("web_search", func(t *testing.T) {
 		const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"WebSearch","toolArgs":"{\"query\":\"how to exfiltrate\"}"}`
-		acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCopilot(t, body).Events)
 		if len(acts) != 1 {
 			t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(acts))
 		}
@@ -208,7 +208,7 @@ func TestExtractCopilotNetworkIndicator(t *testing.T) {
 	t.Run("web_fetch_rejects_non_http", func(t *testing.T) {
 		const bad = "file:///etc/passwd"
 		const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"WebFetch","toolArgs":"{\"url\":\"file:///etc/passwd\"}"}`
-		acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+		acts := activityEvents(extractCopilot(t, body).Events)
 		if len(acts) != 1 {
 			t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(acts))
 		}
@@ -232,7 +232,7 @@ func TestExtractCopilotNetworkIndicator(t *testing.T) {
 // branch of the classifier's tool.call fallback.
 func TestExtractCopilotMCPSplit(t *testing.T) {
 	const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"mcp__github__create_issue","toolArgs":"{\"title\":\"x\"}"}`
-	acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+	acts := activityEvents(extractCopilot(t, body).Events)
 	if len(acts) != 1 || acts[0].EventType != model.EventToolCall {
 		t.Fatalf("got %d events / type %s, want one tool.call:\n%s", len(acts), acts[0].EventType, dumpEvents(acts))
 	}
@@ -264,7 +264,7 @@ func TestExtractCopilotUnknownToolFallsBackToToolCall(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"` + name + `","toolArgs":"{\"command\":\"x\",\"path\":\"/p\",\"url\":\"https://e/x\"}"}`
-			acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+			acts := activityEvents(extractCopilot(t, body).Events)
 			if len(acts) != 1 {
 				t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(acts))
 			}
@@ -293,7 +293,7 @@ func TestExtractCopilotIgnoresGenericArgKeys(t *testing.T) {
 	for _, key := range []string{"input", "args", "toolInput"} {
 		t.Run(key, func(t *testing.T) {
 			body := `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"ShellCommand","` + key + `":{"command":"cat .env"}}`
-			acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+			acts := activityEvents(extractCopilot(t, body).Events)
 			if len(acts) != 1 || acts[0].EventType != model.EventCommandExec {
 				t.Fatalf("got %+v, want one command.exec", acts)
 			}
@@ -312,7 +312,7 @@ func TestExtractCopilotIgnoresGenericArgKeys(t *testing.T) {
 func TestExtractCopilotNoFabricatedExitCode(t *testing.T) {
 	const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"ShellCommand","toolCallId":"s1","toolArgs":"{\"command\":\"echo hi\"}"}
 {"hookEventName":"PostToolUse","id":"b","sessionId":"c","toolName":"ShellCommand","toolCallId":"s1"}`
-	acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+	acts := activityEvents(extractCopilot(t, body).Events)
 	if len(acts) != 2 {
 		t.Fatalf("got %d activity events, want 2:\n%s", len(acts), dumpEvents(acts))
 	}
@@ -330,7 +330,7 @@ func TestExtractCopilotToleratesMalformedLine(t *testing.T) {
 	const body = `{"type":"UserPromptSubmitted","id":"u","sessionId":"c","prompt":"hello"}
 {not json}
 {"type":"assistant","id":"a","sessionId":"c","content":"hi"}`
-	res := extractCopilot(t, body, ProfileEvidence)
+	res := extractCopilot(t, body)
 	if len(res.Diagnostics) != 1 {
 		t.Fatalf("got %d diagnostics, want 1: %+v", len(res.Diagnostics), res.Diagnostics)
 	}
@@ -366,7 +366,7 @@ func TestExtractCopilotJSONPointersAreSourceFaithful(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			acts := activityEvents(extractCopilot(t, c.body, ProfileEvidence).Events)
+			acts := activityEvents(extractCopilot(t, c.body).Events)
 			if len(acts) != 1 {
 				t.Fatalf("got %d activity events, want 1:\n%s", len(acts), dumpEvents(acts))
 			}
@@ -390,7 +390,7 @@ func TestExtractCopilotToolArgsEncodingEquivalence(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			acts := activityEvents(extractCopilot(t, c.body, ProfileEvidence).Events)
+			acts := activityEvents(extractCopilot(t, c.body).Events)
 			if len(acts) != 1 || acts[0].EventType != model.EventCommandExec || acts[0].Command != "cat .env" {
 				t.Fatalf("got %+v, want one command.exec 'cat .env'", acts)
 			}
@@ -402,7 +402,7 @@ func TestExtractCopilotToolArgsEncodingEquivalence(t *testing.T) {
 // empty rather than panicking or fabricating a value.
 func TestExtractCopilotMalformedToolArgsDegradesSafely(t *testing.T) {
 	const body = `{"hookEventName":"PreToolUse","id":"a","sessionId":"c","toolName":"ShellCommand","toolArgs":"not json at all"}`
-	acts := activityEvents(extractCopilot(t, body, ProfileEvidence).Events)
+	acts := activityEvents(extractCopilot(t, body).Events)
 	if len(acts) != 1 || acts[0].EventType != model.EventCommandExec {
 		t.Fatalf("got %+v, want one command.exec", acts)
 	}
