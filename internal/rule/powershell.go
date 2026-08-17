@@ -476,6 +476,11 @@ func (a *shellAnalyzer) addPowerShellSegment(segment string, depth int, wrappers
 		a.report(errors.New("shell command analysis: unsupported or malformed PowerShell command"))
 		return
 	}
+	// An empty quoted call target is static text, but it is not executable.
+	if callOperator && command.Executable == "" {
+		a.report(errors.New("shell command analysis: PowerShell call operator without executable"))
+		return
+	}
 	if recognizedPowerShellAlias(command.Executable) {
 		command.enforcementUnsafe = true
 	}

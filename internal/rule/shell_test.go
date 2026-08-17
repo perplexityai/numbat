@@ -1497,6 +1497,23 @@ func FuzzAnalyzeShellCommands(f *testing.F) {
 	})
 }
 
+func TestPowerShellEmptyCallTargetIsNotProjected(t *testing.T) {
+	t.Parallel()
+	for _, source := range []string{`& ''`, `& ""`, `& '' > C:\out`} {
+		source := source
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			analysis := analyzeShellCommandsDetailed(source, dialectPowerShell)
+			if len(analysis.commands) != 0 {
+				t.Fatalf("commands = %#v, want none", analysis.commands)
+			}
+			if analysis.usable || analysis.enforcementSafe || analysis.err == nil {
+				t.Fatalf("analysis = usable:%v enforcementSafe:%v err:%v", analysis.usable, analysis.enforcementSafe, analysis.err)
+			}
+		})
+	}
+}
+
 func BenchmarkAnalyzeShellCommands(b *testing.B) {
 	for _, size := range []int{64, 12 << 10, maxShellCommandBytes} {
 		source := "echo " + strings.Repeat("x", size-len("echo "))
