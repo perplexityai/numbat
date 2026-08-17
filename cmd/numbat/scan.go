@@ -173,7 +173,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	// constructing an unused engine.
 	var eng *rule.Engine
 	if sel.findings || len(rf.dirs) > 0 || rf.noBuiltin {
-		eng, err = compileEngine(sources)
+		eng, err = compileEffectiveEngine(sources, rf.noBuiltin)
 		if err != nil {
 			return failScan(em, err.Error())
 		}

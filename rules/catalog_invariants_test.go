@@ -2,6 +2,7 @@ package rules_test
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -64,8 +65,23 @@ func TestBuiltinRulesCanBeOptedIntoEnforcement(t *testing.T) {
 	for i := range sources {
 		sources[i].Rules[0].Enforce = &enforce
 	}
-	if _, err := rule.NewEngine(sources); err != nil {
+	checked, err := rule.LoadCheckedExpressionsFS(rules.CheckedFS, rules.CheckedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkedEngine, err := rule.NewEngineWithCheckedExpressions(sources, checked)
+	if err != nil {
 		t.Fatalf("compile built-ins with enforce enabled: %v", err)
+	}
+	sourceEngine, err := rule.NewEngine(sources)
+	if err != nil {
+		t.Fatalf("compile built-ins from source with enforce enabled: %v", err)
+	}
+	if !checkedEngine.HasEnforceEligibleRules() || !sourceEngine.HasEnforceEligibleRules() {
+		t.Fatal("enforce-enabled built-ins were not eligible for enforcement")
+	}
+	if !slices.Equal(checkedEngine.RuleIDs(), sourceEngine.RuleIDs()) {
+		t.Fatalf("checked rule ids = %v, source = %v", checkedEngine.RuleIDs(), sourceEngine.RuleIDs())
 	}
 }
 

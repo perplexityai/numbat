@@ -21,7 +21,8 @@ go build ./cmd/numbat
 go test ./...
 ```
 
-There are no code-generation steps; the build uses the Go toolchain directly.
+Normal builds use the committed generated rule data. After changing a built-in
+rule or the CEL environment, regenerate it with `go generate ./rules`.
 
 ## Required checks
 
@@ -31,6 +32,9 @@ Run the applicable checks from the repository root before opening a pull request
 ```sh
 go mod tidy
 git diff --exit-code -- go.mod go.sum
+go generate ./rules
+git diff --exit-code -- rules/internal/checked
+test -z "$(git ls-files --others --exclude-standard -- rules/internal/checked)"
 gofmt -l .
 go vet ./...
 go test -race ./...
@@ -68,7 +72,8 @@ Every change must preserve these project contracts:
 - **No cgo, SQLite, or unreviewed heavy dependencies.** Direct dependencies are
   limited to `github.com/google/cel-go`, `github.com/klauspost/compress`,
   `go.etcd.io/bbolt`, `golang.org/x/sys`, `google.golang.org/protobuf`,
-  `go.yaml.in/yaml/v3`, and `mvdan.cc/sh/v3`. Adding one requires explicit review.
+  `google.golang.org/genproto/googleapis/api`, `go.yaml.in/yaml/v3`, and
+  `mvdan.cc/sh/v3`. Adding one requires explicit review.
 - **Use `indicator` on the wire.** Do not introduce `IOC` into record fields or
   record-type names.
 - **Version the wire contract deliberately.** A breaking record-shape change

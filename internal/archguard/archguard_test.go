@@ -294,13 +294,14 @@ func leafMatches(leaf, plane string) bool {
 // contributor could add a heavy direct dep and CI would stay green. Indirect
 // deps are deliberately not policed — they flow transitively from these.
 var allowedDirectDeps = map[string]bool{
-	"github.com/google/cel-go":      true,
-	"github.com/klauspost/compress": true,
-	"go.etcd.io/bbolt":              true,
-	"go.yaml.in/yaml/v3":            true,
-	"golang.org/x/sys":              true,
-	"google.golang.org/protobuf":    true,
-	"mvdan.cc/sh/v3":                true,
+	"github.com/google/cel-go":                  true,
+	"github.com/klauspost/compress":             true,
+	"go.etcd.io/bbolt":                          true,
+	"go.yaml.in/yaml/v3":                        true,
+	"golang.org/x/sys":                          true,
+	"google.golang.org/genproto/googleapis/api": true,
+	"google.golang.org/protobuf":                true,
+	"mvdan.cc/sh/v3":                            true,
 }
 
 func TestDependencyAllowlist(t *testing.T) {
@@ -316,7 +317,7 @@ func TestDependencyAllowlist(t *testing.T) {
 			continue
 		}
 		if !allowedDirectDeps[path] {
-			t.Errorf("disallowed direct dependency %q; the allowed set is exactly {cel-go, klauspost/compress, bbolt, x/sys, protobuf, yaml.v3, mvdan/sh}", path)
+			t.Errorf("disallowed direct dependency %q; the allowed set is exactly {cel-go, klauspost/compress, bbolt, x/sys, CEL protobufs, protobuf, yaml.v3, mvdan/sh}", path)
 		}
 		// Belt-and-suspenders on the heaviest likely violation: SQLite pulls in
 		// cgo and a C toolchain, which the no-cgo contract forbids outright.

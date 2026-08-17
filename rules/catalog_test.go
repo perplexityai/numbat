@@ -1,6 +1,7 @@
 package rules_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/perplexityai/numbat/internal/model"
@@ -589,6 +590,7 @@ func chainEvents(t *testing.T, events ...model.Event) []string {
 	t.Helper()
 	eng := builtinEngine(t)
 	tr := sequence.NewTracker(eng.SequenceRules(), sequence.DefaultConfig())
+	sourceTracker := sequence.NewTracker(builtinSourceEngine(t).SequenceRules(), sequence.DefaultConfig())
 	var fired []string
 	for i := range events {
 		events[i].EventID = events[i].Command + events[i].FilePath + string(rune('a'+i))
@@ -603,6 +605,11 @@ func chainEvents(t *testing.T, events ...model.Event) []string {
 			events[i].Evidence.LocalPath = "/rule-fixture"
 		}
 		observation, err := tr.Observe(events[i])
+		// Sequence fixtures compare the complete stateful observation on both paths.
+		sourceObservation, sourceErr := sourceTracker.Observe(events[i])
+		if !sameError(err, sourceErr) || !reflect.DeepEqual(observation, sourceObservation) {
+			t.Fatalf("checked sequence observation = (%#v, %v), source = (%#v, %v)", observation, err, sourceObservation, sourceErr)
+		}
 		if err != nil {
 			t.Fatalf("observe: %v", err)
 		}

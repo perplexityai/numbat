@@ -1,1 +1,2 @@
 * text=auto eol=lf
+rules/internal/checked/*.pb binary

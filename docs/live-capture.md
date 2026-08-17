@@ -109,7 +109,9 @@ and applicable enforcement decisions to `$HOME/.numbat/findings.ndjson`. When
 events or indicators are selected, the default becomes
 `$HOME/.numbat/records.ndjson`. Change it with
 `--output-file PATH`; repeat `--emit findings|events|indicators`, or use
-`--emit all`. Event records use bounded previews by default; add
+`--emit all`. `--emit events` alone is collection-only and skips the local
+rule engine; `--emit all` includes findings and runs it. Event records use
+bounded previews by default; add
 `--content full` to retain bounded, redacted conversation text when the agent
 exposes it. Add `--include-reasoning` for source-exposed Pi, OpenCode, and
 Kilo reasoning; hidden model chain-of-thought is not reconstructed. Repeat

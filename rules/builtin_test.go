@@ -1,6 +1,7 @@
 package rules_test
 
 import (
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -13,18 +14,26 @@ import (
 var (
 	builtinEngineOnce sync.Once
 	builtinEngineTest *rule.Engine
+	builtinSourceTest *rule.Engine
 	builtinEngineErr  error
 )
 
-// builtinEngine loads and compiles every embedded rule file. A compile failure
-// here means a shipped rule is broken — the test that guards the release.
+// builtinEngine returns the generated-data engine and retains a source-compiled
+// twin so every built-in fixture also checks semantic parity.
 func builtinEngine(t testing.TB) *rule.Engine {
 	t.Helper()
 	builtinEngineOnce.Do(func() {
 		var sources []rule.Source
 		sources, builtinEngineErr = rule.LoadSourcesFS(rules.FS, rules.Dir)
 		if builtinEngineErr == nil {
-			builtinEngineTest, builtinEngineErr = rule.NewEngine(sources)
+			var checked rule.CheckedExpressions
+			checked, builtinEngineErr = rule.LoadCheckedExpressionsFS(rules.CheckedFS, rules.CheckedDir)
+			if builtinEngineErr == nil {
+				builtinEngineTest, builtinEngineErr = rule.NewEngineWithCheckedExpressions(sources, checked)
+			}
+			if builtinEngineErr == nil {
+				builtinSourceTest, builtinEngineErr = rule.NewEngine(sources)
+			}
 		}
 	})
 	if builtinEngineErr != nil {
@@ -37,6 +46,74 @@ func TestBuiltinRulesCompile(t *testing.T) {
 	eng := builtinEngine(t)
 	if eng.Len() == 0 {
 		t.Fatalf("no built-in rules compiled")
+	}
+}
+
+func TestBuiltinRulesCompileFromSource(t *testing.T) {
+	if eng := builtinSourceEngine(t); eng.Len() == 0 {
+		t.Fatal("no built-in rules compiled from source")
+	}
+}
+
+func builtinSourceEngine(t testing.TB) *rule.Engine {
+	t.Helper()
+	builtinEngine(t)
+	return builtinSourceTest
+}
+
+func TestBuiltinCheckedEngineMetadataParity(t *testing.T) {
+	checked := builtinEngine(t)
+	source := builtinSourceEngine(t)
+	if checked.Len() != source.Len() ||
+		checked.UsesContent() != source.UsesContent() ||
+		checked.HasEnforceEligibleRules() != source.HasEnforceEligibleRules() ||
+		!slices.Equal(checked.RuleIDs(), source.RuleIDs()) {
+		t.Fatalf("checked engine metadata differs from source engine")
+	}
+
+	checkedSequences := checked.SequenceRules()
+	sourceSequences := source.SequenceRules()
+	if len(checkedSequences) != len(sourceSequences) {
+		t.Fatalf("checked sequence count = %d, source = %d", len(checkedSequences), len(sourceSequences))
+	}
+	for i, checkedSequence := range checkedSequences {
+		sourceSequence := sourceSequences[i]
+		if !reflect.DeepEqual(checkedSequence.Rule(), sourceSequence.Rule()) ||
+			checkedSequence.StepCount() != sourceSequence.StepCount() ||
+			checkedSequence.Within() != sourceSequence.Within() ||
+			checkedSequence.WithinEvents() != sourceSequence.WithinEvents() ||
+			checkedSequence.MaxMatches() != sourceSequence.MaxMatches() {
+			t.Fatalf("checked sequence %d metadata differs from source", i)
+		}
+		for step := range checkedSequence.StepCount() {
+			if checkedSequence.StepUsesShellCommands(step) != sourceSequence.StepUsesShellCommands(step) {
+				t.Fatalf("checked sequence %d step %d shell projection differs from source", i, step)
+			}
+		}
+	}
+}
+
+func TestBuiltinCheckedExpressionsCurrent(t *testing.T) {
+	sources, err := rule.LoadSourcesFS(rules.FS, rules.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := rule.BuildCheckedExpressions(sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := rule.LoadCheckedExpressionsFS(rules.CheckedFS, rules.CheckedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("generated checked expression count = %d, want %d; run go generate ./rules", len(got), len(want))
+	}
+	for digest, wantData := range want {
+		gotData, ok := got[digest]
+		if !ok || !slices.Equal(gotData, wantData) {
+			t.Fatalf("generated checked expression %x is stale; run go generate ./rules", digest)
+		}
 	}
 }
 
@@ -165,6 +242,13 @@ func TestSecretsProcessEnvironmentRead(t *testing.T) {
 func match(t *testing.T, eng *rule.Engine, ev model.Event) []string {
 	t.Helper()
 	ms, err := eng.Eval(ev)
+	if eng == builtinEngineTest {
+		// All built-in single-event fixtures compare complete results on both paths.
+		sourceMatches, sourceErr := builtinSourceTest.Eval(ev)
+		if !sameError(err, sourceErr) || !reflect.DeepEqual(ms, sourceMatches) {
+			t.Fatalf("checked evaluation = (%#v, %v), source = (%#v, %v)", ms, err, sourceMatches, sourceErr)
+		}
+	}
 	if err != nil {
 		t.Fatalf("eval: %v", err)
 	}
@@ -173,6 +257,13 @@ func match(t *testing.T, eng *rule.Engine, ev model.Event) []string {
 		ids[i] = m.Rule.ID
 	}
 	return ids
+}
+
+func sameError(a, b error) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Error() == b.Error()
 }
 
 func contains(ids []string, id string) bool {
