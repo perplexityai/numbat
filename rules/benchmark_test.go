@@ -50,6 +50,42 @@ func BenchmarkBuiltinEngineCompile(b *testing.B) {
 	}
 }
 
+func BenchmarkBuiltinSourceLoad(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := rule.LoadSourcesFS(builtinrules.FS, builtinrules.Dir); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBuiltinCheckedExpressionLoad(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := rule.LoadCheckedExpressionsFS(builtinrules.CheckedFS, builtinrules.CheckedDir); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBuiltinEngineChecked(b *testing.B) {
+	sources, err := rule.LoadSourcesFS(builtinrules.FS, builtinrules.Dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	checked, err := rule.LoadCheckedExpressionsFS(builtinrules.CheckedFS, builtinrules.CheckedDir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := rule.NewEngineWithCheckedExpressions(sources, checked); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkRuleEnvironment(b *testing.B) {
 	b.ReportAllocs()
 	for range b.N {

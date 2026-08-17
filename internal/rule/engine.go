@@ -126,6 +126,17 @@ func newEnv() (*cel.Env, error) {
 // Disabled rules are validated and compiled but excluded from evaluation.
 // Invalid metadata, expressions, or duplicate IDs fail the whole load.
 func NewEngine(sources []Source) (*Engine, error) {
+	return newEngine(sources, nil)
+}
+
+// NewEngineWithCheckedExpressions constructs an engine using trusted generated
+// CEL expressions when available. Entries absent from the supplied catalog, or
+// entries that are stale or cannot be loaded and planned, fall back to source.
+func NewEngineWithCheckedExpressions(sources []Source, checked CheckedExpressions) (*Engine, error) {
+	return newEngine(sources, checked)
+}
+
+func newEngine(sources []Source, checked CheckedExpressions) (*Engine, error) {
 	env, err := newEnv()
 	if err != nil {
 		return nil, fmt.Errorf("build CEL env: %w", err)
@@ -155,7 +166,7 @@ func NewEngine(sources []Source) (*Engine, error) {
 			}
 			seen[r.ID] = sourceLabel(source)
 
-			c, err := compileRule(env, expressions, r)
+			c, err := compileRule(env, expressions, checked, r)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("rule %q: %w", r.ID, err))
 				continue
@@ -279,9 +290,9 @@ func isRuleIDAlnum(c byte) bool {
 // expr, or every sequence step through the identical strict path (boolean
 // type, known event fields). A sequence rule also distills its validated
 // window into the SequenceRule a tracker consumes.
-func compileRule(env *cel.Env, expressions map[string]compiledExpression, r Rule) (compiledRule, error) {
+func compileRule(env *cel.Env, expressions map[string]compiledExpression, checked CheckedExpressions, r Rule) (compiledRule, error) {
 	if r.Sequence == nil {
-		prg, err := compileCachedExpr(env, expressions, r.Expr)
+		prg, err := compileCachedExpr(env, expressions, checked, r.Expr)
 		if err != nil {
 			return compiledRule{}, err
 		}
@@ -291,7 +302,7 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, r Rule
 	usesShellCommands := false
 	usesContent := false
 	for i, st := range r.Sequence.Steps {
-		prg, err := compileCachedExpr(env, expressions, st.Expr)
+		prg, err := compileCachedExpr(env, expressions, checked, st.Expr)
 		if err != nil {
 			return compiledRule{}, fmt.Errorf("step %d: %w", i+1, err)
 		}
@@ -316,29 +327,56 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, r Rule
 	}}, nil
 }
 
-func compileCachedExpr(env *cel.Env, expressions map[string]compiledExpression, expr string) (compiledExpression, error) {
+func compileCachedExpr(env *cel.Env, expressions map[string]compiledExpression, checked CheckedExpressions, expr string) (compiledExpression, error) {
 	if compiled, ok := expressions[expr]; ok {
 		return compiled, nil
 	}
-	compiled, err := compileExpr(env, expr)
+	compiled, err := compileExpr(env, checked, expr)
 	if err == nil {
 		expressions[expr] = compiled
 	}
 	return compiled, err
 }
 
-// compileExpr parses, type-checks, and programs a CEL boolean expression.
-func compileExpr(env *cel.Env, expr string) (compiledExpression, error) {
-	ast, iss := env.Compile(expr)
-	if iss != nil && iss.Err() != nil {
-		return compiledExpression{}, fmt.Errorf("compile expr: %w", iss.Err())
+// compileExpr loads a matching checked expression when available, otherwise it
+// parses and type-checks the source. Runtime program construction is shared.
+func compileExpr(env *cel.Env, checked CheckedExpressions, expr string) (compiledExpression, error) {
+	if ast, ok := checkedExpressionAST(expr, checked); ok {
+		if err := validateRuleAST(ast); err == nil {
+			if compiled, err := programExpr(env, ast); err == nil {
+				return compiled, nil
+			}
+		}
 	}
-	if !ast.OutputType().IsExactType(cel.BoolType) {
-		return compiledExpression{}, fmt.Errorf("expr must be boolean, got %s", ast.OutputType())
-	}
-	if err := checkEventFields(ast); err != nil {
+	ast, err := checkExpr(env, expr)
+	if err != nil {
 		return compiledExpression{}, err
 	}
+	return programExpr(env, ast)
+}
+
+func checkExpr(env *cel.Env, expr string) (*cel.Ast, error) {
+	ast, iss := env.Compile(expr)
+	if iss != nil && iss.Err() != nil {
+		return nil, fmt.Errorf("compile expr: %w", iss.Err())
+	}
+	if err := validateRuleAST(ast); err != nil {
+		return nil, err
+	}
+	return ast, nil
+}
+
+func validateRuleAST(ast *cel.Ast) error {
+	if !ast.OutputType().IsExactType(cel.BoolType) {
+		return fmt.Errorf("expr must be boolean, got %s", ast.OutputType())
+	}
+	if err := checkEventFields(ast); err != nil {
+		return err
+	}
+	return nil
+}
+
+func programExpr(env *cel.Env, ast *cel.Ast) (compiledExpression, error) {
 	usesContent := astReferencesEventField(ast, "content") ||
 		astReferencesEventField(ast, "content_bytes") ||
 		astReferencesEventField(ast, "content_truncated")

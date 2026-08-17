@@ -25,12 +25,15 @@ var (
 	loadBuiltinRuleSources = sync.OnceValues(func() ([]rule.Source, error) {
 		return rule.LoadSourcesFS(rules.FS, rules.Dir)
 	})
+	loadBuiltinCheckedExpressions = sync.OnceValues(func() (rule.CheckedExpressions, error) {
+		return rule.LoadCheckedExpressionsFS(rules.CheckedFS, rules.CheckedDir)
+	})
 	loadBuiltinRuleEngine = sync.OnceValues(func() (*rule.Engine, error) {
 		sources, err := loadBuiltinRuleSources()
 		if err != nil {
 			return nil, err
 		}
-		return compileEngine(sources)
+		return compileBuiltinEngine(sources)
 	})
 )
 
@@ -190,7 +193,26 @@ func ruleSourceLabel(source rule.Source) string {
 // cannot yield a silent zero-rule run. Shared by buildEngine and scan so the
 // zero-rule contract is identical on every command.
 func compileEngine(sources []rule.Source) (*rule.Engine, error) {
-	eng, err := rule.NewEngine(sources)
+	return validateCompiledEngine(rule.NewEngine(sources))
+}
+
+func compileBuiltinEngine(sources []rule.Source) (*rule.Engine, error) {
+	checked, err := loadBuiltinCheckedExpressions()
+	if err != nil {
+		// Generated data is an optimization, never a correctness dependency.
+		return compileEngine(sources)
+	}
+	return validateCompiledEngine(rule.NewEngineWithCheckedExpressions(sources, checked))
+}
+
+func compileEffectiveEngine(sources []rule.Source, noBuiltin bool) (*rule.Engine, error) {
+	if noBuiltin {
+		return compileEngine(sources)
+	}
+	return compileBuiltinEngine(sources)
+}
+
+func validateCompiledEngine(eng *rule.Engine, err error) (*rule.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +231,7 @@ func buildEngine(rulesDirs []string, noBuiltin bool) (*rule.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return compileEngine(sources)
+	return compileEffectiveEngine(sources, noBuiltin)
 }
 
 func runRulesCheck(args []string, stdout, stderr io.Writer) int {
