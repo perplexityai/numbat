@@ -101,17 +101,25 @@ jobs:
           go-version: "1.26.6"
           check-latest: true
 
-      # Bounded fuzzing: each target runs briefly to surface crashers without
-      # turning into an open-ended job. The parsers and the redaction decoder
-      # must survive arbitrary and malformed input without panicking.
+      # Each invocation selects one target, so keep every FuzzXxx function in
+      # the tree listed here. Runs are bounded to keep the job predictable.
       - name: fuzz extract parsers
         run: |
-          for t in FuzzClaudeExtract FuzzCodexExtract FuzzGeminiExtract FuzzPiExtract FuzzKimiCodeExtract; do
+          for t in FuzzClaudeExtract FuzzCodexExtract FuzzGeminiExtract FuzzPiExtract \
+                   FuzzKimiCodeExtract FuzzGeminiSessionExtract FuzzCursorExtract \
+                   FuzzWindsurfExtract FuzzOpenCodeExtract FuzzOpenClawExtract \
+                   FuzzCodexCodeModeExecCommand; do
             go test -run='^$' -fuzz="^${t}$" -fuzztime=30s ./internal/extract/
           done
 
       - name: fuzz redaction decoder
-        run: go test -run='^$' -fuzz='^FuzzString$' -fuzztime=30s ./internal/redact/
+        run: |
+          for t in FuzzString FuzzJSONProducesValidJSON; do
+            go test -run='^$' -fuzz="^${t}$" -fuzztime=30s ./internal/redact/
+          done
+
+      - name: fuzz shell command analysis
+        run: go test -run='^$' -fuzz='^FuzzAnalyzeShellCommands$' -fuzztime=30s ./internal/rule/
 
       - name: fuzz OTLP decoder
         run: go test -run='^$' -fuzz='^FuzzOTLPLogs$' -fuzztime=30s ./internal/otel/
