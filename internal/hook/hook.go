@@ -922,8 +922,8 @@ func EnforceEligible(agent, event string, lc Lifecycle) bool {
 		if lc == LifecycleCursorPreTool {
 			return true
 		}
-		// Retain control semantics for older/manual specialized configurations.
-		// Current installs use only the generic lifecycle above.
+		// Current installs use beforeReadFile; the shell and MCP names retain
+		// support for older or manually specialized configurations.
 		switch strings.ToLower(event) {
 		case "beforeshellexecution", "beforemcpexecution", "beforereadfile":
 			return true
