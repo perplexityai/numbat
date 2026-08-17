@@ -118,7 +118,7 @@ For the rule format and override behavior, see [Writing rules](rules.md).
 ## Tampering
 
 - `tamper.agent_config_write` - a command or structured action mutates an agent
-  hook, settings, plugin surface, or project `.mcp.json`.
+  configuration surface used to load numbat hooks or plugins.
 - `tamper.detector_state_write` - a command or structured action targets the
   default per-user `$HOME/.numbat` state directory.
 - `tamper.guardrails_off` - the session uses a reduced-approval permission

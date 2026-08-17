@@ -1,10 +1,10 @@
 id: tamper.agent_config_write
-version: "1.7"
+version: "1.8"
 enabled: true
-title: Agent hook or settings file targeted
+title: Agent monitoring configuration targeted
 description: |-
-  A file event observed, or a command requested, mutation of an endpoint agent's hook
-  or settings surface. A successful change can disable monitoring or guardrails.
+  A file event or command requested mutation of an endpoint agent configuration surface
+  used to load numbat hooks or plugins. A successful change can disable monitoring or blocking.
 severity: high
 expr: |-
   (
@@ -30,7 +30,7 @@ expr: |-
       "\\.copilot/settings\\.json|\\.copilot/hooks/[^/]+\\.json|" +
       "etc/github-copilot/policy\\.d/[^/]+\\.json|ProgramData/GitHub/Copilot/policy\\.d/[^/]+\\.json|" +
       "\\.github/(hooks/[^/]+|copilot/settings(\\.local)?\\.json)|" +
-      "\\.grok/hooks/[^/]+|hooks/numbat\\.json|\\.agents/hooks\\.json|plugins/numbat\\.ts|\\.mcp\\.json|" +
+      "\\.grok/hooks/[^/]+|hooks/numbat\\.json|\\.agents/hooks\\.json|plugins/numbat\\.ts|" +
       "\\.pi/agent/extensions/numbat\\.ts|\\.kimi-code/config\\.toml|" +
       "(openclaw|clawdbot)\\.json|extensions/numbat(/(openclaw\\.plugin\\.json|package\\.json|index\\.js))?/?|" +
       "\\.qwen/settings\\.json|etc/qwen-code/settings\\.json|Library/Application Support/QwenCode/settings\\.json|ProgramData/qwen-code/settings\\.json|" +
@@ -63,7 +63,7 @@ expr: |-
           "\\.factory[\\\\/](hooks([\\\\/]hooks)?|settings(\\.local)?)\\.json|\\.devin[\\\\/]hooks\\.v1\\.json|\\.config[\\\\/]devin[\\\\/]config\\.json|AppData[\\\\/]Roaming[\\\\/]devin[\\\\/]config\\.json|" +
           "\\.hermes[\\\\/](config\\.yaml|profiles[\\\\/][^\\\\/]+[\\\\/]config\\.yaml)|AppData[\\\\/]Local[\\\\/]hermes[\\\\/](config\\.yaml|profiles[\\\\/][^\\\\/]+[\\\\/]config\\.yaml)|" +
           "\\.copilot[\\\\/](settings\\.json|hooks[\\\\/][^\\\\/]+\\.json)|etc[\\\\/]github-copilot[\\\\/]policy\\.d[\\\\/][^\\\\/]+\\.json|ProgramData[\\\\/]GitHub[\\\\/]Copilot[\\\\/]policy\\.d[\\\\/][^\\\\/]+\\.json|" +
-          "\\.github[\\\\/](hooks[\\\\/][^\\\\/]+|copilot[\\\\/]settings(\\.local)?\\.json)|\\.grok[\\\\/]hooks[\\\\/][^\\\\/]+|hooks[\\\\/]numbat\\.json|\\.agents[\\\\/]hooks\\.json|plugins[\\\\/]numbat\\.ts|\\.mcp\\.json|" +
+          "\\.github[\\\\/](hooks[\\\\/][^\\\\/]+|copilot[\\\\/]settings(\\.local)?\\.json)|\\.grok[\\\\/]hooks[\\\\/][^\\\\/]+|hooks[\\\\/]numbat\\.json|\\.agents[\\\\/]hooks\\.json|plugins[\\\\/]numbat\\.ts|" +
           "\\.pi[\\\\/]agent[\\\\/]extensions[\\\\/]numbat\\.ts|\\.kimi-code[\\\\/]config\\.toml|(openclaw|clawdbot)\\.json|extensions[\\\\/]numbat([\\\\/](openclaw\\.plugin\\.json|package\\.json|index\\.js))?[\\\\/]?|" +
           "\\.qwen[\\\\/]settings\\.json|etc[\\\\/]qwen-code[\\\\/]settings\\.json|Library[\\\\/]Application Support[\\\\/]QwenCode[\\\\/]settings\\.json|ProgramData[\\\\/]qwen-code[\\\\/]settings\\.json|" +
           "(\\.cline[\\\\/]hooks|\\.clinerules[\\\\/]hooks|Documents[\\\\/]Cline[\\\\/]Hooks)[\\\\/](TaskStart|TaskResume|UserPromptSubmit|PreToolUse|PostToolUse|TaskComplete|TaskCancel|TaskError|SessionShutdown)(\\.ps1)?|" +
@@ -151,7 +151,7 @@ expr: |-
           "\\.codeium[\\\\/]windsurf[\\\\/]hooks\\.json|\\.windsurf[\\\\/]hooks\\.json|etc[\\\\/]windsurf[\\\\/]hooks\\.json|Library[\\\\/]Application Support[\\\\/]Windsurf[\\\\/]hooks\\.json|ProgramData[\\\\/]Windsurf[\\\\/]hooks\\.json|" +
           "\\.factory[\\\\/](hooks([\\\\/]hooks)?|settings(\\.local)?)\\.json|\\.devin[\\\\/]hooks\\.v1\\.json|\\.config[\\\\/]devin[\\\\/]config\\.json|AppData[\\\\/]Roaming[\\\\/]devin[\\\\/]config\\.json|\\.hermes[\\\\/](config\\.yaml|profiles[\\\\/][^\\\\/]+[\\\\/]config\\.yaml)|AppData[\\\\/]Local[\\\\/]hermes[\\\\/](config\\.yaml|profiles[\\\\/][^\\\\/]+[\\\\/]config\\.yaml)|" +
           "\\.copilot[\\\\/](settings\\.json|hooks[\\\\/][^\\\\/]+\\.json)|etc[\\\\/]github-copilot[\\\\/]policy\\.d[\\\\/][^\\\\/]+\\.json|ProgramData[\\\\/]GitHub[\\\\/]Copilot[\\\\/]policy\\.d[\\\\/][^\\\\/]+\\.json|\\.github[\\\\/](hooks[\\\\/][^\\\\/]+|copilot[\\\\/]settings(\\.local)?\\.json)|" +
-          "\\.grok[\\\\/]hooks[\\\\/][^\\\\/]+|hooks[\\\\/]numbat\\.json|\\.agents[\\\\/]hooks\\.json|plugins[\\\\/]numbat\\.ts|\\.mcp\\.json|\\.pi[\\\\/]agent[\\\\/]extensions[\\\\/]numbat\\.ts|\\.kimi-code[\\\\/]config\\.toml|(openclaw|clawdbot)\\.json|extensions[\\\\/]numbat([\\\\/](openclaw\\.plugin\\.json|package\\.json|index\\.js))?[\\\\/]?|" +
+          "\\.grok[\\\\/]hooks[\\\\/][^\\\\/]+|hooks[\\\\/]numbat\\.json|\\.agents[\\\\/]hooks\\.json|plugins[\\\\/]numbat\\.ts|\\.pi[\\\\/]agent[\\\\/]extensions[\\\\/]numbat\\.ts|\\.kimi-code[\\\\/]config\\.toml|(openclaw|clawdbot)\\.json|extensions[\\\\/]numbat([\\\\/](openclaw\\.plugin\\.json|package\\.json|index\\.js))?[\\\\/]?|" +
           "\\.qwen[\\\\/]settings\\.json|etc[\\\\/]qwen-code[\\\\/]settings\\.json|Library[\\\\/]Application Support[\\\\/]QwenCode[\\\\/]settings\\.json|ProgramData[\\\\/]qwen-code[\\\\/]settings\\.json|(\\.cline[\\\\/]hooks|\\.clinerules[\\\\/]hooks|Documents[\\\\/]Cline[\\\\/]Hooks)[\\\\/](TaskStart|TaskResume|UserPromptSubmit|PreToolUse|PostToolUse|TaskComplete|TaskCancel|TaskError|SessionShutdown)(\\.ps1)?|" +
           "\\.augment[\\\\/]settings\\.json|etc[\\\\/]augment[\\\\/]settings\\.json|ProgramData[\\\\/]Augment[\\\\/]settings\\.json|(\\.augment|etc[\\\\/]augment|ProgramData[\\\\/]Augment)[\\\\/]hooks[\\\\/]numbat--installed-by=numbat-(session_start|pre_tool|post_tool|stop|session_end)\\.(sh|ps1)|\\.agents[\\\\/]plugins[\\\\/]numbat[\\\\/](plugin\\.json|hooks[\\\\/]hooks\\.json)|\\.config[\\\\/]kilo[\\\\/]plugin[\\\\/]numbat\\.ts|\\.openhands[\\\\/]hooks\\.json|\\.config[\\\\/]crush[\\\\/]crush\\.json|\\.crush\\.json|crush\\.json|\\.junie[\\\\/]config\\.json" +
           ")$"
