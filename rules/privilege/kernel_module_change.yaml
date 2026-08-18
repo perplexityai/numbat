@@ -1,0 +1,43 @@
+id: privilege.kernel_module_change
+version: "1.0"
+enabled: true
+title: Agent requested a kernel module insertion or removal
+description: |-
+  A command requested insertion or removal of a kernel module with insmod, rmmod, or
+  modprobe. Module code runs in kernel context, so the container, user, and sandbox limits
+  that apply to the requesting process do not apply to it. Every option must be a
+  recognized modifying option, so query, dry-run, and abbreviated forms do not match.
+severity: high
+expr: |-
+  (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
+  shell_commands.exists(command,
+    (
+      command.name in ["insmod", "rmmod"] &&
+      command.argv.size() > 1 &&
+      command.argv.slice(1, command.argv.size()).all(arg,
+        !arg.startsWith("-") ||
+        arg.matches("^-[fsvw]+$") ||
+        arg.matches("^--(force|syslog|verbose|wait)$")
+      ) &&
+      command.arguments.slice(1, command.arguments.size()).exists(arg,
+        !arg.value.startsWith("-") &&
+        (!arg.value.startsWith("$") || arg.expands)
+      )
+    ) ||
+    (
+      command.name == "modprobe" &&
+      command.argv.size() > 1 &&
+      command.argv.slice(1, command.argv.size()).all(arg,
+        !arg.startsWith("-") ||
+        arg.matches("^-[abCdfiqrSsvw]+$") ||
+        arg.matches("^--(all|use-blacklist|config|dirname|force|force-vermagic|force-modversion|first-time|ignore-install|ignore-remove|quiet|remove|remove-dependencies|set-version|syslog|verbose|wait)$")
+      ) &&
+      lists.range(command.arguments.size()).exists(i,
+        i > 0 &&
+        !command.arguments[i].value.startsWith("-") &&
+        (!command.arguments[i].value.startsWith("$") || command.arguments[i].expands) &&
+        !command.argv[i - 1].matches("^(-[abdfiqrsv]*[CdSw]|--(config|dirname|set-version|wait))$")
+      )
+    )
+  )
+tags: [attack.t1547.006, kernel_module_change]

@@ -1142,6 +1142,41 @@ func TestPrivilegeHostNamespaceEntry(t *testing.T) {
 	})
 }
 
+func TestPrivilegeKernelModuleChange(t *testing.T) {
+	eng := builtinEngine(t)
+	runCases(t, eng, []ruleCase{
+		{"insert a module object", cmd("sudo insmod /tmp/mod.ko"), "privilege.kernel_module_change"},
+		{"insert with module parameters", cmd("sudo insmod /tmp/mod.ko debug=1"), "privilege.kernel_module_change"},
+		{"load a module by name", cmd("sudo modprobe dummy"), "privilege.kernel_module_change"},
+		{"load several modules", cmd("modprobe -a dummy overlay"), "privilege.kernel_module_change"},
+		{"remove a module by name", cmd("sudo modprobe -r br_netfilter"), "privilege.kernel_module_change"},
+		{"remove a module with rmmod", cmd("sudo rmmod dummy"), "privilege.kernel_module_change"},
+		{"forced version load", cmd("sudo modprobe --force-modversion nf_tables"), "privilege.kernel_module_change"},
+		{"load with an alternate config file", cmd("sudo modprobe -C /etc/modprobe.conf dummy"), "privilege.kernel_module_change"},
+		{"module name from an expanded variable", cmd(`MOD=dummy; sudo modprobe "$MOD"`), "privilege.kernel_module_change"},
+		{"dry run stays quiet", cmd("modprobe --dry-run dummy"), ""},
+		{"clustered dry run stays quiet", cmd("modprobe -nv dummy"), ""},
+		{"two query flags in one cluster stay quiet", cmd("modprobe -nc dummy"), ""},
+		{"abbreviated dry run stays quiet", cmd("modprobe --dry dummy"), ""},
+		{"configuration query stays quiet", cmd("modprobe -c"), ""},
+		{"alias query stays quiet", cmd("modprobe -R dummy"), ""},
+		{"dependency query stays quiet", cmd("modprobe --show-depends dummy"), ""},
+		{"version query stays quiet", cmd("modprobe -V"), ""},
+		{"config file value is not a module", cmd("modprobe -C /etc/modprobe.conf"), ""},
+		{"module directory value is not a module", cmd("modprobe -d /lib/modules"), ""},
+		{"kernel version value is not a module", cmd("modprobe -S 6.1.0"), ""},
+		{"wait timeout value is not a module", cmd("modprobe -w 5000"), ""},
+		{"wait timeout with a module still fires", cmd("sudo modprobe -w 5000 dummy"), "privilege.kernel_module_change"},
+		{"modprobe without a module stays quiet", cmd("sudo modprobe"), ""},
+		{"unexpanded module name stays quiet", cmd(`sudo modprobe '$MOD'`), ""},
+		{"module listing stays quiet", cmd("lsmod | grep dummy"), ""},
+		{"module metadata stays quiet", cmd("modinfo dummy"), ""},
+		{"insmod help stays quiet", cmd("insmod --help"), ""},
+		{"quoted insmod example stays quiet", cmd(`echo "sudo insmod /tmp/mod.ko"`), ""},
+		{"module load in a commit message stays quiet", cmd(`git commit -m "try modprobe dummy"`), ""},
+	})
+}
+
 func TestLateralWorkloadExec(t *testing.T) {
 	eng := builtinEngine(t)
 	runCases(t, eng, []ruleCase{
