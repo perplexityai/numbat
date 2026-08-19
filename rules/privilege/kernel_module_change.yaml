@@ -4,7 +4,7 @@ enabled: true
 title: Agent requested a kernel module insertion or removal
 description: |-
   A command requested insertion or removal of a kernel module with insmod, rmmod, or
-  modprobe. Module code runs in kernel context, so the container, user, and sandbox limits
+  modprobe, including the busybox applet forms. Module code runs in kernel context, so the container, user, and sandbox limits
   that apply to the requesting process do not apply to it. Every option must be a
   recognized modifying option, so query, dry-run, and abbreviated forms do not match.
 severity: high
@@ -25,12 +25,23 @@ expr: |-
       )
     ) ||
     (
+      command.name == "busybox" &&
+      command.argv.size() > 2 &&
+      command.argv[1] in ["insmod", "rmmod", "modprobe"] &&
+      command.arguments.slice(2, command.arguments.size()).exists(arg,
+        !arg.value.startsWith("-") &&
+        (!arg.value.startsWith("$") || arg.expands)
+      )
+    ) ||
+    (
       command.name == "modprobe" &&
       command.argv.size() > 1 &&
       command.argv.slice(1, command.argv.size()).all(arg,
         !arg.startsWith("-") ||
         arg.matches("^-[abCdfiqrSsvw]+$") ||
-        arg.matches("^--(all|use-blacklist|config|dirname|force|force-vermagic|force-modversion|first-time|ignore-install|ignore-remove|quiet|remove|remove-dependencies|set-version|syslog|verbose|wait)$")
+        arg.matches("^-[abdfiqrsv]*[CdSw].+$") ||
+        arg.matches("^--(all|use-blacklist|config|dirname|force|force-vermagic|force-modversion|first-time|ignore-install|ignore-remove|quiet|remove|remove-dependencies|set-version|syslog|verbose|wait)$") ||
+        arg.matches("^--(config|dirname|set-version|wait)=.+$")
       ) &&
       lists.range(command.arguments.size()).exists(i,
         i > 0 &&
