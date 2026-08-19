@@ -3,11 +3,12 @@ version: "1.0"
 enabled: true
 title: Agent requested a kernel module insertion or removal
 description: |-
-  A command requested insertion or removal of a kernel module with insmod, rmmod, or
-  modprobe, including the busybox applet forms. Module code runs in kernel context, so the container, user, and sandbox limits
-  that apply to the requesting process do not apply to it. Every option must be a
-  recognized modifying option, so query, dry-run, and abbreviated forms do not match.
+  A command requested insertion or removal of a kernel module with insmod, rmmod,
+  modprobe, or the busybox applet forms. Module code runs in kernel context, so the
+  container, user, and sandbox limits on the requesting process do not apply to it. Every
+  option must be a recognized modifying option, so query and dry-run forms do not match.
 severity: high
+deny_message: Kernel module loading and unloading are not permitted in this environment. Do not retry with a different loader, an interpreter, or an equivalent path. Report the requirement to the workspace owner and continue without the module.
 expr: |-
   (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
   shell_commands.exists(command,
