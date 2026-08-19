@@ -8,6 +8,7 @@ description: |-
   to ordinary file verbs, so one read dumps kernel secrets and one write patches the running
   kernel. A listing or metadata command discloses no memory, so it does not match.
 severity: high
+deny_message: Reading or writing raw kernel memory is not permitted in this environment. The restriction is on the file, not the tool, so do not retry with another verb, an interpreter, or a different path to the same file. Report the requirement to the workspace owner and continue without it.
 expr: |-
   (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
   shell_commands.exists(command,

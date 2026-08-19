@@ -1187,6 +1187,9 @@ func TestPrivilegeKernelModuleChange(t *testing.T) {
 		{"insmod help stays quiet", cmd("insmod --help"), ""},
 		{"quoted insmod example stays quiet", cmd(`echo "sudo insmod /tmp/mod.ko"`), ""},
 		{"module load in a commit message stays quiet", cmd(`git commit -m "try modprobe dummy"`), ""},
+	})
+}
+
 func TestPrivilegeKernelMemoryAccess(t *testing.T) {
 	eng := builtinEngine(t)
 	runCases(t, eng, []ruleCase{
