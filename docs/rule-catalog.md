@@ -85,6 +85,12 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   addresses a Docker, containerd, CRI-O, or Podman control socket.
 - `privilege.host_namespace_entry` - a command requests PID 1 namespace or
   `/proc/1/root` access across a container boundary.
+- `privilege.kernel_module_change` - a command requests insertion or removal of a
+  kernel module with `insmod`, `rmmod`, `modprobe`, or the busybox applet forms;
+  query and dry-run forms are excluded.
+- `privilege.kernel_memory_access` - a command reads or writes `/dev/mem`,
+  `/dev/kmem`, or `/proc/kcore` through a file verb, a `dd` operand, or a
+  redirect; listing and metadata commands are excluded.
 
 ## Lateral movement
 

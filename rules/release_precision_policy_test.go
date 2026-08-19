@@ -31,6 +31,9 @@ func TestReleasePrecisionPrivilegePolicy(t *testing.T) {
 		{"later visudo help cannot suppress active policy edit", cmd("EDITOR=tee visudo; visudo --help"), "privilege.sudoers_tamper"},
 		{"quoted sudoers fixture is not a modification", cmd(`echo "tee /etc/sudoers.d/agent"`), ""},
 		{"quoted sudoers example cannot suppress a real mutation", cmd(`printf policy > /etc/sudoers.d/agent; echo "printf example > /etc/sudoers"`), "privilege.sudoers_tamper"},
+		{"module load beside a later query cannot be suppressed", cmd("sudo modprobe dummy; modprobe -c"), "privilege.kernel_module_change"},
+		{"query flag anywhere suppresses the load", cmd("sudo modprobe -n dummy"), ""},
+		{"option value is never the module operand", cmd("modprobe -d /lib/modules"), ""},
 		{"sudoers copy target", cmd("cp /tmp/policy /etc/sudoers.d/agent"), "privilege.sudoers_tamper"},
 		{"moving active sudoers away is tampering", cmd("mv /etc/sudoers /tmp/sudoers"), "privilege.sudoers_tamper"},
 		{"moving active sudoers away with PowerShell is tampering", cmd("Move-Item -Path /etc/sudoers -Destination /tmp/sudoers"), "privilege.sudoers_tamper"},
@@ -50,6 +53,9 @@ func TestReleasePrecisionPrivilegePolicy(t *testing.T) {
 		{"all container capabilities", cmd("docker run --cap-add=ALL alpine sh"), "privilege.container_host_escape"},
 		{"container host-root bind", cmd("docker run -v /:/host alpine sh"), "privilege.container_host_escape"},
 		{"container runtime socket bind", cmd("docker run -v /var/run/docker.sock:/var/run/docker.sock docker:cli"), "privilege.container_host_escape"},
+		{"memory read beside a later help flag cannot be suppressed", cmd("sudo cat /dev/mem; xxd --help"), "privilege.kernel_memory_access"},
+		{"help output is never a memory read", cmd("xxd --help /dev/mem"), ""},
+		{"here string names the device but reads nothing", cmd("cat <<< /dev/mem"), ""},
 	})
 }
 
