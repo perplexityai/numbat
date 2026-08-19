@@ -53,6 +53,9 @@ func TestReleasePrecisionPrivilegePolicy(t *testing.T) {
 		{"all container capabilities", cmd("docker run --cap-add=ALL alpine sh"), "privilege.container_host_escape"},
 		{"container host-root bind", cmd("docker run -v /:/host alpine sh"), "privilege.container_host_escape"},
 		{"container runtime socket bind", cmd("docker run -v /var/run/docker.sock:/var/run/docker.sock docker:cli"), "privilege.container_host_escape"},
+		{"memory read beside a later help flag cannot be suppressed", cmd("sudo cat /dev/mem; xxd --help"), "privilege.kernel_memory_access"},
+		{"help output is never a memory read", cmd("xxd --help /dev/mem"), ""},
+		{"here string names the device but reads nothing", cmd("cat <<< /dev/mem"), ""},
 	})
 }
 
