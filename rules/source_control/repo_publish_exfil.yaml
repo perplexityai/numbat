@@ -1,0 +1,52 @@
+id: source.repo_publish_exfil
+version: "1.0"
+enabled: true
+deny_message: Repository creation or publication through GitHub CLI is blocked. Do not retry or use another route.
+title: GitHub repository publication requested
+description: |-
+  The agent asked GitHub CLI to fork, create a public repository, or make an
+  existing repository public.
+severity: high
+expr: |-
+  (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
+  shell_commands.exists(command,
+    command.name.matches("(?i)^gh(\\.exe)?$") &&
+    command.argv.size() > 2 &&
+    command.argv[1] == "repo" &&
+    !lists.range(command.argv.size()).exists(i,
+      !lists.range(i).exists(j, command.argv[j] == "--") &&
+      (
+        command.argv[i] == "--help" ||
+        command.argv[i].matches("(?i)^--help=(true|t|1)$") ||
+        (command.argv[2] == "fork" && command.argv[i].startsWith("-h"))
+      )
+    ) &&
+    (
+      command.argv[2] == "fork" ||
+      (
+        command.argv[2] in ["create", "new"] &&
+        lists.range(command.argv.size()).exists(i,
+          !lists.range(i).exists(j, command.argv[j] == "--") &&
+          (
+            command.argv[i] == "--public" ||
+            command.argv[i].matches("(?i)^--public=(true|t|1)$")
+          )
+        )
+      ) ||
+      (
+        command.argv[2] == "edit" &&
+        lists.range(command.argv.size()).exists(i,
+          !lists.range(i).exists(j, command.argv[j] == "--") &&
+          (
+            command.argv[i].matches("(?i)^--visibility=public$") ||
+            (
+              i + 1 < command.argv.size() &&
+              command.argv[i] == "--visibility" &&
+              command.argv[i + 1].matches("(?i)^public$")
+            )
+          )
+        )
+      )
+    )
+  )
+tags: [attack.t1567, data_exfil, source_control]

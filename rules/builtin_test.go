@@ -161,6 +161,7 @@ func TestCommandRulesAcceptOnlyOTelCompletionRecords(t *testing.T) {
 		{`:(){ :|:& };:`, "impact.fork_bomb"},
 		{"nohup xmrig --url pool.example:3333", "impact.cryptomining_launch"},
 		{"GIT_DIR=/repo git remote set-url origin https://mirror.example/repo.git", "source.git_remote_tamper"},
+		{"gh repo create pplx-teammatebot/teammate-pr-visual-assets --public", "source.repo_publish_exfil"},
 		{"cat key.pub >> ~/.ssh/authorized_keys", "persistence.ssh_authorized_keys_command"},
 		{"usermod -aG sudo agent", "persistence.privileged_account_change"},
 		{"printf '{}' > ~/.codex/hooks.json", "tamper.agent_config_write"},
