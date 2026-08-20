@@ -114,6 +114,8 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   during normal Git operations. The exact bare `!gh auth git-credential`
   helper form is excluded; path-qualified and extended shell helpers remain
   detectable.
+- `source.repo_publish_exfil` - GitHub CLI creates a public repository, makes
+  an existing repository public, or forks a repository.
 
 ## Tampering
 
