@@ -59,6 +59,51 @@ func TestGroupSessionsPartitionsBySourceType(t *testing.T) {
 	}
 }
 
+func TestGroupSessionsKeepsSubagentsDistinct(t *testing.T) {
+	parent := ev("codex", "root-1", "2026-08-31T17:04:00Z", model.EventCommandExec, "/parent.jsonl")
+	child := func(id, ts string) model.Event {
+		ev := ev("codex", id, ts, model.EventCommandExec, "/"+id+".jsonl")
+		ev.SessionTreeID = "root-1"
+		ev.ParentSessionID = "root-1"
+		ev.SubAgent = "default"
+		ev.SubAgentID = id
+		return ev
+	}
+	got := groupSessions([]model.Event{
+		child("child-2", "2026-08-31T17:04:02Z"),
+		parent,
+		child("child-1", "2026-08-31T17:04:01Z"),
+	})
+	if len(got) != 3 {
+		t.Fatalf("got %d sessions, want parent plus two children", len(got))
+	}
+	for _, session := range got {
+		if session.SessionID == "root-1" {
+			continue
+		}
+		if session.SessionTreeID != "root-1" || session.ParentSessionID != "root-1" || session.SubAgent != "default" || session.SubAgentID != session.SessionID {
+			t.Fatalf("child session context = %+v", session)
+		}
+	}
+}
+
+func TestGroupSessionsUsesChildIDWhenHostSessionIsShared(t *testing.T) {
+	child := func(id, ts string) model.Event {
+		ev := ev("codex", "shared-tree", ts, model.EventCommandExec, "")
+		ev.SourceType = model.SourceHook
+		ev.SubAgent = "default"
+		ev.SubAgentID = id
+		return ev
+	}
+	got := groupSessions([]model.Event{
+		child("child-1", "2026-08-31T17:04:01Z"),
+		child("child-2", "2026-08-31T17:04:02Z"),
+	})
+	if len(got) != 2 || got[0].SubAgentID == got[1].SubAgentID {
+		t.Fatalf("shared host session collapsed concurrent children: %+v", got)
+	}
+}
+
 // Within a session, events sort by timestamp ascending; ties and empty timestamps
 // keep their original input (artifact emission) order via the index tiebreaker.
 func TestGroupSessionsOrdersWithinSession(t *testing.T) {

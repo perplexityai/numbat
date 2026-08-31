@@ -50,9 +50,13 @@ func (CodexExtractor) Agent() string { return model.AgentCodex }
 // seeds and each turn_context updates. Every emitted event is stamped with the
 // current values so a project path is attributed even when it changes mid-file.
 type codexState struct {
-	sessionID   string
-	projectPath string
-	metaSeen    bool
+	sessionID       string
+	sessionTreeID   string
+	parentSessionID string
+	subAgentID      string
+	subAgent        string
+	projectPath     string
+	metaSeen        bool
 	// forkReplay suppresses copied parent records until a task_started UUID
 	// ordered after the child thread UUID marks the first child turn.
 	forkReplay    bool
@@ -314,8 +318,9 @@ func (e CodexExtractor) applySessionMeta(res *Result, src Source, sha string, st
 	}
 	firstMeta := !st.metaSeen
 	st.metaSeen = true
-	if st.sessionID == "" {
+	if firstMeta {
 		st.sessionID = meta.ID
+		st.sessionTreeID, st.parentSessionID, st.subAgentID, st.subAgent = meta.relationshipContext()
 	}
 	if st.projectPath == "" {
 		st.projectPath = meta.Cwd
@@ -955,14 +960,18 @@ func markToolResultError(res *Result, callID string) bool {
 // emits several events (an apply_patch touching multiple files).
 func (e CodexExtractor) base(src Source, sha string, st *codexState, line int, ts string, idx int) model.Event {
 	return model.Event{
-		SchemaVersion: model.SchemaVersion,
-		CaseID:        src.CaseID,
-		EventID:       codexEventID(src.Path, line, idx),
-		SourceAgent:   model.AgentCodex,
-		SourceType:    model.SourceArtifact,
-		Timestamp:     ts,
-		ProjectPath:   st.projectPath,
-		SessionID:     st.sessionID,
+		SchemaVersion:   model.SchemaVersion,
+		CaseID:          src.CaseID,
+		EventID:         codexEventID(src.Path, line, idx),
+		SourceAgent:     model.AgentCodex,
+		SourceType:      model.SourceArtifact,
+		Timestamp:       ts,
+		ProjectPath:     st.projectPath,
+		SessionID:       st.sessionID,
+		SessionTreeID:   st.sessionTreeID,
+		ParentSessionID: st.parentSessionID,
+		SubAgent:        st.subAgent,
+		SubAgentID:      st.subAgentID,
 		Evidence: model.Evidence{
 			ArtifactType: artifactCodexRollout,
 			LocalPath:    src.Path,

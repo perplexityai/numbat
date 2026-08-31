@@ -262,6 +262,18 @@ func renderTimelineText(sessions []timelineSession, stdout io.Writer) error {
 			id = "(no session id)"
 		}
 		fmt.Fprintf(w, "session %s [%s]\n", terminalText(id), terminalText(s.SourceAgent))
+		if s.SessionTreeID != "" {
+			fmt.Fprintf(w, "  tree:    %s\n", terminalText(s.SessionTreeID))
+		}
+		if s.ParentSessionID != "" {
+			fmt.Fprintf(w, "  parent:  %s\n", terminalText(s.ParentSessionID))
+		}
+		if s.SubAgent != "" {
+			fmt.Fprintf(w, "  subagent: %s\n", terminalText(s.SubAgent))
+		}
+		if s.SubAgentID != "" && s.SubAgentID != s.SessionID {
+			fmt.Fprintf(w, "  subagent_id: %s\n", terminalText(s.SubAgentID))
+		}
 		if s.ProjectPath != "" {
 			fmt.Fprintf(w, "  project: %s\n", terminalText(s.ProjectPath))
 		}

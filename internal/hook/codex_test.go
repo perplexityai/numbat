@@ -188,13 +188,13 @@ func TestMapCodexEvents(t *testing.T) {
 				if ev.Actor != model.ActorSystem {
 					t.Errorf("actor = %q, want system", ev.Actor)
 				}
-				if ev.SubAgent != "code-reviewer" {
-					t.Errorf("sub_agent = %q, want agent_type profile", ev.SubAgent)
+				if ev.SessionID != "agent-opaque-1" || ev.SessionTreeID != "sess-1" || ev.SubAgentID != "agent-opaque-1" || ev.SubAgent != "code-reviewer" {
+					t.Errorf("subagent context = session %q tree %q id %q role %q", ev.SessionID, ev.SessionTreeID, ev.SubAgentID, ev.SubAgent)
 				}
 			},
 		},
 		{
-			name:  "SubagentStop → session.end with sub_agent id fallback",
+			name:  "SubagentStop → session.end keeps opaque id separate",
 			event: "SubagentStop",
 			payload: map[string]any{
 				"hook_event_name": "SubagentStop",
@@ -207,8 +207,8 @@ func TestMapCodexEvents(t *testing.T) {
 				if ev.Actor != model.ActorSystem {
 					t.Errorf("actor = %q, want system", ev.Actor)
 				}
-				if ev.SubAgent != "agent-opaque-2" {
-					t.Errorf("sub_agent = %q, want agent_id fallback", ev.SubAgent)
+				if ev.SessionID != "agent-opaque-2" || ev.SessionTreeID != "sess-1" || ev.SubAgentID != "agent-opaque-2" || ev.SubAgent != "" {
+					t.Errorf("subagent context = session %q tree %q id %q role %q", ev.SessionID, ev.SessionTreeID, ev.SubAgentID, ev.SubAgent)
 				}
 			},
 		},
@@ -462,6 +462,102 @@ func TestMapCodexEvents(t *testing.T) {
 			}
 			if tc.check != nil {
 				tc.check(t, ev)
+			}
+		})
+	}
+}
+
+func TestMapCodexSubagentContextAcrossCallbacks(t *testing.T) {
+	const (
+		treeID  = "parent-tree-1"
+		childID = "child-thread-1"
+	)
+	cases := []struct {
+		event string
+		want  model.EventType
+	}{
+		{"SubagentStart", model.EventSessionStart},
+		{"PreToolUse", model.EventCommandExec},
+		{"PostToolUse", model.EventCommandResult},
+		{"SubagentStop", model.EventSessionEnd},
+	}
+	for _, tc := range cases {
+		t.Run(tc.event, func(t *testing.T) {
+			payload := map[string]any{
+				"hook_event_name": tc.event,
+				"session_id":      treeID,
+				"agent_id":        childID,
+				"agent_type":      "default",
+				"tool_name":       "Bash",
+				"tool_input":      map[string]any{"command": "printf ok"},
+				"tool_response":   map[string]any{"exit_code": float64(0)},
+			}
+			lc, err := ResolveLifecycle(AgentCodex, tc.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev := Map(lc, AgentCodex, model.AgentCodex, "child-event", payload)
+			if ev.EventType != tc.want {
+				t.Fatalf("event_type = %q, want %q", ev.EventType, tc.want)
+			}
+			if ev.SessionID != childID || ev.SessionTreeID != treeID || ev.ParentSessionID != "" || ev.SubAgentID != childID || ev.SubAgent != "default" {
+				t.Fatalf("context = session %q tree %q parent %q id %q role %q", ev.SessionID, ev.SessionTreeID, ev.ParentSessionID, ev.SubAgentID, ev.SubAgent)
+			}
+		})
+	}
+}
+
+func TestMapCodexConcurrentDefaultSubagentsStayDistinct(t *testing.T) {
+	mapChild := func(id string) model.Event {
+		return Map(LifecycleCodexPreTool, AgentCodex, model.AgentCodex, "event-"+id, map[string]any{
+			"hook_event_name": "PreToolUse",
+			"session_id":      "parent-tree-1",
+			"agent_id":        id,
+			"agent_type":      "default",
+			"tool_name":       "Bash",
+			"tool_input":      map[string]any{"command": "printf ok"},
+		})
+	}
+	first := mapChild("child-thread-1")
+	second := mapChild("child-thread-2")
+	if first.SessionID == second.SessionID || first.SubAgentID == second.SubAgentID {
+		t.Fatalf("concurrent children collapsed: first=%+v second=%+v", first, second)
+	}
+	if first.SubAgent != "default" || second.SubAgent != "default" || first.SessionTreeID != second.SessionTreeID {
+		t.Fatalf("shared role/tree context lost: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestMapCodexPartialSubagentContext(t *testing.T) {
+	tests := []struct {
+		name        string
+		extra       map[string]any
+		wantSession string
+		wantTree    string
+		wantID      string
+		wantRole    string
+	}{
+		{name: "role only", extra: map[string]any{"agent_type": "reviewer"}, wantSession: "parent-1", wantRole: "reviewer"},
+		{name: "id only", extra: map[string]any{"agent_id": "child-1"}, wantSession: "child-1", wantTree: "parent-1", wantID: "child-1"},
+		{name: "neither", extra: map[string]any{}, wantSession: "parent-1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{
+				"hook_event_name": "PreToolUse",
+				"session_id":      "parent-1",
+				"tool_name":       "Bash",
+				"tool_input":      map[string]any{"command": "printf ok"},
+			}
+			for k, v := range tc.extra {
+				payload[k] = v
+			}
+			ev := Map(LifecycleCodexPreTool, AgentCodex, model.AgentCodex, "event-1", payload)
+			if ev.SessionID != tc.wantSession || ev.SessionTreeID != tc.wantTree || ev.SubAgentID != tc.wantID || ev.SubAgent != tc.wantRole {
+				t.Fatalf("context = session %q tree %q id %q role %q", ev.SessionID, ev.SessionTreeID, ev.SubAgentID, ev.SubAgent)
+			}
+			if ev.ParentSessionID != "" {
+				t.Fatalf("parent_session_id = %q, Codex hooks do not report the immediate parent", ev.ParentSessionID)
 			}
 		})
 	}

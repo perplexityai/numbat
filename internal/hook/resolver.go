@@ -133,8 +133,21 @@ func (r resolver) toolCallID() string {
 	return r.extraStr(keys...)
 }
 
-// sessionID resolves the session identifier across agent spellings.
+// envelopeSessionID resolves the session identifier reported in the hook
+// envelope, before any agent-specific active-child normalization.
+func (r resolver) envelopeSessionID() string {
+	return r.envStr("session_id", "sessionId", "sessionID", "conversation_id", "conversationId", "trajectory_id", "execution_id", "taskId")
+}
+
+// sessionID resolves the active session identifier across agent spellings.
 func (r resolver) sessionID() string {
+	if r.agent == AgentCodex {
+		// Codex reports the child thread id as agent_id while session_id remains
+		// shared by the session tree. Use the child thread as the active session.
+		if id := r.subAgentID(); id != "" {
+			return id
+		}
+	}
 	if r.agent == AgentHermes {
 		switch strings.ToLower(r.hookEventName()) {
 		case "subagent_start", "subagent_stop":
@@ -153,7 +166,7 @@ func (r resolver) sessionID() string {
 			return id
 		}
 	}
-	if id := r.envStr("session_id", "sessionId", "sessionID", "conversation_id", "conversationId", "trajectory_id", "execution_id", "taskId"); id != "" {
+	if id := r.envelopeSessionID(); id != "" {
 		return id
 	}
 	if r.agent == AgentHermes {
@@ -162,9 +175,39 @@ func (r resolver) sessionID() string {
 	return ""
 }
 
-// subAgent resolves a named nested agent/subagent identity from lifecycle
-// payloads that expose one. Prefer the stable profile/type when present; fall back
-// to the opaque id only when no human-meaningful name was reported.
+// sessionTreeID returns a separate source-provided tree correlation id. Codex
+// omits this projection for root events where it equals the active session.
+func (r resolver) sessionTreeID() string {
+	if r.agent != AgentCodex {
+		return ""
+	}
+	childID := r.subAgentID()
+	if childID == "" {
+		return ""
+	}
+	treeID := r.envelopeSessionID()
+	if treeID == childID {
+		return ""
+	}
+	return treeID
+}
+
+// subAgentID returns a source-defined stable child identity. Codex defines
+// agent_id as the active child thread id; no generic fallback is used because
+// similarly named fields on other agents have different contracts.
+func (r resolver) subAgentID() string {
+	if r.agent != AgentCodex {
+		return ""
+	}
+	id := r.envStr("agent_id", "agentId")
+	if id != "" && id == r.envelopeSessionID() {
+		return ""
+	}
+	return id
+}
+
+// subAgent resolves a human-readable nested-agent profile. Existing integrations
+// use an opaque id as a fallback; Codex keeps its verified thread id separately.
 func (r resolver) subAgent() string {
 	if v := r.envStr(
 		"sub_agent", "subAgent",
@@ -179,6 +222,9 @@ func (r resolver) subAgent() string {
 		if v := r.extraStr("child_role", "child_subagent_id", "parent_subagent_id"); v != "" {
 			return v
 		}
+	}
+	if r.agent == AgentCodex {
+		return ""
 	}
 	return r.envStr("agent_id", "agentId", "subagent_id", "subagentId")
 }

@@ -199,7 +199,7 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 
 ```json
 {
-  "schema_version": "0.3.0",
+  "schema_version": "0.4.0",
   "record_type": "indicator",
   "run_id": "run-example-01",
   "endpoint": {
@@ -250,7 +250,7 @@ is omitted when that event has no valid timestamp.
 
 numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`,
 `finding`, `enforcement`, `indicator`, or `scan_summary`) plus a `run_id` and
-`schema_version` (`0.3.0`). Every line carries an `endpoint` object with
+`schema_version` (`0.4.0`). Every line carries an `endpoint` object with
 `hostname`, `os`, `arch`,
 `username`, and `uid`; set `NUMBAT_DEVICE_ID` to add a stable opaque
 `endpoint.device_id` for fleet joins.
@@ -289,7 +289,7 @@ A one-batch run can therefore report zero for both; use `http_failed`,
 diagnostics, and the process exit code to determine delivery health.
 
 Machine-readable JSON Schemas for the record stream and each `record_type` live
-under [schema/v0.3.0](schema/v0.3.0/). Use `record-stream.schema.json` when
+under [schema/v0.4.0](schema/v0.4.0/). Use `record-stream.schema.json` when
 validating arbitrary NDJSON lines, or route on `record_type` and validate against
 the per-record schema.
 
@@ -300,9 +300,10 @@ reserved for inferred or best-effort normalizations.
 ## timeline
 
 `timeline` is a read-only view over the same extraction `scan` uses. It groups
-events by `source_agent`, `source_type`, and `session_id`; sessionless at-rest
-events fall back to their artifact path. Each chronological step retains its
-evidence reference.
+events by `source_agent`, `source_type`, active `session_id`, and
+`sub_agent_id` when provided; sessionless at-rest events fall back to their
+artifact path. The session header shows available tree, parent, role, and child
+identity context. Each chronological step retains its evidence reference.
 
 Unlike sequence correlation, a timeline does not split a conversation when the
 project path is missing or the agent changes its working directory;
@@ -841,7 +842,7 @@ a manifest.
 ## version
 
 `numbat version` prints the tool version and the record schema version
-(`0.3.0`). Release and schema versions advance independently; the schema changes
+(`0.4.0`). Release and schema versions advance independently; the schema changes
 only when the emitted record contract changes.
 
 ## Exit status

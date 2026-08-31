@@ -2,6 +2,7 @@ package extract
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -1473,6 +1474,124 @@ func TestExtractCodexFirstSessionMetaWins(t *testing.T) {
 	}
 	if acts[0].SessionID != "first" {
 		t.Errorf("session_id = %q, want first (the first session_meta is canonical)", acts[0].SessionID)
+	}
+}
+
+func TestExtractCodexSubagentContext(t *testing.T) {
+	body, err := os.ReadFile("testdata/.codex/sessions/2026/08/31/rollout-codex-subagent.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := extractCodex(t, string(body))
+	if len(res.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
+	}
+	if len(res.Events) != 4 {
+		t.Fatalf("got %d events, want lifecycle plus command pair: %s", len(res.Events), dumpEvents(res.Events))
+	}
+	for _, ev := range res.Events {
+		if ev.SessionID != "019f84fe-e5e1-7f80-8745-493ccff96186" {
+			t.Errorf("%s session_id = %q", ev.EventType, ev.SessionID)
+		}
+		if ev.SessionTreeID != "019f620e-730d-76e2-8204-f108cfe2f082" {
+			t.Errorf("%s session_tree_id = %q", ev.EventType, ev.SessionTreeID)
+		}
+		if ev.ParentSessionID != "019f620e-730d-76e2-8204-f108cfe2f082" {
+			t.Errorf("%s parent_session_id = %q", ev.EventType, ev.ParentSessionID)
+		}
+		if ev.SubAgentID != ev.SessionID || ev.SubAgent != "/agents/reviewer" {
+			t.Errorf("%s subagent context = id %q role %q", ev.EventType, ev.SubAgentID, ev.SubAgent)
+		}
+	}
+	if res.Events[0].EventType != model.EventSessionStart ||
+		res.Events[1].EventType != model.EventCommandExec ||
+		res.Events[2].EventType != model.EventCommandResult ||
+		res.Events[3].EventType != model.EventSessionEnd {
+		t.Fatalf("event order = %s", dumpEvents(res.Events))
+	}
+}
+
+func TestCodexSessionMetaSourceShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		payload    string
+		wantTree   string
+		wantParent string
+		wantID     string
+		wantRole   string
+		wantDepth  int
+	}{
+		{
+			name:    "ordinary string source",
+			payload: `{"id":"root-1","session_id":"root-1","source":"cli","thread_source":"user"}`,
+		},
+		{
+			name:     "thread spawn prefers role",
+			payload:  `{"id":"child-1","session_id":"tree-1","parent_thread_id":"parent-1","agent_path":"/agents/reviewer","agent_nickname":"Cosmetic","agent_role":"security-reviewer","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-nested","agent_path":"/agents/nested","agent_nickname":"Nested","agent_role":"nested-role"}}},"thread_source":"subagent"}`,
+			wantTree: "tree-1", wantParent: "parent-1", wantID: "child-1", wantRole: "security-reviewer",
+		},
+		{
+			name:       "thread spawn nested fallback",
+			payload:    `{"id":"child-2","session_id":"tree-1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-2","depth":2,"agent_path":"/agents/nested","agent_nickname":"Cosmetic","agent_role":null}}}}`,
+			wantTree:   "tree-1",
+			wantParent: "parent-2",
+			wantID:     "child-2",
+			wantRole:   "/agents/nested",
+			wantDepth:  2,
+		},
+		{
+			name:     "agent type compatibility alias",
+			payload:  `{"id":"child-3","session_id":"tree-1","agent_type":"reviewer","thread_source":"subagent"}`,
+			wantTree: "tree-1",
+			wantID:   "child-3",
+			wantRole: "reviewer",
+		},
+		{
+			name:     "typed internal subagent",
+			payload:  `{"id":"child-4","session_id":"tree-1","source":{"subagent":"review"}}`,
+			wantTree: "tree-1",
+			wantID:   "child-4",
+			wantRole: "review",
+		},
+		{
+			name:     "unknown source object stays tolerant",
+			payload:  `{"id":"root-2","session_id":"tree-2","source":{"future":{"kind":"new"}}}`,
+			wantTree: "tree-2",
+		},
+		{
+			name:    "null source stays tolerant",
+			payload: `{"id":"root-3","source":null}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var meta codexSessionMeta
+			if err := json.Unmarshal([]byte(tc.payload), &meta); err != nil {
+				t.Fatal(err)
+			}
+			tree, parent, id, role := meta.relationshipContext()
+			if tree != tc.wantTree || parent != tc.wantParent || id != tc.wantID || role != tc.wantRole {
+				t.Fatalf("context = (%q, %q, %q, %q), want (%q, %q, %q, %q)", tree, parent, id, role, tc.wantTree, tc.wantParent, tc.wantID, tc.wantRole)
+			}
+			_, _, spawn := meta.subagentContext()
+			if tc.wantDepth > 0 && (spawn.Depth == nil || *spawn.Depth != tc.wantDepth) {
+				t.Fatalf("depth = %v, want %d", spawn.Depth, tc.wantDepth)
+			}
+		})
+	}
+}
+
+func TestExtractCodexRepeatedSessionMetaKeepsRelationship(t *testing.T) {
+	body := strings.Join([]string{
+		`{"timestamp":"t1","type":"session_meta","payload":{"id":"child-1","session_id":"tree-1","parent_thread_id":"parent-1","agent_role":"reviewer","thread_source":"subagent","source":"cli","cwd":"/first"}}`,
+		`{"timestamp":"t2","type":"session_meta","payload":{"id":"child-2","session_id":"tree-2","parent_thread_id":"parent-2","agent_role":"writer","thread_source":"subagent","cwd":"/second"}}`,
+		`{"timestamp":"t3","type":"response_item","payload":{"type":"message","role":"user","content":"work"}}`,
+	}, "\n")
+	res := extractCodex(t, body)
+	for _, ev := range res.Events {
+		if ev.SessionID != "child-1" || ev.SessionTreeID != "tree-1" || ev.ParentSessionID != "parent-1" || ev.SubAgentID != "child-1" || ev.SubAgent != "reviewer" {
+			t.Fatalf("later session_meta changed canonical context: %+v", ev)
+		}
 	}
 }
 

@@ -77,6 +77,11 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
 
+Codex child rollouts provide an active child thread and explicit parent.
+Current Codex hooks provide the child thread and a shared session-tree ID, but
+not the immediate parent of a nested child; `parent_session_id` therefore stays
+absent on those live records. Parent-side spawn calls remain parent actions.
+
 With `--include-reasoning`, at-rest parsers map source-recorded reasoning from
 Claude Code, Codex, Gemini session journals, OpenClaw, Pi, Kimi Code, and legacy
 OpenCode part stores. Live assistant text is available from Claude Code and
@@ -224,6 +229,8 @@ boundary.
 
 - Claude Code hooks: <https://code.claude.com/docs/en/hooks>
 - Codex hooks: <https://learn.chatgpt.com/docs/hooks>
+- Codex v0.150.1 session metadata: <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/protocol.rs>
+- Codex v0.150.1 sub-agent hook context: <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/hook_runtime.rs>
 - Gemini CLI hooks: <https://geminicli.com/docs/hooks/>
 - Cursor hooks: <https://cursor.com/docs/hooks>
 - Cursor `subagentStart` deny bug (confirmed 20 July 2026): <https://forum.cursor.com/t/subagentstart-hook-deny-is-not-enforced/166143/7>

@@ -16,6 +16,7 @@ import (
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
+	"github.com/perplexityai/numbat/internal/pipeline"
 	"github.com/perplexityai/numbat/internal/state"
 	builtinrules "github.com/perplexityai/numbat/rules"
 )
@@ -524,6 +525,22 @@ func TestEnforcePersistsDenyDecision(t *testing.T) {
 	}
 	if decision["run_id"] != records[0]["run_id"] {
 		t.Fatalf("run ids differ: decision=%v finding=%v", decision["run_id"], records[0]["run_id"])
+	}
+}
+
+func TestHookEnforcementDecisionPreservesSessionContext(t *testing.T) {
+	dec := &pipeline.EnforceDecision{
+		Matched:         true,
+		Blocked:         true,
+		SessionID:       "child-1",
+		SessionTreeID:   "tree-1",
+		ParentSessionID: "parent-1",
+		SubAgent:        "reviewer",
+		SubAgentID:      "child-1",
+	}
+	got := hookEnforcementDecision("run-1", hookOptions{enforce: true, sel: emitSelection{findings: true}}, dec, nil, 0)
+	if got.SessionID != "child-1" || got.SessionTreeID != "tree-1" || got.ParentSessionID != "parent-1" || got.SubAgent != "reviewer" || got.SubAgentID != "child-1" {
+		t.Fatalf("enforcement record lost session or sub-agent context: %+v", got)
 	}
 }
 
