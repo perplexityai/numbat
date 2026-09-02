@@ -10,7 +10,7 @@ require (
 	golang.org/x/sys v0.47.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7
 	google.golang.org/protobuf v1.36.12
-	mvdan.cc/sh/v3 v3.13.1
+	mvdan.cc/sh/v3 v3.14.0
 )
 
 require (
