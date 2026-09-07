@@ -759,6 +759,10 @@ violations, and rule-evaluation errors report the fixture line number. `check`,
 
 ```
 --fixture FILE               NDJSON events file to evaluate (required)
+--json                       emit a machine-readable NDJSON result stream
+                             (schema rules-test-result.v1) instead of
+                             tab-separated matches; see
+                             docs/schema/rules-test-result.v1.md
 --require-match              exit non-zero if no rule matches (for positive fixtures)
 --expect RULE_ID             exit non-zero if this rule id does not match
                              at least once (repeatable)
@@ -774,7 +778,14 @@ numbat rules list
 numbat rules test --fixture events.ndjson --require-match
 numbat rules test --fixture positive.ndjson --expect secrets.agent_read_env
 numbat rules test --fixture negative.ndjson --expect-none
+numbat rules test --json --fixture events.ndjson
 ```
+
+The `--json` mode emits one `event_result` object per fixture line and one
+terminal `summary` object, distinguishing findings, enforcement eligibility,
+shell-parse coverage, malformed input, and evaluator failure. It is intended
+for downstream consumers that need a stable, versioned direct-evaluation
+result (see [`docs/schema/rules-test-result.v1.md`](schema/rules-test-result.v1.md)).
 
 ## case bundles
 

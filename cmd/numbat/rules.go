@@ -306,7 +306,10 @@ func runRulesList(args []string, stdout, stderr io.Writer) int {
 
 // runRulesTest evaluates the compiled rules against a fixture of NDJSON
 // events (one model.Event per line) and prints each match as "rule_id\tevent_id".
-// It is the deterministic, offline check that rules fire as intended.
+// It is the deterministic, offline check that rules fire as intended. With
+// --json the same evaluation emits a machine-readable NDJSON result contract
+// on stdout instead: one event_result per successfully evaluated fixture
+// line plus a terminal summary. See docs/schema/rules-test-result.v1.md.
 func runRulesTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -315,11 +318,12 @@ func runRulesTest(args []string, stdout, stderr io.Writer) int {
 	expectNone := fs.Bool("expect-none", false, "exit non-zero if any rule matches (for negative fixtures)")
 	var expect multiFlag
 	fs.Var(&expect, "expect", "rule ID expected to match at least once (repeatable)")
+	jsonOut := fs.Bool("json", false, "emit a machine-readable NDJSON result stream (schema rules-test-result.v1) instead of tab-separated matches")
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat rules test --fixture FILE [--require-match] [--expect RULE_ID ...] [--expect-none] [--rules-dir DIR ...] [--no-builtin-rules]")
-		fmt.Fprintln(stderr, "\nEvaluate fixture events and print rule_id<TAB>event_id for each match.")
+		fmt.Fprintln(stderr, "usage: numbat rules test --fixture FILE [--json] [--require-match] [--expect RULE_ID ...] [--expect-none] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "\nEvaluate fixture events and print rule_id<TAB>event_id for each match, or a JSON result stream with --json.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -354,6 +358,10 @@ func runRulesTest(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
 		return 1
+	}
+
+	if *jsonOut {
+		return runRulesTestJSON(eng, f, stdout, stderr, *requireMatch, *expectNone, expect)
 	}
 
 	matched, matchedRules, evalErr := evalFixture(eng, f, stdout)

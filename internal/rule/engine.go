@@ -625,6 +625,20 @@ func (e *Engine) HasEnforceEligibleRules() bool {
 	return false
 }
 
+// CountEnforceEligibleRules returns the number of enabled compiled rules
+// that may block in live hook enforce mode. It is the count companion of
+// HasEnforceEligibleRules and is used by machine-readable surfaces that
+// need to report catalog shape (for example, `rules test --json`).
+func (e *Engine) CountEnforceEligibleRules() int {
+	n := 0
+	for _, c := range e.rules {
+		if c.rule.IsEnforceEligible() {
+			n++
+		}
+	}
+	return n
+}
+
 // SequenceRules returns the compiled sequence rules in load order, for a
 // window tracker to evaluate. Empty when the load contains none.
 func (e *Engine) SequenceRules() []*SequenceRule {
@@ -644,6 +658,70 @@ func (e *Engine) RuleIDs() []string {
 		ids[i] = c.rule.ID
 	}
 	return ids
+}
+
+// EvalError names an individual rule whose CEL program failed at runtime for
+// one event. It is emitted by EvalDetailed so consumers can attribute a
+// failure to a specific rule without parsing a joined error string.
+type EvalError struct {
+	RuleID  string
+	Message string
+}
+
+// EvalDiagnostics carries the non-per-rule signals produced while evaluating
+// one event: the shell-analysis error (if any) and its usability flags. It
+// lets callers distinguish a bounded, unusable shell parse from a clean
+// no-match without inspecting internal state.
+type EvalDiagnostics struct {
+	ShellParseError      error
+	ShellUsable          bool
+	ShellEnforcementSafe bool
+}
+
+// EvalDetailed is the machine-readable companion of Eval. It returns the
+// matches, the per-rule evaluator errors, and the shared shell-analysis
+// diagnostics for one event. A per-rule failure does not suppress matches
+// from other rules. Callers that only want the joined error text should
+// keep using Eval; EvalDetailed is intended for surfaces that expose the
+// distinction between "clean no-match", "evaluator failure", and
+// "bounded/unusable coverage" as separate result classes (for example, the
+// `rules test --json` result contract).
+func (e *Engine) EvalDetailed(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
+	activations := prepareActivations(e.env.CELTypeAdapter(), ev, e.usesShellCommands)
+	diag := EvalDiagnostics{
+		ShellParseError:      activations.err,
+		ShellUsable:          activations.shellUsable,
+		ShellEnforcementSafe: activations.shellEnforcementSafe,
+	}
+	var (
+		matches []Match
+		errs    []EvalError
+	)
+	for _, c := range e.rules {
+		if c.seq != nil {
+			continue
+		}
+		if activations.err != nil && c.program.usesShellCommands && !activations.shellUsable {
+			continue
+		}
+		out, _, err := c.program.program.Eval(activations.detection)
+		if err != nil {
+			errs = append(errs, EvalError{RuleID: c.rule.ID, Message: err.Error()})
+			continue
+		}
+		if asBool(out) {
+			enforcementMatch := c.rule.IsEnforceEligible()
+			if enforcementMatch && c.program.usesShellCommands && !activations.shellEnforcementSafe {
+				enforcementMatch = false
+			}
+			matches = append(matches, Match{
+				Rule:             cloneRule(c.rule),
+				Event:            ev,
+				EnforcementMatch: enforcementMatch,
+			})
+		}
+	}
+	return matches, errs, diag
 }
 
 // Eval runs every compiled single-event rule against one event and returns
