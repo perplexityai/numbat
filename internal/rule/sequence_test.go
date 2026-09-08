@@ -100,11 +100,17 @@ func TestSequenceEvalStep(t *testing.T) {
 	s := mustEngine(t, seqRule(nil)).SequenceRules()[0]
 	readEvent := model.Event{EventType: model.EventFileRead, FilePath: "/p/.env"}
 	execEvent := model.Event{EventType: model.EventCommandExec, Command: "curl http://x"}
-	read := PrepareSequenceActivations(readEvent, []*SequenceRule{s}).Detection
-	exec := PrepareSequenceActivations(execEvent, []*SequenceRule{s}).Detection
+	read, err := PrepareSequenceActivations(readEvent, []*SequenceRule{s})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := PrepareSequenceActivations(execEvent, []*SequenceRule{s})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		step int
-		act  map[string]any
+		act  SequenceActivations
 		want bool
 	}{
 		{0, read, true},
@@ -116,8 +122,8 @@ func TestSequenceEvalStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("step %d: %v", tc.step, err)
 		}
-		if got != tc.want {
-			t.Errorf("step %d = %v, want %v", tc.step, got, tc.want)
+		if got.Match != tc.want {
+			t.Errorf("step %d = %v, want %v", tc.step, got.Match, tc.want)
 		}
 	}
 }
@@ -125,7 +131,8 @@ func TestSequenceEvalStep(t *testing.T) {
 func TestSequenceStepBounds(t *testing.T) {
 	s := mustEngine(t, seqRule(nil)).SequenceRules()[0]
 	for _, step := range []int{-1, s.StepCount()} {
-		if got, err := s.EvalStep(step, nil); err == nil || got {
+		got, err := s.EvalStep(step, SequenceActivations{})
+		if err == nil || got.Match || got.EnforcementMatch {
 			t.Fatalf("EvalStep(%d) = %v, %v; want false and error", step, got, err)
 		}
 		if s.StepUsesShellCommands(step) {

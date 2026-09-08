@@ -14,24 +14,19 @@ const (
 )
 
 type posixRelations struct {
-	statements map[*syntax.Stmt]int64
-	pipelines  map[*syntax.Stmt]int64
-	parents    map[*syntax.Stmt]int64
+	statements         map[*syntax.Stmt]int64
+	pipelines          map[*syntax.Stmt]int64
+	parents            map[*syntax.Stmt]int64
+	inheritedRedirects map[*syntax.Stmt][]*syntax.Redirect
 }
 
-func (a *shellAnalyzer) buildPOSIXRelations(root syntax.Node) posixRelations {
+func (a *shellAnalyzer) buildPOSIXRelations(root syntax.Node, inheritedRedirects []*syntax.Redirect) posixRelations {
 	relations := posixRelations{
-		statements: make(map[*syntax.Stmt]int64),
-		pipelines:  make(map[*syntax.Stmt]int64),
-		parents:    make(map[*syntax.Stmt]int64),
+		statements:         make(map[*syntax.Stmt]int64),
+		pipelines:          make(map[*syntax.Stmt]int64),
+		parents:            make(map[*syntax.Stmt]int64),
+		inheritedRedirects: make(map[*syntax.Stmt][]*syntax.Redirect),
 	}
-	syntax.Walk(root, func(node syntax.Node) bool {
-		if stmt, ok := node.(*syntax.Stmt); ok {
-			relations.statements[stmt] = a.nextStatement()
-		}
-		return true
-	})
-
 	syntax.Walk(root, func(node syntax.Node) bool {
 		binary, ok := node.(*syntax.BinaryCmd)
 		if !ok || binary.Op != syntax.Pipe && binary.Op != syntax.PipeAll {
@@ -63,12 +58,47 @@ func (a *shellAnalyzer) buildPOSIXRelations(root syntax.Node) posixRelations {
 			return true
 		}
 		if stmt, ok := node.(*syntax.Stmt); ok {
+			relations.statements[stmt] = a.nextStatement()
 			relations.parents[stmt] = enclosingSubcommandStatement(stack, relations.statements)
+			redirects := append([]*syntax.Redirect(nil), inheritedRedirects...)
+			relations.inheritedRedirects[stmt] = append(redirects, enclosingRedirects(stack)...)
 		}
 		stack = append(stack, node)
 		return true
 	})
 	return relations
+}
+
+func enclosingRedirects(stack []syntax.Node) []*syntax.Redirect {
+	var redirects []*syntax.Redirect
+	for _, node := range stack {
+		switch node := node.(type) {
+		case *syntax.ProcSubst:
+			if node.Op == syntax.CmdOut {
+				redirects = redirectsExceptFD(redirects, 0)
+			}
+		case *syntax.Stmt:
+			switch node.Cmd.(type) {
+			case *syntax.Block, *syntax.Subshell, *syntax.IfClause, *syntax.WhileClause, *syntax.ForClause, *syntax.CaseClause:
+				redirects = append(redirects, node.Redirs...)
+			}
+		}
+	}
+	return redirects
+}
+
+func redirectsExceptFD(redirects []*syntax.Redirect, excluded int64) []*syntax.Redirect {
+	kept := make([]*syntax.Redirect, 0, len(redirects))
+	for _, redirect := range redirects {
+		fd, ok := posixRedirectFD(redirect)
+		if !ok {
+			continue
+		}
+		if fd != excluded && fd != -1 {
+			kept = append(kept, redirect)
+		}
+	}
+	return kept
 }
 
 func (r posixRelations) context(stmt *syntax.Stmt) posixCommandContext {
