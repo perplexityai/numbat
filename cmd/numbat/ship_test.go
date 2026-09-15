@@ -56,6 +56,12 @@ func (f *flakySink) uniqueDelivered() int {
 	return len(f.accepted)
 }
 
+func (f *flakySink) delivered(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accepted[id]
+}
+
 func eventIDs(ndjson []byte) []string {
 	var out []string
 	for _, line := range bytes.Split(ndjson, []byte{'\n'}) {
@@ -117,6 +123,361 @@ func newSinkFactory(url string) shipSinkFactory {
 
 func newTestShipCursor() shipCursor {
 	return shipCursor{checkpoint: newShipCheckpoint(testShipDestination, "", 0, nil)}
+}
+
+func fileIDForPath(t *testing.T, path string) string {
+	t.Helper()
+	f, err := openShipInput(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID, err := shipFileIdentity(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fileID
+}
+
+func fileIDOnOtherDevice(t *testing.T, id string) string {
+	t.Helper()
+	device, object, ok := strings.Cut(id, ":")
+	if !ok || device == "" || object == "" {
+		t.Skipf("platform file identity %q has no device component", id)
+	}
+	otherDevice := "0"
+	if device == otherDevice {
+		otherDevice = "1"
+	}
+	return otherDevice + ":" + object
+}
+
+func TestShipCheckpointSurvivesDeviceChange(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "before", 2)
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatalf("initial drain: %v", err)
+	}
+	cursor.checkpoint.FileID = fileIDOnOtherDevice(t, cursor.checkpoint.FileID)
+	if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	finalSize := writeSpool(t, inputPath, "after", 1)
+
+	restarted, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatalf("restart state: %v", err)
+	}
+	restarted, err = drainAvailable(ctx, inputPath, statePath, restarted, maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatalf("drain after device change: %v", err)
+	}
+	if got := sink.delivered("before-1"); got != 1 {
+		t.Fatalf("acknowledged record deliveries=%d, want 1", got)
+	}
+	if got := sink.delivered("after-1"); got != 1 {
+		t.Fatalf("new record deliveries=%d, want 1", got)
+	}
+	if restarted.checkpoint.Offset != finalSize {
+		t.Fatalf("offset=%d, want %d", restarted.checkpoint.Offset, finalSize)
+	}
+}
+
+func TestShipRotatedCheckpointSurvivesDeviceChange(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "rotated", 3)
+	original, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEnd := bytes.IndexByte(original, '\n') + 1
+	secondEnd := firstEnd + bytes.IndexByte(original[firstEnd:], '\n') + 1
+	if firstEnd == 0 || secondEnd <= firstEnd {
+		t.Fatal("rotated fixture has fewer than two records")
+	}
+	fileID := fileIDForPath(t, inputPath)
+	checkpoint := newShipCheckpoint(testShipDestination, fileIDOnOtherDevice(t, fileID), int64(secondEnd), original[:secondEnd])
+	if err := writeShipCheckpoint(statePath, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(inputPath, inputPath+".1"); err != nil {
+		t.Fatal(err)
+	}
+	writeSpool(t, inputPath, "active", 1)
+
+	cursor, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatalf("restart state: %v", err)
+	}
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	for i := 0; i < 3; i++ {
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
+		if err != nil {
+			t.Fatalf("rotation pass %d: %v", i+1, err)
+		}
+	}
+	for _, id := range []string{"rotated-1", "rotated-2"} {
+		if got := sink.delivered(id); got != 0 {
+			t.Fatalf("acknowledged rotated record %s replayed %d times", id, got)
+		}
+	}
+	for _, id := range []string{"rotated-3", "active-1"} {
+		if got := sink.delivered(id); got != 1 {
+			t.Fatalf("unacknowledged record %s deliveries=%d, want 1", id, got)
+		}
+	}
+}
+
+func TestShipPortableCheckpointRejectsReusedInodeContent(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "before", 2)
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatalf("initial drain: %v", err)
+	}
+	cursor.checkpoint.FileID = fileIDOnOtherDevice(t, cursor.checkpoint.FileID)
+	if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(inputPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	finalSize := writeSpool(t, inputPath, "reused", 2)
+
+	restarted, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatalf("restart state: %v", err)
+	}
+	restarted, err = drainAvailable(ctx, inputPath, statePath, restarted, maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatalf("drain replacement: %v", err)
+	}
+	for _, id := range []string{"reused-1", "reused-2"} {
+		if got := sink.delivered(id); got != 1 {
+			t.Fatalf("replacement record %s deliveries=%d, want 1", id, got)
+		}
+	}
+	if restarted.checkpoint.Offset != finalSize {
+		t.Fatalf("offset=%d, want %d", restarted.checkpoint.Offset, finalSize)
+	}
+}
+
+func TestShipDrainedRotationSurvivesDeviceChange(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	rotatedPath := inputPath + ".1"
+	writeSpool(t, rotatedPath, "drained", 2)
+	writeSpool(t, inputPath, "active", 1)
+
+	rotated, err := openShipInput(rotatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainedID, err := shipDrainedFileID(rotated)
+	_ = rotated.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := newTestShipCursor()
+	cursor.checkpoint.DrainedFileIDs = []string{fileIDOnOtherDevice(t, drainedID)}
+	if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err = readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatalf("restart state: %v", err)
+	}
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	_, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
+	if err != nil {
+		t.Fatalf("drain after device change: %v", err)
+	}
+	if got := sink.delivered("drained-1"); got != 0 {
+		t.Fatalf("drained rotation replayed %d times", got)
+	}
+	if got := sink.delivered("active-1"); got != 1 {
+		t.Fatalf("active record deliveries=%d, want 1", got)
+	}
+}
+
+func TestShipRotationGuardDoesNotReplaceFileIdentity(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "old", 200)
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatalf("initial drain: %v", err)
+	}
+
+	original, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := bytes.Replace(original, []byte(`"event_id":"old-1"`), []byte(`"event_id":"new-1"`), 1)
+	if bytes.Equal(original, replacement) {
+		t.Fatal("replacement fixture did not change")
+	}
+	heldDir := filepath.Join(dir, "held")
+	if err := os.Mkdir(heldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	heldPath := filepath.Join(heldDir, "original.ndjson")
+	if err := os.Rename(inputPath, heldPath); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := inputPath + ".1"
+	if err := os.WriteFile(replacementPath, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	heldID := fileIDForPath(t, heldPath)
+	replacementID := fileIDForPath(t, replacementPath)
+	if heldID == replacementID {
+		t.Fatalf("replacement reused original file identity %q", heldID)
+	}
+	if heldID != cursor.checkpoint.FileID {
+		t.Fatalf("held file identity=%q, want checkpoint identity %q", heldID, cursor.checkpoint.FileID)
+	}
+	writeSpool(t, inputPath, "active", 1)
+
+	for i := 0; i < 4; i++ {
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
+		if err != nil {
+			t.Fatalf("rotation pass %d: %v", i+1, err)
+		}
+	}
+	if got := sink.delivered("new-1"); got != 1 {
+		t.Fatalf("replacement prefix deliveries=%d, want 1", got)
+	}
+	if got := sink.delivered("active-1"); got != 1 {
+		t.Fatalf("active record deliveries=%d, want 1", got)
+	}
+}
+
+func TestShipLegacyCheckpointKeepsExactFileIdentity(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "legacy", 2)
+	content, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEnd := bytes.IndexByte(content, '\n') + 1
+	if firstEnd == 0 {
+		t.Fatal("legacy fixture has no complete record")
+	}
+	fileID := fileIDForPath(t, inputPath)
+	legacy := shipCheckpoint{
+		Version:           shipStateVersion,
+		Offset:            int64(firstEnd),
+		FileID:            fileID,
+		DestinationSHA256: testShipDestination,
+	}
+	if err := writeShipCheckpoint(statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	cursor, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatalf("read legacy state: %v", err)
+	}
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	_, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
+	if err != nil {
+		t.Fatalf("drain legacy state: %v", err)
+	}
+	if got := sink.delivered("legacy-1"); got != 0 {
+		t.Fatalf("acknowledged legacy record replayed %d times", got)
+	}
+	if got := sink.delivered("legacy-2"); got != 1 {
+		t.Fatalf("new legacy record deliveries=%d, want 1", got)
+	}
+}
+
+func TestShipLegacyRotatedCheckpointRequiresExactFileIdentity(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "rotated", 2)
+	content, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEnd := bytes.IndexByte(content, '\n') + 1
+	if firstEnd == 0 {
+		t.Fatal("rotated fixture has no complete record")
+	}
+	fileID := fileIDForPath(t, inputPath)
+	legacy := shipCheckpoint{
+		Version:           shipStateVersion,
+		Offset:            int64(firstEnd),
+		FileID:            fileIDOnOtherDevice(t, fileID),
+		DestinationSHA256: testShipDestination,
+	}
+	if err := writeShipCheckpoint(statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(inputPath, inputPath+".1"); err != nil {
+		t.Fatal(err)
+	}
+	writeSpool(t, inputPath, "active", 1)
+
+	cursor, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatalf("read legacy state: %v", err)
+	}
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	for i := 0; i < 3; i++ {
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
+		if err != nil {
+			t.Fatalf("rotation pass %d: %v", i+1, err)
+		}
+	}
+	for _, id := range []string{"rotated-1", "rotated-2", "active-1"} {
+		if got := sink.delivered(id); got != 1 {
+			t.Fatalf("record %s deliveries=%d, want 1", id, got)
+		}
+	}
 }
 
 func TestShipZeroLossAcrossOutage(t *testing.T) {

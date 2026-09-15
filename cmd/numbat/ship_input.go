@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -67,11 +69,63 @@ func containsShipFileID(ids []string, id string) bool {
 		return false
 	}
 	for _, candidate := range ids {
-		if candidate == id {
+		if shipDrainedFileIDMatches(candidate, id) {
 			return true
 		}
 	}
 	return false
+}
+
+func shipDrainedFileIDMatches(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	leftPortable, leftOK := portableShipFileIdentity(left, 2)
+	rightPortable, rightOK := portableShipFileIdentity(right, 2)
+	return leftOK && rightOK && leftPortable == rightPortable
+}
+
+func shipFileIdentityMatches(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	leftPortable, leftOK := portableShipFileIdentity(left, 0)
+	rightPortable, rightOK := portableShipFileIdentity(right, 0)
+	return leftOK && rightOK && leftPortable == rightPortable
+}
+
+func portableShipFileIdentity(id string, trailingFields int) (string, bool) {
+	if shipFileIdentityFields == 0 {
+		return "", false
+	}
+	parts := strings.Split(id, ":")
+	if len(parts) != shipFileIdentityFields+trailingFields {
+		return "", false
+	}
+	for _, field := range parts[:shipFileIdentityFields] {
+		if field == "" {
+			return "", false
+		}
+		if _, err := strconv.ParseUint(field, 16, 64); err != nil {
+			return "", false
+		}
+	}
+	if trailingFields == 2 {
+		if _, err := strconv.ParseUint(parts[len(parts)-2], 16, 64); err != nil {
+			return "", false
+		}
+		digest, err := hex.DecodeString(parts[len(parts)-1])
+		if err != nil || len(digest) != sha256.Size {
+			return "", false
+		}
+	}
+	return strings.Join(parts[1:], ":"), true
 }
 
 // shipDrainedFileID combines the platform file identity with a bounded content
@@ -126,7 +180,9 @@ func shipCheckpointMatches(f *os.File, fileID string, checkpoint shipCheckpoint)
 		return true, nil
 	}
 	if checkpoint.FileID != "" && fileID != "" && checkpoint.FileID != fileID {
-		return false, nil
+		if checkpoint.GuardBytes == 0 || !shipFileIdentityMatches(checkpoint.FileID, fileID) {
+			return false, nil
+		}
 	}
 	return shipCheckpointContentMatches(f, checkpoint)
 }

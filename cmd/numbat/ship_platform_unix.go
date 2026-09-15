@@ -10,6 +10,8 @@ import (
 	"syscall"
 )
 
+const shipFileIdentityFields = 2
+
 func openShipInput(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {

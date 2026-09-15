@@ -9,6 +9,8 @@ import (
 	"os"
 )
 
+const shipFileIdentityFields = 0
+
 func openShipInput(path string) (*os.File, error) {
 	f, err := os.Open(path)
 	if err != nil {
