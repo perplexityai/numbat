@@ -472,6 +472,46 @@ func TestEnforceOnMediumEnforceMatchDenies(t *testing.T) {
 	}
 }
 
+func TestEnforceCompoundCommandsPreservesInterpreterBoundary(t *testing.T) {
+	dir := writeEnforceRuleFile(t, criticalEnforceRule)
+	for _, test := range []struct {
+		name, command string
+		deny          bool
+	}{
+		{"compound", "true; cat .env", true},
+		{"safe sibling of interpreter", "sh -c 'true'; cat .env", true},
+		{"unsafe pipeline", `cat .env | "$sink"; true`, false},
+		{"heredoc script", "sh <<'EOF'\ncat .env\nEOF", false},
+		{"invalid zsh option", "zsh -odefinitely_invalid <<'EOF'\ncat .env\nEOF", false},
+		{"missing bash option value", "bash --rcfile <<'EOF'\ncat .env\nEOF", false},
+		{"invalid option after startup file", "bash --rcfile /dev/fd/3 -i -Z 3<<'EOF'\ncat .env\nEOF", false},
+		{"consumed inherited input", "{ cat >/dev/null; sh; } <<'EOF'\ncat .env\nEOF", false},
+		{"function body", `f(){ cat .env; }; f`, false},
+		{"unset function body", `f(){ cat .env; }; unset -f f; f`, false},
+		{"conditional function body", `if true; then f(){ :; }; else f(){ cat .env; }; fi; f`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command, err := json.Marshal(test.command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := fmt.Sprintf(`{"session_id":"s1","cwd":"/proj","tool_name":"Bash","tool_input":{"command":%s}}`, command)
+			out, errb, code := runCLIStdin(payload,
+				enforceHookArgs(t, "hook", "pre-tool", "--agent", "claude", "--enforce", "--no-builtin-rules", "--rules-dir", dir)...)
+			if code != 0 || errb != "" {
+				t.Fatalf("hook exit=%d stderr=%q", code, errb)
+			}
+			if test.deny {
+				if decodeDecision(t, out) != "deny" {
+					t.Fatalf("hook output=%q, want deny", out)
+				}
+			} else {
+				assertAllow(t, out, code)
+			}
+		})
+	}
+}
+
 func TestEnforceUsesCustomDenyMessage(t *testing.T) {
 	dir := writeEnforceRuleFile(t, customMessageEnforceRule)
 	out, _, code := runCLIStdin(catEnvPayload,

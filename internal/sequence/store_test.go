@@ -303,7 +303,7 @@ func TestStoreProjectionRevisionInvalidatesEnforcementMasks(t *testing.T) {
 	defer db.Close()
 	st := newStore(t, db, rules, DefaultConfig())
 	raw, err := json.Marshal(storedSession{
-		RulesHash: fingerprintForProjection(rules, "sequence-projection-v3"),
+		RulesHash: fingerprintForProjection(rules, "sequence-projection-v4"),
 		NextSeq:   1,
 		Entries: []storedEntry{{
 			Seq:              0,

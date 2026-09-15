@@ -64,7 +64,7 @@ func BuildCheckedExpressions(sources []Source) (CheckedExpressions, error) {
 				if err != nil {
 					return nil, fmt.Errorf("rule %q: %w", r.ID, err)
 				}
-				if _, err := programExpr(env, ast); err != nil {
+				if _, err := programExpr(env, ast, false); err != nil {
 					return nil, fmt.Errorf("rule %q: %w", r.ID, err)
 				}
 				pb, err := cel.AstToCheckedExpr(ast)
