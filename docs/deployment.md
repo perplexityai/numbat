@@ -18,8 +18,8 @@ numbat supports macOS, Linux, and native Windows endpoints.
 One release binary provides every mode. `hook install` writes that binary's
 absolute path into agent-specific integration artifacts; each lifecycle event
 launches a short-lived `numbat hook ...` callback. `ship` is an optional,
-separate long-lived process of the same binary that tails the callback's file
-output. It is not a second binary, daemon dependency, or hook receiver.
+separate long-lived process of the same binary. It drains a transactional spool
+or tails legacy file output. It is not a second binary or hook receiver.
 
 ## Local use
 
@@ -57,24 +57,36 @@ numbat hook install --agent claude \
   --http-url https://ingest.example/numbat
 ```
 
-Direct HTTP is not a disk queue. If the endpoint is down, numbat reports delivery
-failure for that run; it does not spool hours of records for later replay. Keep
-file output enabled and let your existing log forwarder, EDR, or OS retention
-policy ship and rotate the file. In `collect` mode, an OTLP success response
-confirms local acceptance, not downstream acknowledgement by the HTTP sink.
+Direct HTTP is not a disk queue. If the endpoint is down, numbat reports a
+delivery failure for that run. Keep file output for an external forwarder. Use
+spool output with `numbat ship` when the host has no external forwarder. In
+`collect` mode, an OTLP success response confirms local acceptance. It does not
+confirm downstream delivery by the HTTP sink.
 
 `collect` has no client authentication or TLS. Keep its default loopback bind,
 or place an off-loopback listener behind network controls and an authenticated
 proxy.
 
-Where the host has no external shipper, `numbat ship` is an optional native
-forwarder that tails the file output and delivers eligible retained records
-at-least-once while their input segments remain available, off the hook's
-critical path (see [cli.md](cli.md#ship)). Records larger than 8 MiB are skipped.
-It uses the capture file as its only on-disk queue and does not replace a mature
-shipper where one already runs. Configure
-the hook with file output only; combining direct HTTP with `ship` sends the same
-records through both paths.
+If the host has no external forwarder, configure a transactional spool:
+
+```bash
+numbat hook install --agent codex --emit all \
+  --output spool \
+  --spool-file ~/.numbat/live.spool
+
+numbat ship \
+  --spool-file ~/.numbat/live.spool \
+  --http-url https://ingest.example/numbat
+```
+
+The hook commits complete records without waiting for the network. `ship`
+removes records only after successful HTTP delivery. An endpoint outage keeps
+the undelivered records. numbat does not delete those records to manage storage.
+Supervise the `ship` process and monitor the spool filesystem.
+
+`ship --input-file` remains available for legacy file output. Prefer an
+existing fleet forwarder when one is already available. Do not combine direct
+HTTP with a later `ship` path unless the receiver expects a second copy.
 
 ## Choose an install scope
 

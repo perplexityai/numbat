@@ -41,7 +41,7 @@ func acquireShipLock(path string) (io.Closer, error) {
 		&overlapped,
 	); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("another ship process is using this state file: %w", err)
+		return nil, fmt.Errorf("another ship process is using this source: %w", err)
 	}
 	return &windowsShipLock{file: f}, nil
 }

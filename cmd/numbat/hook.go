@@ -90,8 +90,9 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events when the integration exposes them")
 	var outputValues multiFlag
-	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
+	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout)+". stdout mode writes records to hook stderr and is unavailable in enforce mode")
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
+	spoolFile := fs.String("spool-file", "", "durable queue path (required when --output includes spool)")
 	httpURL := fs.String("http-url", "", "ingest URL (required when --output includes http)")
 	httpBatch := fs.Int("http-batch-size", 500, "records per HTTP POST")
 	httpTimeout := fs.Duration("http-timeout", defaultHookHTTPTimeout, "HTTP request timeout")
@@ -199,6 +200,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 		stateDB:          *stateDB,
 		modes:            outputValues,
 		file:             *outputFile,
+		spool:            *spoolFile,
 		httpURL:          *httpURL,
 		httpBatch:        *httpBatch,
 		httpTO:           *httpTimeout,
@@ -253,6 +255,7 @@ type hookOptions struct {
 	stateDB          string
 	modes            []string
 	file             string
+	spool            string
 	httpURL          string
 	httpBatch        int
 	httpTO           time.Duration
@@ -291,10 +294,22 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	if err != nil {
 		return false, "", "", err
 	}
+	spoolFile, err := expandHookPath(opts.spool)
+	if err != nil {
+		return false, "", "", err
+	}
+	var statePath string
+	if sinks.spool {
+		statePath, err = hookStatePath(opts.stateDB, spoolFile)
+		if err != nil {
+			return false, "", "", err
+		}
+	}
 	sink, err := buildSink(sinkConfig{
 		modes:         opts.modes,
 		defaultMode:   outputModeStdout,
 		file:          outputFile,
+		spool:         spoolFile,
 		httpURL:       opts.httpURL,
 		httpBatch:     opts.httpBatch,
 		httpTimeout:   opts.httpTO,
@@ -353,7 +368,12 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	var stateErr error
 	if (opts.sel.findings || opts.enforce) && eng != nil {
 		if seqs := eng.SequenceRules(); len(seqs) > 0 {
-			stateDB, stateErr = openHookState(opts.stateDB)
+			if statePath == "" {
+				statePath, stateErr = hookStatePath(opts.stateDB, spoolFile)
+			}
+			if stateErr == nil {
+				stateDB, stateErr = state.Open(statePath, 250*time.Millisecond)
+			}
 			if stateErr != nil {
 				em.Diag("warn", fmt.Sprintf("state database unavailable, %d sequence rule(s) skipped for this event: %v", len(seqs), stateErr))
 			} else {
@@ -596,7 +616,7 @@ func validateEnforceIO(enforce bool, sel emitSelection, sinks outputSinks) error
 		return fmt.Errorf("--enforce requires --emit findings (or --emit all)")
 	}
 	if sinks.stdout {
-		return fmt.Errorf("--enforce does not support --output stdout; use file and/or http for operator findings")
+		return fmt.Errorf("--enforce does not support --output stdout; use file, spool, and/or http for operator findings")
 	}
 	return nil
 }
@@ -687,18 +707,103 @@ func hookEventID(run string) string {
 // findingOptions pins one detection time across findings from the same callback.
 func findingOptions() finding.Options { return finding.Options{Now: time.Now()} }
 
-// openHookState opens the shared state database for one hook invocation: the
-// --state-db override, or state.db under a numbat-owned directory in the
-// user's home. The lock timeout is short because the agent is blocked while
-// the hook runs — a contended lock fails open rather than stalling it.
-func openHookState(override string) (*state.DB, error) {
+// hookStatePath resolves the shared sequence state path and prevents it from
+// sharing a bbolt file with the record spool.
+func hookStatePath(override, spoolPath string) (string, error) {
 	path := override
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, fmt.Errorf("resolve home for state db: %w", err)
+			return "", fmt.Errorf("resolve home for state db: %w", err)
 		}
 		path = filepath.Join(home, ".numbat", "state.db")
 	}
-	return state.Open(path, 250*time.Millisecond)
+	if spoolPath != "" {
+		same, err := sameHookDataPath(spoolPath, path)
+		if err != nil {
+			return "", fmt.Errorf("compare --spool-file and --state-db: %w", err)
+		}
+		if same {
+			return "", errors.New("--spool-file and --state-db must name different files")
+		}
+	}
+	return path, nil
+}
+
+func sameHookDataPath(a, b string) (bool, error) { return sameShipPath(a, b) }
+
+func pathWithResolvedParent(path string) (string, error) {
+	path, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	for {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			return resolved, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) || err == nil && info.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		path, err = resolvedSymlinkTarget(path)
+		if err != nil {
+			return "", err
+		}
+	}
+	parent := filepath.Dir(path)
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Join(resolved, filepath.Base(path)), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		info, lstatErr := os.Lstat(parent)
+		if lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, err := resolvedSymlinkTarget(parent)
+			if err != nil {
+				return "", err
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				target = filepath.Join(target, missing[i])
+			}
+			return pathWithResolvedParent(filepath.Join(target, filepath.Base(path)))
+		}
+		if lstatErr != nil && !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(parent))
+		parent = next
+	}
+}
+
+func resolvedSymlinkTarget(path string) (string, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(target) {
+		parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+		if err != nil {
+			return "", err
+		}
+		target = filepath.Join(parent, target)
+	}
+	return filepath.Abs(filepath.Clean(target))
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -193,6 +194,17 @@ func readShipLine(br *bufio.Reader, maxBytes int) (shipLineRead, error) {
 			return out, err
 		}
 	}
+}
+
+// isShippableRecord reports whether line is a single valid JSON object, the only
+// shape ingestion accepts. A short append (e.g. a full disk) can leave a record
+// with no trailing newline that the next record concatenates onto; the glued
+// line is not a single object, and shipping it makes ingestion reject the whole
+// batch and stall the queue. spoolSink.Write applies the same check at enqueue
+// time so a spooled record can never take that shape.
+func isShippableRecord(line []byte) bool {
+	record := bytes.TrimSpace(line)
+	return len(record) >= 2 && record[0] == '{' && record[len(record)-1] == '}' && json.Valid(record)
 }
 
 func appendShipTail(tail, p []byte) []byte {

@@ -50,7 +50,7 @@ func acquireShipLock(path string) (io.Closer, error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("another ship process is using this state file: %w", err)
+		return nil, fmt.Errorf("another ship process is using this source: %w", err)
 	}
 	return &unixShipLock{file: f}, nil
 }

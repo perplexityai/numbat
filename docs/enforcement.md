@@ -140,9 +140,9 @@ deny_message: Contact the workspace owner.
 Use an override only when that text is safe to disclose. The host decides
 whether its reason is shown to the model, the user, or both.
 
-Operator detail travels separately. Enforce mode requires findings to be
-selected and written to a `file` and/or `http` sink; stdout is rejected because
-hook stdout is part of the host control protocol. Once the sink is open,
+Operator detail travels separately. Enforce mode requires findings and a
+`file`, `spool`, or `http` sink. It rejects stdout because hook stdout is part
+of the host control protocol. Once the sink is open,
 numbat routes available operational diagnostics there as diagnostic records
 rather than onto the immediate agent channel.
 

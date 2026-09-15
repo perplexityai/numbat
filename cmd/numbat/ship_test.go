@@ -455,6 +455,48 @@ func TestShipOversizedBatchLineStillShips(t *testing.T) {
 	}
 }
 
+func TestShipSkipsMalformedLine(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	// A short append left record "a" without its newline; the next hook's record
+	// "b" concatenated onto the same line, so the line is not a single JSON
+	// object. Record "c" follows on its own line.
+	glued := `{"record_type":"event","event_id":"a"}{"record_type":"event","event_id":"b"}` + "\n"
+	good := `{"record_type":"event","event_id":"c"}` + "\n"
+	appendRaw(t, inputPath, []byte(glued+good))
+
+	var mu sync.Mutex
+	var bodies []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, body...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(srv.URL), io.Discard)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if cursor.checkpoint.Offset != int64(len(glued+good)) {
+		t.Fatalf("offset=%d/%d: malformed line did not drain", cursor.checkpoint.Offset, len(glued+good))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !bytes.Contains(bodies, []byte(`"event_id":"c"`)) {
+		t.Fatalf("good record after the malformed line was not delivered: %q", bodies)
+	}
+	// "event_id":"b" appears only inside the glued line; its delivery would mean
+	// the malformed line was shipped rather than skipped.
+	if bytes.Contains(bodies, []byte(`"event_id":"b"`)) {
+		t.Fatalf("malformed line was delivered: %q", bodies)
+	}
+}
+
 func TestShipBoundsOversizedRecord(t *testing.T) {
 	line, err := readShipLine(bufio.NewReader(strings.NewReader("12345\n")), 4)
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {

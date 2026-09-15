@@ -84,10 +84,10 @@ Every change must preserve these project contracts:
 The `internal/archguard` tests enforce the package and dependency boundaries:
 
 - **Core** (`applypatch`, `model`, `redact`, `rule`, `sequence`, `finding`,
-  `pipeline`, `output`, `winfile`) must not import a plane package.
+  `pipeline`, `output`, `spool`, `winfile`) must not import a plane package.
 - **Forensics** (`extract`, `discover`, `casebundle`) and **monitoring** (`hook`,
   `otel`, `state`) remain independent; neither imports the other.
-- Only `state` and `sequence` may import `bbolt`.
+- Only `state`, `sequence`, and `spool` may import `bbolt`.
 - In `cmd/numbat`, scan, timeline, and case files must not import the monitoring
   plane or bbolt. Hook, collect, and ship files must not import the forensics
   plane. `agents.go` is the sole cross-plane reporting bridge.

@@ -722,6 +722,18 @@ func DefaultRecordsPath(home string) string {
 	return filepath.Join(home, ".numbat", "records.ndjson")
 }
 
+// DefaultFindingsSpoolPath is the transactional queue used by hook installs
+// that select spool output and emit only findings.
+func DefaultFindingsSpoolPath(home string) string {
+	return filepath.Join(home, ".numbat", "findings.spool")
+}
+
+// DefaultRecordsSpoolPath is used when a spool hook also emits events or
+// indicators.
+func DefaultRecordsSpoolPath(home string) string {
+	return filepath.Join(home, ".numbat", "records.spool")
+}
+
 // InstallOptions are the runtime flags baked into commands written by Install.
 // RuntimeArgs are appended to every installed `numbat hook <event>` invocation
 // after the agent marker. Claude receives an argument array; string-only hook
