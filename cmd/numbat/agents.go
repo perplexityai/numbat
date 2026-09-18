@@ -382,6 +382,17 @@ var agentDescriptors = []agentDescriptor{
 		deferredStore: "state.db (SQLite/WAL)",
 		setupHint:     "install: numbat hook install --agent hermes",
 	},
+	{
+		enum:          model.AgentMuseCode,
+		display:       "Muse Code",
+		configDirRel:  ".config/muse",
+		configRoot:    func(home string) string { return filepath.Dir(hook.MuseUserSettingsPath(home)) },
+		hookModality:  hookModalityHooks,
+		wiredPath:     hook.MuseUserSettingsPath,
+		hookAgent:     hook.AgentMuse,
+		deferredStore: "session logs (unpublished record format)",
+		setupHint:     "install: numbat hook install --agent muse",
+	},
 }
 
 // agentRow is the computed report for one agent: every column the table/JSON
