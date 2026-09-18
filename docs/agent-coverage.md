@@ -76,6 +76,7 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Grok Build | `${GROK_HOME:-~/.grok}/sessions/` (deferred record shape) | `${GROK_HOME:-~/.grok}/hooks/numbat.json` | yes — `PreToolUse` | Sessions persist automatically across TUI, headless, and ACP hosts, but the record schema is not published. Project hooks require `/hooks-trust`. |
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
+| Muse Code | deferred session logs under the Muse data directory (unpublished record schema); `muse export --session <uuid>` may enable a future parser | project `.muse/hooks.json`; user `${XDG_CONFIG_HOME:-~/.config}/muse/settings.json` (requires a top-level `"schema_version": 1` or the CLI refuses to start) | yes — `PreToolUse` | Hooks run outside the sandbox with a cleared environment restricted to `HOME`, `LOGNAME`, `PATH`, `PWD`, `SHELL`, `SHLVL`, `TMPDIR`, `USER`. `PermissionRequest` is intentionally not installed: it was verified, including in a real interactive session, to fire only for Muse's internal skill-reminder bookkeeping tool and never for a real action. Subagent lineage has no parent-pointer field on the wire; see the event-selection notes below. |
 
 With `--include-reasoning`, at-rest parsers map source-recorded reasoning from
 Claude Code, Codex, Gemini session journals, OpenClaw, Pi, Kimi Code, and legacy
@@ -127,17 +128,20 @@ matrix cell.
 | Kiro | The default global `v1` file covers IDE 1.0.182+ and CLI 2.13.0+ v3. `KIRO_HOME` relocates only the CLI target; wire `~/.kiro/hooks/numbat.json` separately for the IDE when both roots are active. The combined `agents` row reports `WIRED=yes` when either root is wired and both are readable; an unreadable root reports an error. Verify each required root with matching `hook status` arguments. numbat does not rewrite v2 blocks embedded in individual custom agents. |
 | OpenHands | Hooks are repository-scoped, so OpenHands requires an explicit `.openhands/hooks.json` path and is excluded from `--agent all`. |
 | Crush | The preliminary hook observes only top-level agent tool calls. numbat covers every tool with the documented fail-open, exit-code-2 contract. |
+| Muse Code | Hooks are validated at session startup only; there is no reload command, so a config change needs a new session. A malformed entry produces a warning and is skipped, but a fully valid file prints no confirming output at all, so `hook status` — not Muse's own console output — is the source of truth for a complete install. `bash`, `read_file`, and `write_file` are the only tool names with a verified input shape; other built-in tools (`edit_file`, `web_fetch`, `web_search`) and MCP tool calls remain generic `tool.call` until captured. `--subagent-worktree-isolation` produces a real, separate git worktree per child, and that child's `cwd` encodes both the lead and child ids; the default non-isolated (shared-workspace) fan-out case has no such field and is not yet correlated to its parent. `--managed` is not implemented: the vendor-defined `managed_hooks_path` setting key is confirmed to exist, but its file-vs-directory shape and scope precedence are not. |
 
 ### Event-selection exceptions
 
-OpenClaw, Hermes, and Junie need event-selection detail because superficially
-similar upstream callbacks do not always represent the same lifecycle boundary:
+OpenClaw, Hermes, Junie, and Muse Code need event-selection detail because
+superficially similar upstream callbacks do not always represent the same
+lifecycle boundary:
 
 | Agent | Installed coverage | Intentional exclusions and limits |
 |---|---|---|
 | OpenClaw | Eight typed session, message, tool, and subagent callbacks. `llm_input` and `llm_output` are added only with `plugins.entries.numbat.hooks.allowConversationAccess:true`. | Inbound messages can contain content; outbound delivery is content-free. Model callbacks forward only the current input or nonempty assistant text, can repeat on retries, and omit system prompt, history, reasoning, tools, usage, and raw message objects. WhatsApp inbound callbacks require a separate channel opt-in. Only `before_tool_call` can block. |
 | Hermes | Session start/finalize, LLM prompt/assistant, pre/post tool, approval, and subagent events in the active profile; CLI and Gateway use the same shell hooks. | `on_session_end` fires after each turn, so `on_session_finalize` is the true `session.end`. `on_session_reset` is followed by a new start, and transform/policy callbacks add no distinct normalized action. The canonical `state.db` remains deferred. |
 | Junie CLI (Early Access) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, and `SessionEnd` from user or explicitly supplied config. | `PermissionRequest` is omitted because an empty successful monitor callback would auto-approve the action. `StopFailure` is provider-health telemetry, and there is no post-tool event. Payloads have no session id or cwd, so sequence correlation is unavailable. Prompt hooks are TUI-only; ACP and server hosts run no hooks. |
+| Muse Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `Stop`, and `SessionEnd`. | `PermissionRequest` is omitted for a different reason than Junie's: it was verified — across five conditions including a real interactive session with no bypass flags — to fire only for Muse's internal `submit_reminder_decision` skill-reminder tool, never for a real tool call, so an empty monitor response is not a safety gap, only noise. `PreCompact`, `PostCompact`, and `Notification` are bookkeeping-only, matching every other portable agent. `PreLLMCall`/`PostLLMCall` carry full conversation content and are opt-in only, not installed by default. Muse also runs an internal `skill-reminder`/`verify-reminder` subagent pair on effectively every turn, unrelated to user-requested fan-out; numbat does not fabricate shell or file semantics for their sole tool, `submit_reminder_decision`, which stays generic `tool.call`. |
 
 ## Enforcement
 
@@ -181,9 +185,14 @@ directories as local source-plugin directories. numbat's integration is a
 generated local TypeScript plugin, so it does not claim a first-class OpenCode
 `--managed` target until that loading path is verified. OpenClaw likewise
 documents per-state-directory plugin roots, not an administrator-managed plugin
-path; deploy its package and activation policy per Gateway service user. Other
-agents use user/project configuration or a vendor management plane; numbat does
-not invent a system path where the vendor has not defined one.
+path; deploy its package and activation policy per Gateway service user. Muse
+Code documents a `managed_hooks_path` settings key (and a legacy
+`TBH_MANAGED_HOOKS_PATH` environment override), but numbat does not yet
+support `--managed` for it: the key's file-vs-directory shape and its
+precedence against user/project scope are unconfirmed, and numbat does not
+guess at a policy-file contract it has not verified. Other agents use
+user/project configuration or a vendor management plane; numbat does not
+invent a system path where the vendor has not defined one.
 
 ## Known collection gaps
 
@@ -195,7 +204,7 @@ or representative fixture so it does not invent actions, exit codes, or errors.
 |---|---|---|
 | SQLite/WAL acquisition and record validation | OpenCode `opencode.db`, the OpenClaw v2026.7.2 beta/development line's `openclaw-agent.sqlite` session/transcript tables, Hermes `state.db`, Cursor `state.vscdb`, Copilot `session-store.db`, and the current Cline, Goose, Kilo, Crush, and Kiro stores | Native fixture sets plus safe snapshot/WAL handling |
 | OpenClaw replacement/alternate transcript sources | Development-line compressed archives; stable standalone `event_msg`-only or unknown JSONL flavors; custom `session.store` indexes and arbitrary `sessionFile` paths outside recognized roots | Version-pinned fixtures and schemas, plus bounded index traversal or a future explicit parser hint for acquired files; current behavior rejects compressed files and emits diagnostics for unparsed JSONL flavors |
-| Unpublished or unstable durable record shape | Factory JSONL, Antigravity transcripts, Grok sessions, and Qwen, Amp, Auggie, OpenHands, and Junie session state | A versioned schema or representative fixtures with stable semantics |
+| Unpublished or unstable durable record shape | Factory JSONL, Antigravity transcripts, Grok sessions, Muse Code session logs, and Qwen, Amp, Auggie, OpenHands, and Junie session state | A versioned schema or representative fixtures with stable semantics |
 | Agent-specific telemetry transports | OTLP traces, metrics, and gRPC | A normalized event contract and fixtures; current `collect` support is OTLP/HTTP logs only |
 
 Old Hermes JSONL transcripts are legacy fallback data, not its current primary
@@ -246,6 +255,7 @@ boundary.
 - Devin hooks: <https://docs.devin.ai/cli/extensibility/hooks/overview>
 - Hermes hooks: <https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks/>
 - Hermes native Windows paths: <https://hermes-agent.nousresearch.com/docs/user-guide/windows-native>
+- Muse Code hooks (internal Meta documentation; names file locations and the event list but not the field schema, response contract, or timeouts — those are empirical, from live capture): `https://dev.meta.ai/docs/muse-code/extending#hooks`
 - Pi session format: <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md>
 - Pi extensions: <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md>
 - Kimi Code sessions: <https://www.kimi.com/code/docs/en/kimi-code-cli/guides/sessions.html>
