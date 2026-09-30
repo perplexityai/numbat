@@ -229,6 +229,14 @@ assistant, and reasoning events; it requires `--emit events` or `--emit all`.
 `content_bytes` is the mapped body size before the 1 MiB bound and output
 redaction, while `content_truncated` reports that Numbat applied the bound.
 
+Tool arguments and results do not gain `content` with `--content full`.
+Generic calls retain argument previews. Result bodies are source-dependent:
+some transcript parsers retain output previews, while many live hooks map only
+identity and status. Assistant text is captured where the integration maps a
+source-provided message; a stop callback alone does not supply one. Numbat cannot
+recover omitted bodies. Event output itself is opt-in: the default `--emit`
+selection is `findings`.
+
 `--include-reasoning` adds reasoning summaries or thinking blocks that the
 source persisted or exposed to a live integration. It does not recover hidden
 model chain-of-thought, and it is independent of `--content`: without

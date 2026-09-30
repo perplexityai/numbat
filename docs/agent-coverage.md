@@ -28,6 +28,8 @@ and decisions keep their existing mappings; missing arguments cannot be recovere
 
 - Codex function/custom calls retain input. Results inherit tool/MCP identity from
   a preceding call with the same `call_id`; unmatched results remain unnamed.
+- Antigravity post-tool hooks retain `toolCall.name` when supplied, with step
+  correlation and explicit error status. Older payloads without it stay unnamed.
 - CUA `js` retains code and title within the preview limit. JavaScript is not
   parsed for actions or destinations; CUA also controls native applications.
 - Cline's legacy `browser_action` emits a network indicator for `launch` with an
@@ -51,6 +53,10 @@ Browser mappings follow
 [Cline v3.72.0](https://github.com/cline/cline/blob/0e7e0099cdcf5349bebc2cf86b9b5fd64650b736/src/core/task/tools/handlers/BrowserToolHandler.ts)
 and the [OpenClaw dispatcher](https://github.com/openclaw/openclaw/blob/d7f8b2c3fddd1ea799a80cfd832b897766a0d480/extensions/browser/src/browser-tool-dispatch.ts).
 The Cline adapter applies only when a producer reports the legacy `browser_action`.
+Generic hook fixtures exercise every registered agent with object and serialized
+arguments in its supported envelope. Plugin fixtures use the fields forwarded by
+Numbat's generated integrations. These tests do not establish support for other
+host versions or replace live testing on each agent.
 
 ## Platform conventions
 
@@ -269,7 +275,7 @@ boundary.
 - Cursor `subagentStart` deny bug (confirmed 20 July 2026): <https://forum.cursor.com/t/subagentstart-hook-deny-is-not-enforced/166143/7>
 - Windsurf hooks: <https://docs.windsurf.com/windsurf/cascade/hooks>
 - Copilot CLI hooks: <https://docs.github.com/en/copilot/reference/hooks-reference>
-- VS Code hooks: <https://code.visualstudio.com/docs/agent-customization/hooks>
+- VS Code hooks: <https://code.visualstudio.com/docs/agents/reference/hooks-reference>
 - OpenCode plugins: <https://opencode.ai/docs/plugins/>
 - OpenCode managed settings: <https://opencode.ai/docs/config/#managed-settings>
 - OpenClaw plugin hooks: <https://docs.openclaw.ai/plugins/hooks>
@@ -280,7 +286,7 @@ boundary.
 - OpenClaw ACP/external-agent boundary: <https://docs.openclaw.ai/tools/acp-agents>
 - OpenClaw WhatsApp hook privacy: <https://docs.openclaw.ai/channels/whatsapp#plugin-hooks-and-privacy>
 - Antigravity hooks: <https://antigravity.google/docs/hooks>
-- Factory hooks: <https://docs.factory.ai/reference/hooks-reference>
+- Factory hooks: <https://docs.factory.com/harness/hooks>
 - Grok hooks: <https://docs.x.ai/build/features/hooks>
 - Grok sessions: <https://docs.x.ai/build/features/sessions>
 - Devin hooks: <https://docs.devin.ai/cli/extensibility/hooks/overview>
@@ -292,7 +298,7 @@ boundary.
 - Kimi Code hooks: <https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html>
 - Qwen Code hooks: <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/>
 - Qwen Code telemetry: <https://qwenlm.github.io/qwen-code-docs/en/developers/development/telemetry/>
-- Cline hooks: <https://docs.cline.bot/customization/hooks>
+- Cline hooks: <https://github.com/cline/cline/blob/main/.clinerules/hooks/README.md>
 - Cline CLI: <https://docs.cline.bot/cli/cli-reference>
 - Amp plugin API: <https://ampcode.com/manual/plugin-api>
 - Auggie hooks: <https://docs.augmentcode.com/cli/hooks>

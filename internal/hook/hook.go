@@ -2007,9 +2007,13 @@ func classifyOpenCodeHookTool(ev *model.Event, r *resolver, post bool) {
 	// but a non-zero exit alone is not a tool error.
 }
 
-// classifyAntigravityTool maps the documented toolCall object. PostToolUse only
-// reports stepIdx and error, so result events intentionally carry no tool name.
+// classifyAntigravityTool maps the documented toolCall object when supplied.
 func classifyAntigravityTool(ev *model.Event, r *resolver, post bool) {
+	name := r.toolName()
+	ev.ToolName = name
+	if server, tool, ok := splitMCPName(name); ok {
+		ev.MCPServer, ev.MCPTool = server, tool
+	}
 	if post {
 		ev.EventType = model.EventToolResult
 		if r.envStr("error") != "" {
@@ -2018,9 +2022,7 @@ func classifyAntigravityTool(ev *model.Event, r *resolver, post bool) {
 		return
 	}
 
-	name := r.toolName()
 	input := r.toolInput()
-	ev.ToolName = name
 	switch name {
 	case "run_command":
 		ev.EventType = model.EventCommandExec
@@ -2062,9 +2064,6 @@ func classifyAntigravityTool(ev *model.Event, r *resolver, post bool) {
 		ev.SubAgent = firstString(input, "name")
 	default:
 		ev.EventType = model.EventToolCall
-	}
-	if server, tool, ok := splitMCPName(name); ok {
-		ev.MCPServer, ev.MCPTool = server, tool
 	}
 }
 

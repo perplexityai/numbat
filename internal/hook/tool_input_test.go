@@ -9,58 +9,69 @@ import (
 
 // Exercise every supported hook agent using its existing argument envelope.
 func TestGenericHookInputPreviews(t *testing.T) {
-	const args = `{"url":"https://example.com/","query":"browser docs","password":"private"}`
+	const encoded = `{"url":"https://example.com/","query":"browser docs","password":"private"}`
 	const want = `{"password":"[redacted]","query":"browser docs","url":"https://example.com/"}`
-	type testCase struct {
-		name, agent string
-		lc          Lifecycle
-		payload     map[string]any
-	}
-	cases := []testCase{
-		{"codex", AgentCodex, LifecycleCodexPreTool, map[string]any{"tool_name": "mcp__notes__save", "tool_input": args}},
-		{"codex other fetch tool", AgentCodex, LifecycleCodexPreTool, map[string]any{"tool_name": "mcp__fetch__status", "tool_input": args}},
-		{"codex MCP case differs", AgentCodex, LifecycleCodexPreTool, map[string]any{"tool_name": "mcp__Fetch__fetch", "tool_input": args}},
-		{"claude", AgentClaude, LifecyclePreTool, map[string]any{"tool_name": "mcp__notes__save", "tool_input": args}},
-		{"cursor generic", AgentCursor, LifecycleCursorPreTool, map[string]any{"tool_name": "MCP:save", "tool_input": args}},
-		{"cursor direct", AgentCursor, LifecycleMCPCall, map[string]any{"tool_name": "save", "mcp_server_name": "notes", "tool_input": args}},
-		{"opencode", AgentOpenCode, LifecycleOpenCodePreTool, map[string]any{"tool": "plugin", "args": args, "tool_input": map[string]any{"wrong": "field"}}},
-		{"windsurf", AgentWindsurf, LifecycleMCPCall, map[string]any{"agent_action_name": "pre_mcp_tool_use", "tool_info": map[string]any{"mcp_server_name": "notes", "mcp_tool_name": "save", "mcp_tool_arguments": args}}},
-		{"gemini", AgentGemini, LifecycleGeminiPreTool, map[string]any{"tool_name": "plugin", "tool_input": args, "parameters": map[string]any{"wrong": "field"}}},
-		{"cline", AgentCline, LifecyclePreTool, map[string]any{"preToolUse": map[string]any{"toolName": "plugin", "parameters": args}}},
-		{"copilot", AgentCopilot, LifecycleCopilotPreTool, map[string]any{"toolName": "plugin", "toolArgs": args}},
-		{"vscode", AgentVSCode, LifecycleVSCodePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
-		{"antigravity", AgentAntigravity, LifecycleAntigravityPreTool, map[string]any{"toolCall": map[string]any{"name": "plugin", "args": args}}},
-		{"factory", AgentFactory, LifecycleFactoryPreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
-		{"grok", AgentGrok, LifecycleGrokPreTool, map[string]any{"toolName": "plugin", "toolInput": args}},
-		{"devin", AgentDevin, LifecycleDevinPreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
-		{"hermes", AgentHermes, LifecycleHermesPreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
-		{"pi", AgentPi, LifecyclePreTool, map[string]any{"toolName": "plugin", "input": args}},
-		{"kilo", AgentKilo, LifecyclePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
-	}
-	for _, agent := range []string{AgentOpenClaw, AgentKimi, AgentQwen, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentOpenHands, AgentCrush, AgentJunie} {
-		cases = append(cases, testCase{agent, agent, LifecyclePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}})
-	}
-	covered := make(map[string]bool)
-	for _, tc := range cases {
-		covered[tc.agent] = true
-		t.Run(tc.name, func(t *testing.T) {
-			source, err := ParseAgent(tc.agent)
-			if err != nil {
-				t.Fatal(err)
+	for _, form := range []struct {
+		name string
+		args any
+	}{
+		{"object", map[string]any{"url": "https://example.com/", "query": "browser docs", "password": "private"}},
+		{"serialized", encoded},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			args := form.args
+			type testCase struct {
+				name, agent string
+				lc          Lifecycle
+				payload     map[string]any
 			}
-			ev := Map(tc.lc, tc.agent, source, "evt", tc.payload)
-			if ev.EventType != model.EventToolCall || ev.ContentPreview != want || ev.URL != "" || hasTag(ev.Tags, model.TagNetwork) {
-				t.Fatalf("event = %+v", ev)
+			cases := []testCase{
+				{"codex", AgentCodex, LifecycleCodexPreTool, map[string]any{"tool_name": "mcp__notes__save", "tool_input": args}},
+				{"codex other fetch tool", AgentCodex, LifecycleCodexPreTool, map[string]any{"tool_name": "mcp__fetch__status", "tool_input": args}},
+				{"codex MCP case differs", AgentCodex, LifecycleCodexPreTool, map[string]any{"tool_name": "mcp__Fetch__fetch", "tool_input": args}},
+				{"claude", AgentClaude, LifecyclePreTool, map[string]any{"tool_name": "mcp__notes__save", "tool_input": args}},
+				{"cursor generic", AgentCursor, LifecycleCursorPreTool, map[string]any{"tool_name": "MCP:save", "tool_input": args}},
+				{"cursor direct", AgentCursor, LifecycleMCPCall, map[string]any{"tool_name": "save", "mcp_server_name": "notes", "tool_input": args}},
+				{"opencode", AgentOpenCode, LifecycleOpenCodePreTool, map[string]any{"tool": "plugin", "args": args, "tool_input": map[string]any{"wrong": "field"}}},
+				{"windsurf", AgentWindsurf, LifecycleMCPCall, map[string]any{"agent_action_name": "pre_mcp_tool_use", "tool_info": map[string]any{"mcp_server_name": "notes", "mcp_tool_name": "save", "mcp_tool_arguments": args}}},
+				{"gemini", AgentGemini, LifecycleGeminiPreTool, map[string]any{"tool_name": "plugin", "tool_input": args, "parameters": map[string]any{"wrong": "field"}}},
+				{"cline", AgentCline, LifecyclePreTool, map[string]any{"preToolUse": map[string]any{"toolName": "plugin", "parameters": args}}},
+				{"copilot", AgentCopilot, LifecycleCopilotPreTool, map[string]any{"toolName": "plugin", "toolArgs": args}},
+				{"vscode", AgentVSCode, LifecycleVSCodePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
+				{"antigravity", AgentAntigravity, LifecycleAntigravityPreTool, map[string]any{"toolCall": map[string]any{"name": "plugin", "args": args}}},
+				{"factory", AgentFactory, LifecycleFactoryPreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
+				{"grok", AgentGrok, LifecycleGrokPreTool, map[string]any{"toolName": "plugin", "toolInput": args}},
+				{"devin", AgentDevin, LifecycleDevinPreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
+				{"hermes", AgentHermes, LifecycleHermesPreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
+				{"pi", AgentPi, LifecyclePreTool, map[string]any{"toolName": "plugin", "input": args}},
+				{"kilo", AgentKilo, LifecyclePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
 			}
-			if err := ev.Validate(); err != nil {
-				t.Fatal(err)
+			for _, agent := range []string{AgentOpenClaw, AgentKimi, AgentQwen, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentOpenHands, AgentCrush, AgentJunie} {
+				cases = append(cases, testCase{agent, agent, LifecyclePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}})
+			}
+			covered := make(map[string]bool)
+			for _, tc := range cases {
+				covered[tc.agent] = true
+				t.Run(tc.name, func(t *testing.T) {
+					source, err := ParseAgent(tc.agent)
+					if err != nil {
+						t.Fatal(err)
+					}
+					ev := Map(tc.lc, tc.agent, source, "evt", tc.payload)
+					if ev.EventType != model.EventToolCall || ev.ContentPreview != want || ev.URL != "" || hasTag(ev.Tags, model.TagNetwork) {
+						t.Fatalf("event = %+v", ev)
+					}
+					if err := ev.Validate(); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			for _, agent := range AgentNames() {
+				if !covered[agent] {
+					t.Errorf("missing generic input fixture for %s", agent)
+				}
 			}
 		})
-	}
-	for _, agent := range AgentNames() {
-		if !covered[agent] {
-			t.Errorf("missing generic input fixture for %s", agent)
-		}
 	}
 }
 
