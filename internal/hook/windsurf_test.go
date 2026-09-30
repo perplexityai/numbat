@@ -278,23 +278,23 @@ func TestMapWindsurfEvents(t *testing.T) {
 			},
 		},
 		{
-			name:  "post_mcp_tool_use with url → network.indicator",
+			name:  "post_mcp_tool_use with url → tool.result",
 			event: "post_mcp_tool_use",
 			payload: ws("post_mcp_tool_use", map[string]any{
 				"server_name": "fetch",
 				"name":        "fetch",
 				"url":         "https://evil.example/x",
 			}),
-			want: model.EventNetworkIndicator,
+			want: model.EventToolResult,
 			check: func(t *testing.T, ev model.Event) {
-				if ev.URL != "https://evil.example/x" {
+				if ev.URL != "" {
 					t.Errorf("url = %q", ev.URL)
 				}
 				if ev.MCPServer != "fetch" || ev.MCPTool != "fetch" {
 					t.Errorf("mcp split = %q/%q, want fetch/fetch (server_name/name fallbacks)", ev.MCPServer, ev.MCPTool)
 				}
-				if !hasTag(ev.Tags, model.TagNetwork) {
-					t.Errorf("tags = %v, want network", ev.Tags)
+				if hasTag(ev.Tags, model.TagNetwork) {
+					t.Errorf("tags = %v, want no network tag", ev.Tags)
 				}
 			},
 		},

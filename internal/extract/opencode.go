@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // OpenCodeExtractor parses one whole-file JSON record from OpenCode's earlier
@@ -358,6 +359,7 @@ func classifyOpenCodeTool(ev *model.Event, tool string, input map[string]json.Ra
 		// An MCP-qualified name splits into the typed server/tool fields so a rule
 		// or SIEM can pivot without re-parsing the flattened name.
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
 		if server, mcpTool, ok := splitMCPName(tool); ok {
 			ev.MCPServer, ev.MCPTool = server, mcpTool
 		}

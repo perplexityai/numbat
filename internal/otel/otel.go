@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // Standard semantic-convention attribute keys numbat keys off. These are
@@ -338,8 +339,23 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 	ev.ToolName = name
 	callID := a.str(attrGenAIToolCallID)
 	ev.ToolCallID = callID
+	defer func() {
+		if ev.EventType == model.EventToolCall {
+			ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(a.str(attrGenAIToolCallArgs, attrToolCallArgs))
+			if server, tool, ok := splitMCPName(name); ok {
+				ev.MCPServer, ev.MCPTool = server, tool
+			}
+		}
+	}()
 
-	if rawURL := a.str(attrURLFull, attrURL, attrHTTPURL); rawURL != "" {
+	rawURL := a.str(attrURLFull, attrURL, attrHTTPURL)
+	if name == mcpFetchToolName {
+		args := jsonObject(a.str(attrGenAIToolCallArgs, attrToolCallArgs))
+		if target := mapString(args, "url"); target != "" {
+			rawURL = target
+		}
+	}
+	if rawURL != "" {
 		ev.EventType = model.EventNetworkIndicator
 		ev.URL = otelNetworkTargetURL(rawURL)
 		ev.ContentPreview = preview(rawURL)
@@ -373,9 +389,6 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 		}
 	default:
 		ev.EventType = model.EventToolCall
-		if server, tool, ok := splitMCPName(name); ok {
-			ev.MCPServer, ev.MCPTool = server, tool
-		}
 	}
 
 	if errored(a, rec) {
@@ -651,7 +664,8 @@ func otelNetworkTargetURL(raw string) string {
 // mcpFetchToolName and the mcp__ split mirror the hook/extractor constants, kept
 // local so the otel sensor stays self-contained.
 const (
-	mcpNamePrefix = "mcp__"
+	mcpNamePrefix    = "mcp__"
+	mcpFetchToolName = "mcp__fetch__fetch"
 )
 
 func splitMCPName(name string) (server, tool string, ok bool) {

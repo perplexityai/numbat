@@ -72,7 +72,12 @@ func redactJSONValue(value any) (any, error) {
 			if String(key) != key {
 				return nil, fmt.Errorf("JSON object key contains credential material")
 			}
-			if structuredSecretKey.MatchString(key) && !isTokenMetric(key, child) {
+			credential := false
+			switch strings.ToLower(key) {
+			case "authorization", "proxy-authorization", "cookie", "set-cookie", "auth", "credentials", "pwd":
+				credential = true
+			}
+			if credential || structuredSecretKey.MatchString(key) && !isTokenMetric(key, child) {
 				value[key] = Mask
 				continue
 			}

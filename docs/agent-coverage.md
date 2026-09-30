@@ -12,6 +12,46 @@ page lists the surfaces numbat actually supports. A product name does not imply
 coverage of every desktop, CLI, IDE, ACP, gateway, or hosted mode; host limits
 are stated in the relevant row.
 
+## MCP and browser detail
+
+Generic tool calls retain a redacted `content_preview` of supplied arguments in
+artifacts, hooks, and standard OTLP tool-call logs. JSON keys are sorted, credential
+fields are masked before truncation, and previews keep complete whitespace-delimited
+tokens within 200 Unicode characters. `content_preview_truncated` marks omitted
+input. Inputs above 64 KiB use a size-limit marker; malformed JSON is omitted.
+Unrecognized freeform input uses the normal text redactor. SQL, message text, and
+form values can still appear when secret patterns do not recognize them.
+
+`--content full` remains a separate option for conversation messages, bounded to
+1 MiB. It does not expand tool arguments or results. Native agent OTLP results
+and decisions keep their existing mappings; missing arguments cannot be recovered.
+
+- Codex function/custom calls retain input. Results inherit tool/MCP identity from
+  a preceding call with the same `call_id`; unmatched results remain unnamed.
+- CUA `js` retains code and title within the preview limit. JavaScript is not
+  parsed for actions or destinations; CUA also controls native applications.
+- Cline's legacy `browser_action` emits a network indicator for `launch` with an
+  HTTP(S) URL. OpenClaw's `browser` does so for `open` or `navigate`. Other actions
+  remain `tool.call` with input context and a `browser` tag.
+- The canonical `mcp__fetch__fetch` extracts its input URL on Claude/Codex artifact
+  and hook paths and standard OTLP calls. Other MCP tools do not gain network
+  classification merely by carrying a URL argument.
+- Cursor's generic `MCP:<tool>` hooks retain input without inferring network
+  activity. Direct MCP pre-hooks can report the HTTP/SSE server endpoint; the
+  canonical fetch adapter uses its input URL as the action target. Post-hooks
+  remain results even when they repeat the endpoint.
+
+Fixtures follow the [Codex](https://learn.chatgpt.com/docs/hooks),
+[Claude Code](https://code.claude.com/docs/en/hooks#pretooluse-input),
+[Cursor](https://cursor.com/docs/hooks), and
+[Windsurf](https://docs.windsurf.com/windsurf/cascade/hooks) hook contracts,
+[OTLP tool arguments](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-tool-call-arguments),
+and the [canonical MCP fetch tool](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch).
+Browser mappings follow
+[Cline v3.72.0](https://github.com/cline/cline/blob/0e7e0099cdcf5349bebc2cf86b9b5fd64650b736/src/core/task/tools/handlers/BrowserToolHandler.ts)
+and the [OpenClaw dispatcher](https://github.com/openclaw/openclaw/blob/d7f8b2c3fddd1ea799a80cfd832b897766a0d480/extensions/browser/src/browser-tool-dispatch.ts).
+The Cline adapter applies only when a producer reports the legacy `browser_action`.
+
 ## Platform conventions
 
 Release binaries target macOS, Linux, and native Windows. `~` means the current
