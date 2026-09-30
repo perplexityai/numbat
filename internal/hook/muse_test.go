@@ -170,6 +170,33 @@ func TestMuseToolMapping(t *testing.T) {
 	}
 }
 
+// TestMuseMCPToolCallSplitsServerAndTool proves Muse needs no MCP-specific
+// classifier code at all: a live `muse exec` run against a real streamable-HTTP
+// MCP server (mcpplaygroundonline.com's public "Complex" demo, no auth) showed
+// PreToolUse's tool_name for an MCP call is exactly `mcp__<server>__<tool>`
+// (server name's hyphens become underscores), byte-for-byte the same
+// convention already used by Claude/Codex, so it falls into the generic
+// splitMCPName path in classifyPortableTool for free.
+func TestMuseMCPToolCallSplitsServerAndTool(t *testing.T) {
+	payload := map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "mcp__complex_demo__analyze_data",
+		"tool_input":      map[string]any{"dataSource": "numbat-mcp-test"},
+		"tool_use_id":     "call_1",
+		"session_id":      "sess-1",
+	}
+	ev := Map(LifecyclePreTool, AgentMuse, model.AgentMuseCode, "evt", payload)
+	if ev.EventType != model.EventToolCall {
+		t.Fatalf("event = %s, want %s", ev.EventType, model.EventToolCall)
+	}
+	if ev.MCPServer != "complex_demo" || ev.MCPTool != "analyze_data" {
+		t.Fatalf("mcp split = %q/%q, want complex_demo/analyze_data", ev.MCPServer, ev.MCPTool)
+	}
+	if err := ev.Validate(); err != nil {
+		t.Fatalf("mapped invalid event: %v", err)
+	}
+}
+
 // TestMusePostToolExitCodeFromJSONStringResponse proves the decode delta from
 // every other Claude-shaped portable agent: tool_response is a JSON-encoded
 // string, not a nested object (Cursor's tool_output shape class), and
