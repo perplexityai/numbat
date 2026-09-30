@@ -14,49 +14,26 @@ are stated in the relevant row.
 
 ## MCP and browser detail
 
-Generic tool calls retain a redacted `content_preview` of supplied arguments in
-artifacts, hooks, and standard OTLP tool-call logs. JSON keys are sorted, credential
-fields are masked before truncation, and previews keep complete whitespace-delimited
-tokens within 200 Unicode characters. `content_preview_truncated` marks omitted
-input. Inputs above 64 KiB use a size-limit marker; malformed JSON is omitted.
-Unrecognized freeform input uses the normal text redactor. SQL, message text, and
-form values can still appear when secret patterns do not recognize them.
+Generic tool calls retain supplied arguments in a redacted `content_preview`
+across artifacts, hooks, and standard OTLP tool-call logs. JSON keys are sorted
+and credentials are masked before the 200-character preview limit is applied.
+`content_preview_truncated` marks omitted input. Inputs above 64 KiB use a
+size-limit marker; malformed JSON is omitted. SQL, message text, and form values
+can still appear when secret patterns do not recognize them.
 
-`--content full` remains a separate option for conversation messages, bounded to
-1 MiB. It does not expand tool arguments or results. Native agent OTLP results
-and decisions keep their existing mappings; missing arguments cannot be recovered.
-
-- Codex function/custom calls retain input. Results inherit tool/MCP identity from
-  a preceding call with the same `call_id`; unmatched results remain unnamed.
-- Antigravity post-tool hooks retain `toolCall.name` when supplied, with step
-  correlation and explicit error status. Older payloads without it stay unnamed.
+- Codex transcript results inherit tool/MCP identity from a preceding call with
+  the same `call_id`; unmatched results remain unnamed.
 - CUA `js` retains code and title within the preview limit. JavaScript is not
-  parsed for actions or destinations; CUA also controls native applications.
+  parsed for actions or destinations.
 - Cline's legacy `browser_action` emits a network indicator for `launch` with an
   HTTP(S) URL. OpenClaw's `browser` does so for `open` or `navigate`. Other actions
   remain `tool.call` with input context and a `browser` tag.
-- The canonical `mcp__fetch__fetch` extracts its input URL on Claude/Codex artifact
-  and hook paths and standard OTLP calls. Other MCP tools do not gain network
-  classification merely by carrying a URL argument.
 - Cursor's generic `MCP:<tool>` hooks retain input without inferring network
-  activity. Direct MCP pre-hooks can report the HTTP/SSE server endpoint; the
-  canonical fetch adapter uses its input URL as the action target. Post-hooks
-  remain results even when they repeat the endpoint.
+  activity. Direct MCP pre-hooks can report the HTTP/SSE server endpoint;
+  post-hooks remain results even when they repeat it.
 
-Fixtures follow the [Codex](https://learn.chatgpt.com/docs/hooks),
-[Claude Code](https://code.claude.com/docs/en/hooks#pretooluse-input),
-[Cursor](https://cursor.com/docs/hooks), and
-[Windsurf](https://docs.windsurf.com/windsurf/cascade/hooks) hook contracts,
-[OTLP tool arguments](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-tool-call-arguments),
-and the [canonical MCP fetch tool](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch).
-Browser mappings follow
-[Cline v3.72.0](https://github.com/cline/cline/blob/0e7e0099cdcf5349bebc2cf86b9b5fd64650b736/src/core/task/tools/handlers/BrowserToolHandler.ts)
-and the [OpenClaw dispatcher](https://github.com/openclaw/openclaw/blob/d7f8b2c3fddd1ea799a80cfd832b897766a0d480/extensions/browser/src/browser-tool-dispatch.ts).
-The Cline adapter applies only when a producer reports the legacy `browser_action`.
-Generic hook fixtures exercise every registered agent with object and serialized
-arguments in its supported envelope. Plugin fixtures use the fields forwarded by
-Numbat's generated integrations. These tests do not establish support for other
-host versions or replace live testing on each agent.
+URL arguments alone do not establish network activity; the
+[canonical MCP fetch adapter](event-model.md#mcp) extracts its action target.
 
 ## Platform conventions
 
@@ -268,6 +245,8 @@ boundary.
 
 ## Primary references
 
+- OTLP tool arguments: <https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-tool-call-arguments>
+- Canonical MCP fetch tool: <https://github.com/modelcontextprotocol/servers/tree/main/src/fetch>
 - Claude Code hooks: <https://code.claude.com/docs/en/hooks>
 - Codex hooks: <https://learn.chatgpt.com/docs/hooks>
 - Gemini CLI hooks: <https://geminicli.com/docs/hooks/>
@@ -278,6 +257,7 @@ boundary.
 - VS Code hooks: <https://code.visualstudio.com/docs/agents/reference/hooks-reference>
 - OpenCode plugins: <https://opencode.ai/docs/plugins/>
 - OpenCode managed settings: <https://opencode.ai/docs/config/#managed-settings>
+- OpenClaw browser dispatcher: <https://github.com/openclaw/openclaw/blob/d7f8b2c3fddd1ea799a80cfd832b897766a0d480/extensions/browser/src/browser-tool-dispatch.ts>
 - OpenClaw plugin hooks: <https://docs.openclaw.ai/plugins/hooks>
 - OpenClaw plugin policy and runtime verification: <https://docs.openclaw.ai/plugins>
 - OpenClaw plugin management: <https://docs.openclaw.ai/cli/plugins>
@@ -299,6 +279,7 @@ boundary.
 - Qwen Code hooks: <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/>
 - Qwen Code telemetry: <https://qwenlm.github.io/qwen-code-docs/en/developers/development/telemetry/>
 - Cline hooks: <https://github.com/cline/cline/blob/main/.clinerules/hooks/README.md>
+- Cline v3.72.0 browser tool: <https://github.com/cline/cline/blob/0e7e0099cdcf5349bebc2cf86b9b5fd64650b736/src/core/task/tools/handlers/BrowserToolHandler.ts>
 - Cline CLI: <https://docs.cline.bot/cli/cli-reference>
 - Amp plugin API: <https://ampcode.com/manual/plugin-api>
 - Auggie hooks: <https://docs.augmentcode.com/cli/hooks>
