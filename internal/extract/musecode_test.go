@@ -212,3 +212,37 @@ func TestMuseFileContext(t *testing.T) {
 		}
 	}
 }
+
+// TestMuseCodeExtractSplitsMCPToolName proves at-rest MCP calls and results
+// carry mcp_server/mcp_tool. The name shape (mcp__<server>__<tool>, hyphens in
+// the server name become underscores) was captured from a live run against a
+// real streamable-HTTP MCP server; native tools must stay unsplit.
+func TestMuseCodeExtractSplitsMCPToolName(t *testing.T) {
+	const body = `{"schema_version":1,"id":"m1","stream":{"kind":"session","id":"sess-mcp"},"sequence":1,"recorded_at":1789752886300000,"record_type":"event","payload_type":"runtime.session","payload_schema_version":1,"payload":{"kind":"run","run_id":"run-1","event":{"kind":"assistant_tool_calls_committed","message_id":"m1","tool_calls":[{"id":"fc1","call_id":"call-mcp","name":"mcp__complex_demo__analyze_data","args":"{\"dataSource\":\"numbat-mcp-test\"}"},{"id":"fc2","call_id":"call-bash","name":"bash","args":"{\"command\":\"ls\"}"}]}}}
+{"schema_version":1,"id":"m2","stream":{"kind":"session","id":"sess-mcp"},"sequence":2,"recorded_at":1789752886310000,"record_type":"event","payload_type":"runtime.session","payload_schema_version":1,"payload":{"kind":"run","run_id":"run-1","event":{"kind":"tool_result_batch_committed","batch_id":"m1","results":[{"tool_call_index":0,"tool_call_id":"call-mcp","text":"{\"summary\":{\"totalRecords\":3}}"},{"tool_call_index":1,"tool_call_id":"call-bash","text":"{\"exit_code\":0,\"terminal_status\":\"completed\"}"}]}}}
+`
+	res := museExtractFixture(t, "/home/u/.local/share/muse/sessions/2026/09/30/sess-mcp/session.jsonl", body, false)
+	if len(res.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
+	}
+	if len(res.Events) != 4 {
+		t.Fatalf("events = %d, want 4: %+v", len(res.Events), res.Events)
+	}
+	call, bashCall, result, bashResult := res.Events[0], res.Events[1], res.Events[2], res.Events[3]
+	if call.EventType != model.EventToolCall || call.MCPServer != "complex_demo" || call.MCPTool != "analyze_data" {
+		t.Errorf("mcp call = type %q server %q tool %q", call.EventType, call.MCPServer, call.MCPTool)
+	}
+	if result.EventType != model.EventToolResult || result.MCPServer != "complex_demo" || result.MCPTool != "analyze_data" {
+		t.Errorf("mcp result = type %q server %q tool %q", result.EventType, result.MCPServer, result.MCPTool)
+	}
+	for _, ev := range []model.Event{bashCall, bashResult} {
+		if ev.MCPServer != "" || ev.MCPTool != "" {
+			t.Errorf("native bash event leaked mcp fields: %+v", ev)
+		}
+	}
+	for i, ev := range res.Events {
+		if err := ev.Validate(); err != nil {
+			t.Errorf("event %d invalid: %v", i, err)
+		}
+	}
+}

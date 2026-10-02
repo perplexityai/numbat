@@ -396,6 +396,9 @@ func classifyMuseTool(ev *model.Event, name, argsRaw string) {
 		ev.FilePath = museArgString(args, "path")
 	default:
 		ev.EventType = model.EventToolCall
+		if server, tool, ok := splitMCPName(name); ok {
+			ev.MCPServer, ev.MCPTool = server, tool
+		}
 	}
 }
 
@@ -426,6 +429,9 @@ func (MuseCodeExtractor) classifyMuseResult(ev *model.Event, name, text string) 
 		return
 	default:
 		ev.EventType = model.EventToolResult
+		if server, tool, ok := splitMCPName(name); ok {
+			ev.MCPServer, ev.MCPTool = server, tool
+		}
 	}
 	if strings.HasPrefix(text, "tool failed:") || strings.HasPrefix(text, "tool blocked by hook:") {
 		ev.Tags = append(ev.Tags, model.TagToolError)
