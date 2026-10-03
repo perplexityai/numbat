@@ -350,6 +350,33 @@ func (r resolver) toolInput() map[string]any {
 	return nil
 }
 
+// toolInputValue preserves freeform input for generic-call previews. Keep the
+// same agent-specific precedence as the classifiers; never preview the envelope.
+func (r resolver) toolInputValue() any {
+	keys := []string{"tool_input", "toolInput", "tool_args", "toolArgs", "input", "args", "parameters"}
+	switch r.agent {
+	case AgentGemini:
+		keys = []string{"tool_input"}
+	case AgentWindsurf:
+		keys = []string{"mcp_tool_arguments"}
+	case AgentOpenCode, AgentKilo:
+		keys = []string{"args", "tool_input", "input"}
+	case AgentCopilot:
+		keys = []string{"tool_input", "toolInput", "toolArgs", "tool_args"}
+	}
+	for _, key := range keys {
+		switch v := r.fieldMap()[key].(type) {
+		case map[string]any:
+			return v
+		case string:
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return nil
+}
+
 // copilotToolArgs accepts the snake_case object used by PascalCase hooks and the
 // camelCase object/string used by native camelCase hooks.
 func (r resolver) copilotToolArgs() map[string]any {

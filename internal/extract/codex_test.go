@@ -100,7 +100,7 @@ func TestExtractCodexMapsAllShapes(t *testing.T) {
 		{model.EventNetworkIndicator, model.ActorAssistant, "", "", "", "golang zstd", "network", model.ConfidenceHigh},
 		// function_call_output for c1 pairs with the shell function_call (c1), so it
 		// is a command.result, not a generic tool.result.
-		{model.EventCommandResult, model.ActorTool, "", "", "", "SECRET=xyz", "", model.ConfidenceHigh},
+		{model.EventCommandResult, model.ActorTool, "shell", "", "", "SECRET=xyz", "", model.ConfidenceHigh},
 		{model.EventToolResult, model.ActorTool, "", "", "", "read_file, mcp__codex_apps__calendar_create_event", "", model.ConfidenceHigh},
 		{model.EventMessageAssistant, model.ActorSystem, "", "", "", "", "entered_review_mode", model.ConfidenceLow},
 		{model.EventMessageAssistant, model.ActorSystem, "", "", "", "", "exited_review_mode", model.ConfidenceLow},
@@ -611,20 +611,20 @@ func TestExtractCodexMCPFetchEgress(t *testing.T) {
 			// NOT the canonical MCP fetch identifier, so it stays generic.
 			"bare_server_namespace",
 			`{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"fetch","namespace":"fetch","call_id":"c","arguments":"{\"url\":\"https://x/y\"}"}}`,
-			model.EventToolCall, "", "",
+			model.EventToolCall, `{"url":"https://x/y"}`, "",
 		},
 		{
 			// A different tool on the fetch server stays generic.
 			"other_tool_on_fetch_server",
 			`{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"mcp__fetch__status","call_id":"c","arguments":"{\"url\":\"https://x/y\"}"}}`,
-			model.EventToolCall, "", "",
+			model.EventToolCall, `{"url":"https://x/y"}`, "",
 		},
 		{
 			// A non-MCP tool merely named "fetch" (no namespace) is NOT the MCP
 			// fetch server and stays generic.
 			"bare_fetch_no_namespace",
 			`{"timestamp":"t","type":"response_item","payload":{"type":"function_call","name":"fetch","call_id":"c","arguments":"{\"url\":\"https://x/y\"}"}}`,
-			model.EventToolCall, "", "",
+			model.EventToolCall, `{"url":"https://x/y"}`, "",
 		},
 	}
 	for _, tc := range cases {
