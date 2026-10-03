@@ -232,6 +232,7 @@ trust or consent gate:
 | Copilot CLI project | The CLI asks whether to trust a repository directory when launched there. Managed policy hooks remain available regardless of folder trust and have no separate per-hook approval. |
 | Grok Build project | Approve repository `.grok/hooks` through `/hooks-trust`. The default user hook directory does not require this project step. |
 | Factory Droid project | Trust the folder before relying on repository `.factory` configuration, including hooks and MCP servers. User hooks do not need this project step. |
+| Muse Code project | Trust the workspace (`--trust-workspace`, or accept interactively) before relying on `.muse/hooks.json`; user hooks have no separate consent prompt. |
 | Hermes | Consent is per exact event/command pair. Interactive CLI can approve first use. Gateway, cron, and CI must start with `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or exact allowlist entries; otherwise new hooks remain unregistered. `hooks_auto_accept:true` accepts future commands and should be an explicit policy choice. Consent does not hash script contents, so run `hermes hooks doctor` after script changes. |
 | OpenClaw Gateway user/config root | Treat the package as executable Gateway code and complete the policy checklist below. Eight baseline callbacks include inbound message content when the channel emits it; two model callbacks require `allowConversationAccess:true`. WhatsApp inbound callbacks have a separate channel opt-in. |
 
@@ -332,6 +333,7 @@ embedded absolute numbat path both exist inside that runtime.
 | Cursor | Cursor watches hook configuration and reloads it automatically. Verify it in Customize > Hooks and hook output; restart only if the new configuration does not appear. |
 | Gemini CLI | After an external user, project, or system settings deployment, start a new Gemini CLI process, then confirm the hook in `/hooks`. |
 | Windsurf / Devin Desktop | Dashboard hooks load when Devin Desktop starts; system-file hot reload is not documented. After external MDM deployment, restart the app for a deterministic rollout, then trigger a benign covered action. |
+| Muse Code | Hooks are discovered and validated once, at session startup; there is no `muse hooks` reload command, so a config change takes effect only in a new session. A fully valid file prints no confirming output, so verify with `hook status` rather than the session's own console output. |
 
 ### What status proves
 

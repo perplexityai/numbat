@@ -140,6 +140,15 @@ const (
 	kimiWireFileName = "wire.jsonl"
 )
 
+const (
+	museSessionFileName = "session.jsonl"
+	// subagentDirName holds one full transcript per spawned subagent, nested
+	// under its parent's own session directory. Not a Muse-specific concept in
+	// this package (Kimi's subagent layout uses a plain "agents" segment
+	// instead), so it is scoped to the Muse helpers with this name.
+	subagentDirName = "subagent"
+)
+
 // DefaultRoots returns all existing parser-backed artifact roots. It honors
 // agent-specific home overrides and XDG_DATA_HOME.
 func DefaultRoots(home string) []string {
@@ -206,6 +215,9 @@ func DefaultRootsFor(home string, agents []string) []string {
 	}
 	if selected(model.AgentKimiCode) {
 		addDir(KimiCodeRootCandidates(home)...)
+	}
+	if selected(model.AgentMuseCode) {
+		addDir(MuseSessionsRootCandidates(home)...)
 	}
 
 	// The prompt-history files live at the agent roots, outside the session
@@ -369,6 +381,18 @@ func KimiCodeRootCandidates(home string) []string {
 	return rootOverrideCandidates(home, kimiCodeHomeDir, "KIMI_CODE_HOME", "sessions")
 }
 
+// MuseSessionsRootCandidates returns Muse Code's session store root(s). Muse is
+// an XDG-conformant application (confirmed against the installed binary and by
+// pointing XDG_DATA_HOME at a scratch directory): XDG_DATA_HOME wins when set,
+// otherwise the store lives at ~/.local/share/muse/sessions.
+func MuseSessionsRootCandidates(home string) []string {
+	var paths []string
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		paths = append(paths, filepath.Join(dataHome, "muse", "sessions"))
+	}
+	return append(paths, filepath.Join(home, ".local", "share", "muse", "sessions"))
+}
+
 // CoworkRootCandidates returns local Cowork audit roots verified with parser
 // fixtures. Native Windows and Linux stores remain explicit --path inputs until
 // their current locations and record formats are captured.
@@ -514,11 +538,14 @@ func classify(path string) (Artifact, bool) {
 	if isKimiCodeArtifact(path) {
 		return Artifact{Path: path, Agent: model.AgentKimiCode}, true
 	}
+	if isMuseCodeArtifact(path) {
+		return Artifact{Path: path, Agent: model.AgentMuseCode}, true
+	}
 	if strings.EqualFold(filepath.Ext(path), ".jsonl") {
 		if underCursorProjects(path) || underWindsurfRoot(path) ||
 			underCopilotRoot(path) || underGeminiRoot(path) ||
 			underOpenClawRoot(path) || underPiRoot(path) || underKimiCodeRoot(path) || underCodexRoot(path) ||
-			isClaudeInternalWorkflowJournal(path) {
+			underMuseCodeRoot(path) || isClaudeInternalWorkflowJournal(path) {
 			return Artifact{}, false
 		}
 		return Artifact{Path: path, Agent: model.AgentClaudeCode}, true
@@ -892,6 +919,55 @@ func underKimiCodeRoot(path string) bool {
 	return strings.Contains(slashed, "/"+kimiCodeHomeDir+"/") ||
 		strings.HasPrefix(slashed, kimiCodeHomeDir+"/") ||
 		underConfiguredRoot(path, "KIMI_CODE_HOME")
+}
+
+// isMuseCodeArtifact admits only the store's documented terminal layout:
+// sessions/YYYY/MM/DD/<session-id>/session.jsonl, or the same tail with one or
+// more subagent/<id>/ segments inserted before the file (subagents can spawn
+// further subagents, so the nesting depth is unbounded). The "muse"+"sessions"
+// segment pair is matched independently of XDG_DATA_HOME vs the home-relative
+// default, since both roots end in exactly that pair.
+func isMuseCodeArtifact(path string) bool {
+	if !strings.EqualFold(filepath.Base(path), museSessionFileName) {
+		return false
+	}
+	segments := strings.Split(slashIdentity(path), "/")
+	for i, segment := range segments {
+		if segment != "muse" || i+1 >= len(segments) || segments[i+1] != "sessions" {
+			continue
+		}
+		if isMuseSessionTail(segments[i+2:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMuseSessionTail validates YYYY/MM/DD/<session-id>/(subagent/<id>/)*session.jsonl.
+func isMuseSessionTail(tail []string) bool {
+	if len(tail) < 5 {
+		return false
+	}
+	for _, d := range tail[:4] { // YYYY, MM, DD, session-id
+		if d == "" {
+			return false
+		}
+	}
+	rest := tail[4:]
+	for {
+		if len(rest) == 1 {
+			return strings.EqualFold(rest[0], museSessionFileName)
+		}
+		if len(rest) < 3 || rest[0] != subagentDirName || rest[1] == "" {
+			return false
+		}
+		rest = rest[2:]
+	}
+}
+
+func underMuseCodeRoot(path string) bool {
+	slashed := slashIdentity(path)
+	return strings.Contains(slashed, "/muse/sessions/") || strings.HasPrefix(slashed, "muse/sessions/")
 }
 
 // isSpecialFile rejects file types whose open/read may block or have side effects.

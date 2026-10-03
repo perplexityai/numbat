@@ -25,6 +25,13 @@ func TestEmittedEventsSatisfyContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract Kimi fixture: %v", err)
 	}
+	muse, err := (MuseCodeExtractor{}).Extract(strings.NewReader(museSessionFixture), Source{
+		Path:             "/x/sessions/2026/01/01/sess-1/session.jsonl",
+		IncludeReasoning: true,
+	})
+	if err != nil {
+		t.Fatalf("extract Muse Code fixture: %v", err)
+	}
 
 	cases := []struct {
 		name   string
@@ -43,6 +50,7 @@ func TestEmittedEventsSatisfyContract(t *testing.T) {
 		{"openclaw", model.AgentOpenClaw, extractOpenClaw(t, withHeader(`{"type":"message","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./..."}}]}}`)).Events},
 		{"pi", model.AgentPi, pi.Events},
 		{"kimi-code", model.AgentKimiCode, kimi.Events},
+		{"muse-code", model.AgentMuseCode, muse.Events},
 	}
 	covered := make(map[string]bool, len(cases))
 	for _, c := range cases {

@@ -76,6 +76,7 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Grok Build | `${GROK_HOME:-~/.grok}/sessions/` (deferred record shape) | `${GROK_HOME:-~/.grok}/hooks/numbat.json` | yes — `PreToolUse` | Sessions persist automatically across TUI, headless, and ACP hosts, but the record schema is not published. Project hooks require `/hooks-trust`. |
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
+| Muse Code | `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl`, recursing into nested `subagent/<id>/session.jsonl` transcripts at any depth | project `.muse/hooks.json`; user `${XDG_CONFIG_HOME:-~/.config}/muse/settings.json` (requires a top-level `"schema_version": 1` or the CLI refuses to start) | yes — `PreToolUse` | Hooks run outside the sandbox with a cleared environment restricted to `HOME`, `LOGNAME`, `PATH`, `PWD`, `SHELL`, `SHLVL`, `TMPDIR`, `USER`. `PermissionRequest` is intentionally not installed: it was verified, including in a real interactive session, to fire only for Muse's internal skill-reminder bookkeeping tool and never for a real action. Live subagent lineage has no parent-pointer field on the wire; the at-rest transcript does carry one (see the material exceptions below) but is a separate, offline signal. |
 
 With `--include-reasoning`, at-rest parsers map source-recorded reasoning from
 Claude Code, Codex, Gemini session journals, OpenClaw, Pi, Kimi Code, and legacy
@@ -127,17 +128,20 @@ matrix cell.
 | Kiro | The default global `v1` file covers IDE 1.0.182+ and CLI 2.13.0+ v3. `KIRO_HOME` relocates only the CLI target; wire `~/.kiro/hooks/numbat.json` separately for the IDE when both roots are active. The combined `agents` row reports `WIRED=yes` when either root is wired and both are readable; an unreadable root reports an error. Verify each required root with matching `hook status` arguments. numbat does not rewrite v2 blocks embedded in individual custom agents. |
 | OpenHands | Hooks are repository-scoped, so OpenHands requires an explicit `.openhands/hooks.json` path and is excluded from `--agent all`. |
 | Crush | The preliminary hook observes only top-level agent tool calls. numbat covers every tool with the documented fail-open, exit-code-2 contract. |
+| Muse Code | Hooks are validated at session startup only; there is no reload command, so a config change needs a new session. A malformed entry produces a warning and is skipped, but a fully valid file prints no confirming output at all, so `hook status` — not Muse's own console output — is the source of truth for a complete install. `bash`, `read_file`, and `write_file` are the only built-in tool names with a verified input shape for hooks; other built-in tools (`web_fetch`, `web_search`) remain generic `tool.call` there until captured. MCP tool calls need no Muse-specific mapping on the live hook path: a live run against a real streamable-HTTP MCP server showed `tool_name` is exactly `mcp__<server>__<tool>` (verified with `mcp__complex_demo__analyze_data`; hyphens in the server name become underscores), byte-for-byte Claude/Codex's convention, so numbat's existing generic `mcp__` split fills `mcp_server`/`mcp_tool` for free. The at-rest transcript records the same name, and the extractor applies the same split to both the call and its result. `--subagent-worktree-isolation` produces a real, separate git worktree per child, and that child's `cwd` encodes both the lead and child ids; the default non-isolated (shared-workspace) fan-out case has no such field and is not yet correlated to its parent on the *live hook* path. `--managed` is not implemented: the vendor-defined `managed_hooks_path` setting key is confirmed to exist, but its file-vs-directory shape and scope precedence are not. The at-rest transcript is a schema-versioned, append-only JSONL log (verified independently against real files, and cross-checked against a third-party reverse-engineering effort — github.com/specstoryai/getspecstory, Apache-2.0 — done against an older Muse Code version; the core envelope and event catalog matched across that gap). It maps `bash`/`read_file`/`write_file`/`edit_file` the same way; other native tools stay generic for the same no-fabrication reason as the hook path. Unlike the live hook stream, the transcript *does* carry an explicit subagent-to-parent pointer (a `task_stream_linked` run event, sometimes with a direct relative path to the child's own transcript), so numbat's `SubAgent` field on at-rest events is a real, verified signal even though the equivalent live field is not. Two record-envelope variants exist beyond the plain one — a "retained frame" transaction wrapper and an "omitted record" tombstone for an ephemeral status delta the runtime chose not to keep — both handled, neither documented anywhere the adapter cites. |
 
 ### Event-selection exceptions
 
-OpenClaw, Hermes, and Junie need event-selection detail because superficially
-similar upstream callbacks do not always represent the same lifecycle boundary:
+OpenClaw, Hermes, Junie, and Muse Code need event-selection detail because
+superficially similar upstream callbacks do not always represent the same
+lifecycle boundary:
 
 | Agent | Installed coverage | Intentional exclusions and limits |
 |---|---|---|
 | OpenClaw | Eight typed session, message, tool, and subagent callbacks. `llm_input` and `llm_output` are added only with `plugins.entries.numbat.hooks.allowConversationAccess:true`. | Inbound messages can contain content; outbound delivery is content-free. Model callbacks forward only the current input or nonempty assistant text, can repeat on retries, and omit system prompt, history, reasoning, tools, usage, and raw message objects. WhatsApp inbound callbacks require a separate channel opt-in. Only `before_tool_call` can block. |
 | Hermes | Session start/finalize, LLM prompt/assistant, pre/post tool, approval, and subagent events in the active profile; CLI and Gateway use the same shell hooks. | `on_session_end` fires after each turn, so `on_session_finalize` is the true `session.end`. `on_session_reset` is followed by a new start, and transform/policy callbacks add no distinct normalized action. The canonical `state.db` remains deferred. |
 | Junie CLI (Early Access) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, and `SessionEnd` from user or explicitly supplied config. | `PermissionRequest` is omitted because an empty successful monitor callback would auto-approve the action. `StopFailure` is provider-health telemetry, and there is no post-tool event. Payloads have no session id or cwd, so sequence correlation is unavailable. Prompt hooks are TUI-only; ACP and server hosts run no hooks. |
+| Muse Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `Stop`, and `SessionEnd`. | `PermissionRequest` is omitted for a different reason than Junie's: it was verified — across five conditions including a real interactive session with no bypass flags — to fire only for Muse's internal `submit_reminder_decision` skill-reminder tool, never for a real tool call, so an empty monitor response is not a safety gap, only noise. `PreCompact`, `PostCompact`, and `Notification` are bookkeeping-only, matching every other portable agent. `PreLLMCall`/`PostLLMCall` carry full conversation content and are opt-in only, not installed by default. Muse also runs an internal `skill-reminder`/`verify-reminder` subagent pair on effectively every turn, unrelated to user-requested fan-out; numbat does not fabricate shell or file semantics for their sole tool, `submit_reminder_decision`, which stays generic `tool.call`. |
 
 ## Enforcement
 
@@ -181,9 +185,14 @@ directories as local source-plugin directories. numbat's integration is a
 generated local TypeScript plugin, so it does not claim a first-class OpenCode
 `--managed` target until that loading path is verified. OpenClaw likewise
 documents per-state-directory plugin roots, not an administrator-managed plugin
-path; deploy its package and activation policy per Gateway service user. Other
-agents use user/project configuration or a vendor management plane; numbat does
-not invent a system path where the vendor has not defined one.
+path; deploy its package and activation policy per Gateway service user. Muse
+Code documents a `managed_hooks_path` settings key (and a legacy
+`TBH_MANAGED_HOOKS_PATH` environment override), but numbat does not yet
+support `--managed` for it: the key's file-vs-directory shape and its
+precedence against user/project scope are unconfirmed, and numbat does not
+guess at a policy-file contract it has not verified. Other agents use
+user/project configuration or a vendor management plane; numbat does not
+invent a system path where the vendor has not defined one.
 
 ## Known collection gaps
 
@@ -246,6 +255,8 @@ boundary.
 - Devin hooks: <https://docs.devin.ai/cli/extensibility/hooks/overview>
 - Hermes hooks: <https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks/>
 - Hermes native Windows paths: <https://hermes-agent.nousresearch.com/docs/user-guide/windows-native>
+- Muse Code hooks (internal Meta documentation; names file locations and the event list but not the field schema, response contract, or timeouts — those are empirical, from live capture): `https://dev.meta.ai/docs/muse-code/extending#hooks`
+- Muse Code session transcript format (third-party reverse-engineering, Apache-2.0, cross-checked against real files rather than trusted as-is): <https://github.com/specstoryai/getspecstory> — `specstory-cli/pkg/providers/musecode/MUSE-CODE-FORMAT.md`
 - Pi session format: <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md>
 - Pi extensions: <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md>
 - Kimi Code sessions: <https://www.kimi.com/code/docs/en/kimi-code-cli/guides/sessions.html>

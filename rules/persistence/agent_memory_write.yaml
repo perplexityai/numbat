@@ -1,0 +1,36 @@
+id: persistence.agent_memory_write
+version: "1.0"
+enabled: true
+title: Committed agent memory file targeted
+description: |-
+  A file event or shell mutator targeted a file under .agents/memory/. Muse Code loads this
+  committed project memory automatically in every future session, including an untrusted
+  workspace, so content planted here can steer model behavior without a fresh compromise.
+severity: medium
+expr: |-
+  (
+    event.event_type == "file.write" &&
+    event.file_path.matches("(?i)(^|/)\\.agents/memory/.+$")
+  ) || (
+    (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
+    shell_commands.exists(command,
+      command.redirects.exists(redirect,
+        redirect.op in ["write", "append"] &&
+        redirect.target.matches("(?i)(^|[\\\\/])\\.agents[\\\\/]memory[\\\\/].+$")
+      ) ||
+      (
+        command.name.matches("(?i)^(tee|sed)$") &&
+        command.argv.exists(arg, arg.matches("(?i)(^|[\\\\/])\\.agents[\\\\/]memory[\\\\/].+$")) &&
+        (
+          !command.name.matches("(?i)^sed$") ||
+          command.argv.exists(arg, arg.matches("(?i)^(-i|--in-place)(=.*)?$"))
+        )
+      ) ||
+      (
+        command.name.matches("(?i)^(cp|mv|install)$") &&
+        command.argv.size() > 1 &&
+        command.argv[command.argv.size() - 1].matches("(?i)(^|[\\\\/])\\.agents[\\\\/]memory[\\\\/].+$")
+      )
+    )
+  )
+tags: [attack.t1565.001]

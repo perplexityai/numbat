@@ -72,8 +72,10 @@ const (
 	// AgentCrush is the Crush PreToolUse hook source.
 	AgentCrush = "crush"
 	// AgentJunie is the Junie CLI Early Access hook source.
-	AgentJunie   = "junie"
-	AgentUnknown = "unknown"
+	AgentJunie = "junie"
+	// AgentMuseCode is Meta's Muse Code CLI hook source.
+	AgentMuseCode = "muse-code"
+	AgentUnknown  = "unknown"
 )
 
 // SourceType classifies how an event was observed: artifact is an at-rest
@@ -175,7 +177,7 @@ var (
 		AgentGrok: {}, AgentDevinCLI: {}, AgentHermesCLI: {},
 		AgentPi: {}, AgentKimiCode: {}, AgentQwenCode: {}, AgentCline: {},
 		AgentAmp: {}, AgentAuggie: {}, AgentKiro: {}, AgentGoose: {}, AgentKilo: {},
-		AgentOpenHands: {}, AgentCrush: {}, AgentJunie: {},
+		AgentOpenHands: {}, AgentCrush: {}, AgentJunie: {}, AgentMuseCode: {},
 		AgentUnknown: {},
 	}
 	confidences = map[string]struct{}{ConfidenceHigh: {}, ConfidenceMedium: {}, ConfidenceLow: {}}
