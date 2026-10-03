@@ -117,8 +117,15 @@ func newEnv() (*cel.Env, error) {
 			ext.ParseStructTags(true),
 		),
 		ext.Lists(),
+		ext.Strings(),
 		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable(shellCommandsVariable, cel.ListType(cel.ObjectType("rule.ShellCommand"))),
+		cel.Function("canonical_path",
+			cel.Overload("canonical_path_string",
+				[]*cel.Type{cel.StringType}, cel.StringType,
+				cel.UnaryBinding(canonicalPathBinding),
+			),
+		),
 	)
 }
 

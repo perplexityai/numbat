@@ -1,5 +1,5 @@
 id: privilege.sudoers_tamper
-version: "1.3"
+version: "1.4"
 enabled: true
 title: Agent targeted sudoers policy for modification
 description: |-
@@ -10,42 +10,61 @@ severity: high
 expr: |-
   (
     (event.event_type == "file.write" || event.event_type == "file.delete") &&
-    event.file_path.matches("^/etc/sudoers$|^/etc/sudoers\\.d/[^/]+$")
+    canonical_path(event.file_path).matches("^/etc/sudoers$|^/etc/sudoers\\.d/[^/]+$")
   ) || (
     (event.event_type == "command.exec" || (event.source_type == "otel" && event.event_type == "command.result")) &&
     shell_commands.exists(command,
       (
         command.name.matches("(?i)^visudo$") &&
         !command.argv.exists(arg,
-          arg.matches("(?i)^(-c|--check|--help|-h|--version|-V|--export)(=.*)?$")
+          arg in ["--check", "--help", "--version", "-h", "-V"] ||
+          arg == "--export" ||
+          arg.startsWith("--export=") ||
+          arg.matches("^-[IOPqs]*c") ||
+          arg.matches("^-[IOPqs]*x")
         ) &&
         (
           (
-            !command.argv.exists(arg, arg.matches("(?i)^(-f|--file)(=.*)?$")) &&
             command.argv.slice(1, command.argv.size()).all(arg,
-              arg.matches("(?i)^(-q|-s|--quiet|--strict)$")
+              arg.matches("^-[IOPqs]+$") ||
+              arg in ["--no-includes", "--owner", "--perms", "--quiet", "--strict"]
             )
           ) ||
           lists.range(command.argv.size()).exists(i,
             i > 0 &&
             (
-              command.argv[i].matches("(?i)^(-f|--file)=/etc/sudoers(\\.d/[^/]+)?$") ||
               (
-                command.argv[i].matches("(?i)^(-f|--file)$") &&
+                command.argv[i].startsWith("--file=") &&
+                canonical_path(command.argv[i].substring(7)).matches("^/etc/sudoers(\\.d/[^/]+)?$")
+              ) ||
+              (
+                command.argv[i].matches("^-[IOPqs]*f.+$") &&
+                canonical_path(command.argv[i].substring(command.argv[i].indexOf("f") + 1)).matches("^/etc/sudoers(\\.d/[^/]+)?$")
+              ) ||
+              (
+                (command.argv[i] == "--file" || command.argv[i].matches("^-[IOPqs]*f$")) &&
                 i + 1 < command.argv.size() &&
-                command.argv[i + 1].matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$")
+                canonical_path(command.argv[i + 1]).matches("^/etc/sudoers(\\.d/[^/]+)?$")
               )
+            )
+          ) ||
+          (
+            command.argv.size() > 1 &&
+            canonical_path(command.argv[command.argv.size() - 1]).matches("^/etc/sudoers(\\.d/[^/]+)?$") &&
+            command.argv.slice(1, command.argv.size() - 1).all(arg,
+              arg.matches("^-[IOPqs]+$") ||
+              arg in ["--no-includes", "--owner", "--perms", "--quiet", "--strict"]
             )
           )
         )
       ) ||
       command.redirects.exists(redirect,
         redirect.op in ["write", "append"] &&
-        redirect.target.matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$")
+        canonical_path(redirect.target).matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$")
       ) ||
       lists.range(command.argv.size()).exists(i,
         i > 0 &&
-        command.argv[i].matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$") &&
+        canonical_path(command.argv[i]).matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$") &&
         (
           command.name.matches("(?i)^(rm|truncate|tee)$") ||
           (

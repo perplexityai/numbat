@@ -1,5 +1,5 @@
 id: persistence.ssh_authorized_keys_command
-version: "1.6"
+version: "1.7"
 enabled: true
 title: Command targeted SSH authorized_keys
 description: |-
@@ -11,12 +11,12 @@ expr: |-
   shell_commands.exists(command,
     command.redirects.exists(redirect,
       redirect.op in ["write", "append"] &&
-      redirect.target.matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:[\\\\/]Users[\\\\/][^\\\\/]+)[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:[\\\\/]ProgramData)[\\\\/]ssh[\\\\/]administrators_authorized_keys)$")
+      canonical_path(redirect.target).matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))/\\.ssh/authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:/ProgramData)/ssh/administrators_authorized_keys)$")
     ) ||
     (
       command.name.matches("(?i)^(tee|truncate|rm|sed)$") &&
       command.argv.exists(arg,
-        arg.matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:[\\\\/]Users[\\\\/][^\\\\/]+)[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:[\\\\/]ProgramData)[\\\\/]ssh[\\\\/]administrators_authorized_keys)$")
+        canonical_path(arg).matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))/\\.ssh/authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:/ProgramData)/ssh/administrators_authorized_keys)$")
       ) &&
       (
         !command.name.matches("(?i)^sed$") ||
@@ -27,7 +27,7 @@ expr: |-
       command.name.matches("(?i)^(set-content|add-content|clear-content|out-file|remove-item|ri|new-item)$") &&
       lists.range(command.argv.size()).exists(i,
         i > 0 &&
-        command.argv[i].matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:[\\\\/]Users[\\\\/][^\\\\/]+)[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:[\\\\/]ProgramData)[\\\\/]ssh[\\\\/]administrators_authorized_keys)$") &&
+        canonical_path(command.argv[i]).matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))/\\.ssh/authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:/ProgramData)/ssh/administrators_authorized_keys)$") &&
         (
           i == 1 ||
           command.argv[i - 1].matches("(?i)^-(path|literalpath|filepath)$") ||
@@ -42,10 +42,10 @@ expr: |-
       command.name.matches("(?i)^(cp|mv|install|copy-item|move-item)$") &&
       command.argv.size() > 2 &&
       (
-        command.argv[command.argv.size() - 1].matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:[\\\\/]Users[\\\\/][^\\\\/]+)[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:[\\\\/]ProgramData)[\\\\/]ssh[\\\\/]administrators_authorized_keys)$") ||
+        canonical_path(command.argv[command.argv.size() - 1]).matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))/\\.ssh/authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:/ProgramData)/ssh/administrators_authorized_keys)$") ||
         lists.range(command.argv.size() - 1).exists(i,
           command.argv[i].matches("(?i)^-destination$") &&
-          command.argv[i + 1].matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:[\\\\/]Users[\\\\/][^\\\\/]+)[\\\\/]\\.ssh[\\\\/]authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:[\\\\/]ProgramData)[\\\\/]ssh[\\\\/]administrators_authorized_keys)$")
+          canonical_path(command.argv[i + 1]).matches("(?i)^((~|\\$HOME|\\$\\{HOME\\}|/(home/[^/]+|Users/[^/]+|root|var/root|private/var/root))/\\.ssh/authorized_keys2?|(\\$env:USERPROFILE|%USERPROFILE%|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?|(\\$env:ProgramData|%ProgramData%|[A-Z]:/ProgramData)/ssh/administrators_authorized_keys)$")
         )
       )
     )

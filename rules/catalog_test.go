@@ -410,6 +410,7 @@ func TestPersistenceRules(t *testing.T) {
 
 		{"authorized_keys write", write("/Users/dev/.ssh/authorized_keys"), "persistence.ssh_authorized_keys"},
 		{"Linux authorized_keys write", write("/home/dev/.ssh/authorized_keys"), "persistence.ssh_authorized_keys"},
+		{"Linux authorized_keys proc task-root alias", write("/proc/4321/task/8765/root/home/dev/.ssh/authorized_keys"), "persistence.ssh_authorized_keys"},
 		{"Windows user authorized_keys write", write("C:/Users/dev/.ssh/authorized_keys"), "persistence.ssh_authorized_keys"},
 		{"Windows administrator authorized_keys write", write("C:/ProgramData/ssh/administrators_authorized_keys"), "persistence.ssh_authorized_keys"},
 		{"authorized_keys append", cmd("cat key.pub >> ~/.ssh/authorized_keys"), "persistence.ssh_authorized_keys_command"},
@@ -458,6 +459,8 @@ func TestPrivilegeRules(t *testing.T) {
 	eng := builtinEngine(t)
 	runCases(t, eng, []ruleCase{
 		{"sudoers file write", write("/etc/sudoers.d/agent"), "privilege.sudoers_tamper"},
+		{"sudoers dot-segment alias", write("/etc/sudoers.d/./agent"), "privilege.sudoers_tamper"},
+		{"sudoers proc task-root alias", write("/proc/4321/task/8765/root/etc/sudoers.d/agent"), "privilege.sudoers_tamper"},
 		{"append nopasswd sudoers", cmd("echo 'agent ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers.d/agent"), "privilege.sudoers_tamper"},
 		{"tee sudoers", cmd("printf 'agent ALL=(ALL) NOPASSWD:ALL' | tee -a /etc/sudoers"), "privilege.sudoers_tamper"},
 		{"visudo command", cmd("EDITOR=tee visudo"), "privilege.sudoers_tamper"},
