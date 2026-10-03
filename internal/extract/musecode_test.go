@@ -3,6 +3,7 @@ package extract
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/perplexityai/numbat/internal/model"
 )
@@ -244,5 +245,49 @@ func TestMuseCodeExtractSplitsMCPToolName(t *testing.T) {
 		if err := ev.Validate(); err != nil {
 			t.Errorf("event %d invalid: %v", i, err)
 		}
+	}
+}
+
+// TestMuseCodeExtractStampsRecordedAt proves events carry the record's own
+// recorded_at (microseconds since the epoch) as UTC RFC3339, including for a
+// record inside a retained-frame wrapper, and that a record with no
+// recorded_at stays empty rather than inheriting the previous record's time.
+func TestMuseCodeExtractStampsRecordedAt(t *testing.T) {
+	path := "/home/u/.local/share/muse/sessions/2026/09/18/sess-1/session.jsonl"
+	res := museExtractFixture(t, path, museSessionFixture, false)
+	if got := res.Events[0].Timestamp; got != "2026-09-18T17:34:46.281112Z" {
+		t.Errorf("session.start timestamp = %q", got)
+	}
+	if got := res.Events[1].Timestamp; got != "2026-09-18T17:34:46.3Z" {
+		t.Errorf("prompt.user timestamp = %q", got)
+	}
+	if got := res.Events[len(res.Events)-1].Timestamp; got != "2026-09-18T17:34:46.38Z" {
+		t.Errorf("session.end timestamp = %q", got)
+	}
+	var prev time.Time
+	for i, ev := range res.Events {
+		ts, err := time.Parse(time.RFC3339Nano, ev.Timestamp)
+		if err != nil {
+			t.Fatalf("event %d timestamp %q: %v", i, ev.Timestamp, err)
+		}
+		if ts.Before(prev) {
+			t.Errorf("event %d timestamp %s goes backwards from %s", i, ts, prev)
+		}
+		prev = ts
+	}
+
+	const body = `{"schema_version":1,"id":"a","stream":{"kind":"session","id":"sess-t"},"sequence":1,"recorded_at":1789752886281112,"record_type":"event","payload_type":"runtime.session.metadata","payload_schema_version":1,"payload":{"kind":"metadata","record":{"workspace_root":"/w"}}}
+{"retained_frame":"session_permission_transaction","frame_schema_version":1,"transaction_id":"tx","children":[{"child_index":0,"record_json":"{\"schema_version\":1,\"id\":\"b\",\"stream\":{\"kind\":\"session\",\"id\":\"sess-t\"},\"sequence\":2,\"recorded_at\":1789752886370000,\"record_type\":\"event\",\"payload_type\":\"session.end\",\"payload_schema_version\":1,\"payload\":{\"kind\":\"session_end\",\"record\":{}}}"}]}
+{"schema_version":1,"id":"c","stream":{"kind":"session","id":"sess-t"},"sequence":3,"record_type":"event","payload_type":"session.end","payload_schema_version":1,"payload":{"kind":"session_end","record":{}}}
+`
+	res = museExtractFixture(t, "/home/u/.local/share/muse/sessions/2026/09/18/sess-t/session.jsonl", body, false)
+	if len(res.Events) != 3 {
+		t.Fatalf("events = %d, want 3: %+v", len(res.Events), res.Events)
+	}
+	if got := res.Events[1].Timestamp; got != "2026-09-18T17:34:46.37Z" {
+		t.Errorf("retained-frame child timestamp = %q", got)
+	}
+	if got := res.Events[2].Timestamp; got != "" {
+		t.Errorf("record without recorded_at inherited timestamp %q", got)
 	}
 }

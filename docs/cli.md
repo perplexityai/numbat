@@ -88,7 +88,7 @@ agent's transcript.
 --agent NAME                  limit automatic discovery to a parser-backed agent
                               (repeatable; cannot be combined with --path)
                               claude|codex|copilot|cowork|cursor|gemini|kimi|
-                              openclaw|opencode|pi|windsurf
+                              muse|openclaw|opencode|pi|windsurf
 --path FILE|DIR              artifact to scan (repeatable; defaults to known
                              agent locations under $HOME plus supported
                              agent home/data env overrides)
@@ -321,7 +321,7 @@ explicit-root `--path` modes as `scan`.
 --agent NAME                  limit automatic discovery to a parser-backed agent
                               (repeatable; cannot be combined with --path)
                               claude|codex|copilot|cowork|cursor|gemini|kimi|
-                              openclaw|opencode|pi|windsurf
+                              muse|openclaw|opencode|pi|windsurf
 --path FILE|DIR              artifact to read (repeatable; defaults to known
                              agent locations under $HOME plus supported
                              agent home/data env overrides)
@@ -549,7 +549,7 @@ below.
                              cursor|windsurf|copilot|vscode|opencode|openclaw|
                              antigravity|factory|grok|devin|hermes|pi|kimi|
                              qwen|cline|amp|auggie|kiro|goose|kilo|openhands|
-                             crush|junie
+                             crush|junie|muse
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings; enforce mode
@@ -614,7 +614,7 @@ default. This agent process deadline is separate from the hook handler's
                              claude|codex|gemini|cursor|windsurf|copilot|
                              vscode|opencode|openclaw|antigravity|factory|grok|
                              devin|hermes|pi|kimi|qwen|cline|amp|auggie|kiro|
-                             goose|kilo|openhands|crush|junie
+                             goose|kilo|openhands|crush|junie|muse
 --settings PATH              override the install-target path for one agent
                              (requires --agent; selects an agent-specific file
                              or directory and may create companion artifacts)
@@ -647,7 +647,7 @@ default. This agent process deadline is separate from the hook handler's
                              antigravity, factory, grok, devin, hermes,
                              openclaw, pi, kimi, qwen, cline, amp, auggie,
                              kiro, goose, kilo,
-                             openhands, crush, junie). Off by default:
+                             openhands, crush, junie, muse). Off by default:
                              monitor, detection-only, never blocks.
 ```
 

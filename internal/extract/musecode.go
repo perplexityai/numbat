@@ -11,6 +11,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/perplexityai/numbat/internal/model"
 )
@@ -72,6 +73,7 @@ func (MuseCodeExtractor) Agent() string { return model.AgentMuseCode }
 
 // museRecord is the envelope wrapping every ordinary line of a transcript.
 type museRecord struct {
+	RecordedAt  int64           `json:"recorded_at"`
 	Stream      museStream      `json:"stream"`
 	RecordType  string          `json:"record_type"`
 	PayloadType string          `json:"payload_type"`
@@ -181,6 +183,9 @@ type museState struct {
 	modelProvider string
 	metadataSeen  bool
 	toolNames     map[string]string
+	// timestamp is the current record's recorded_at, reset per record so a
+	// record without one never inherits the previous record's time.
+	timestamp string
 }
 
 func (e MuseCodeExtractor) Extract(r io.Reader, src Source) (*Result, error) {
@@ -252,6 +257,7 @@ func (e MuseCodeExtractor) mapLine(res *Result, src Source, sha string, st *muse
 }
 
 func (e MuseCodeExtractor) mapRecord(res *Result, src Source, sha string, st *museState, streamID string, line int, record museRecord) {
+	st.timestamp = museTimestamp(record.RecordedAt)
 	if streamID != "" && record.Stream.ID != "" && record.Stream.ID != streamID {
 		return // subagent/reminder task-stream noise interleaved into this file
 	}
@@ -458,6 +464,7 @@ func (MuseCodeExtractor) base(src Source, sha string, st *museState, line, sub i
 		SchemaVersion: model.SchemaVersion,
 		CaseID:        src.CaseID,
 		EventID:       museEventID(src.Path, line, sub),
+		Timestamp:     st.timestamp,
 		SourceAgent:   model.AgentMuseCode,
 		SourceType:    model.SourceArtifact,
 		ProjectPath:   st.projectPath,
@@ -497,6 +504,15 @@ func museFileContext(path string) (rootSessionID, subAgent, streamID string) {
 		return rootSessionID, subAgent, streamID
 	}
 	return "", "", ""
+}
+
+// museTimestamp converts a record's recorded_at (microseconds since the Unix
+// epoch, verified against real transcripts) to RFC3339, or "" when absent.
+func museTimestamp(micros int64) string {
+	if micros <= 0 {
+		return ""
+	}
+	return time.UnixMicro(micros).UTC().Format(time.RFC3339Nano)
 }
 
 func museEventID(path string, line, sub int) string {
