@@ -322,7 +322,7 @@ embedded absolute numbat path both exist inside that runtime.
 | Amp | Run `plugins: reload` after installation. |
 | Cline | Restart the current CLI/SDK. Legacy editor hooks under `~/Documents/Cline/Hooks` also need the Hooks-tab toggle. |
 | Qwen Code | Use version 0.17.0 or newer and confirm `disableAllHooks` is not active. |
-| Kiro IDE / CLI v3 | The default file requires IDE 1.0.182+ or CLI 2.13.0+ launched with `kiro-cli --v3`. Confirm the entries are enabled in the IDE's Agent Hooks panel. `KIRO_HOME` relocates the CLI target only; when both roots are active, install and check the IDE's `~/.kiro/hooks/numbat.json` separately with `--settings`. |
+| Kiro IDE / CLI v3 | The default file requires IDE 1.0.182+ or interactive CLI 2.13.0+ launched with `kiro-cli --v3`; `--no-interactive` runs need CLI 2.27.1+. Confirm the entries are enabled in the IDE's Agent Hooks panel. `KIRO_HOME` relocates the CLI target only; when both roots are active, install and check the IDE's `~/.kiro/hooks/numbat.json` separately with `--settings`. |
 | Goose | Confirm `numbat` is not listed in `disabledPlugins`. |
 | Kilo Code | Reload or restart after install and do not use `KILO_PURE=1`, which disables external plugins. |
 | OpenHands | Install per repository; the next repository conversation loads the file. |
