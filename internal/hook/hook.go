@@ -491,6 +491,8 @@ func resolveKiroEvent(raw string) (Lifecycle, bool) {
 		return LifecyclePostTool, true
 	case string(LifecycleStop), string(LifecycleAssistant):
 		return LifecycleStop, true
+	case "sessionend", string(LifecycleSessionEnd):
+		return LifecycleSessionEnd, true
 	default:
 		return "", false
 	}
@@ -1183,6 +1185,11 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 // MapEvents maps one hook payload. Structured multi-file operations produce one
 // event per path so file evidence remains first-class.
 func MapEvents(lc Lifecycle, agent, sourceAgent, eventID string, payload map[string]any) []model.Event {
+	if agent == AgentKiro && lc == LifecycleSessionEnd && firstString(payload, "hook_event_name") == "Stop" {
+		// Older Kiro hosts alias a SessionEnd trigger to Stop and run it after
+		// every turn; the Stop hook already records that boundary.
+		return nil
+	}
 	base := mapEvent(lc, agent, sourceAgent, eventID, payload)
 	if lc == LifecycleAssistant && (agent == AgentPi || agent == AgentOpenCode || agent == AgentKilo) {
 		if events, ok := mapMessagePartEvents(base, eventID, payload); ok {
