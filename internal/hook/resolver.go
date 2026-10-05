@@ -215,6 +215,12 @@ func (r resolver) cwd() string {
 		}
 		return r.str("cwd", "workingDirectory", "working_directory", "project_dir")
 	}
+	if r.agent == AgentJunie {
+		// Junie sets cwd to its own home directory; project_path is the project.
+		if projectPath := r.envStr("project_path"); projectPath != "" {
+			return projectPath
+		}
+	}
 	return r.envStr("cwd", "workingDirectory", "working_directory", "working_dir", "project_dir")
 }
 
