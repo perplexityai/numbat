@@ -1127,6 +1127,41 @@ func TestExitCodeDenyWriteFailureFallsOpen(t *testing.T) {
 	}
 }
 
+func TestJunieProjectScopedEnforcement(t *testing.T) {
+	dir := writeEnforceRuleFile(t, `id: enforce_test.junie_project
+version: "1.0"
+title: Junie project-scoped test
+severity: critical
+enforce: true
+expr: event.source_agent == "junie" && event.event_type == "command.exec" && event.project_path == "/workspace/project"
+`)
+	for _, tc := range []struct {
+		project string
+		code    int
+	}{
+		{"/workspace/project", 2},
+		{"/workspace/other", 0},
+		{"", 0},
+	} {
+		t.Run(tc.project, func(t *testing.T) {
+			payload, err := json.Marshal(map[string]any{
+				"hook_event_name": "PreToolUse", "session_id": "s1",
+				"cwd": "/home/user/.junie", "project_path": tc.project,
+				"tool_name": "Bash", "tool_input": map[string]any{"command": "git status"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, stderr, code := runCLIStdin(string(payload),
+				enforceHookArgs(t, "hook", "pre-tool", "--agent", "junie", "--enforce",
+					"--rules-dir", dir, "--no-builtin-rules")...)
+			if code != tc.code {
+				t.Fatalf("exit = %d, want %d; stderr = %q", code, tc.code, stderr)
+			}
+		})
+	}
+}
+
 func TestStructuredAgentEnforcementResponses(t *testing.T) {
 	dir := writeEnforceRuleFile(t, unconditionalEnforceRule)
 	tests := []struct {
