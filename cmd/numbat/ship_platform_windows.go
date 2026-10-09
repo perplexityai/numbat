@@ -12,6 +12,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const shipFileIdentityFields = 3
+
 func openShipInput(path string) (*os.File, error) { return winfile.OpenRegular(path) }
 
 func shipFileIdentity(f *os.File) (string, error) {
