@@ -49,6 +49,7 @@ var expectedCELFieldTypes = map[string]string{
 	"content":                   "string",
 	"content_bytes":             "int",
 	"content_truncated":         "bool",
+	"content_omitted":           "list(string)",
 	"tags":                      "list(string)",
 	"confidence":                "string",
 }

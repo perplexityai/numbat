@@ -75,6 +75,12 @@ that reads an incomplete tool body receives a scoped evaluation error. Preview
 and messages-scope exports with known omitted tool bodies behave the same way
 during rule replay.
 
+`--max-record-bytes` can omit event bodies before any record sink. The
+`content_omitted` list names removed fields, preserving original byte counts
+and capture truncation flags. Message byte metadata without `content` is valid
+only when that list includes `content`. Reading a listed body during rule replay
+produces a scoped evaluation error, not an empty-body match.
+
 On findings, `timestamp` is the matched event's activity time (the completing
 event for a sequence) and may be absent when that event has no valid timestamp.
 `detected_at` is when numbat created the finding.

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -169,7 +170,7 @@ func (e Event) Validate() error {
 	if e.Content != "" && e.ContentBytes == 0 {
 		return fmt.Errorf("event %s: content requires content_bytes", e.EventID)
 	}
-	if e.Content == "" && (e.ContentBytes != 0 || e.ContentTruncated) {
+	if e.Content == "" && (e.ContentBytes != 0 || e.ContentTruncated) && !slices.Contains(e.ContentOmitted, "content") {
 		return fmt.Errorf("event %s: content metadata requires content", e.EventID)
 	}
 	if e.analysisContent != "" && e.analysisContentBytes == 0 {
@@ -180,6 +181,28 @@ func (e Event) Validate() error {
 	}
 	if e.Content != "" && e.analysisContent != "" {
 		return fmt.Errorf("event %s: content has both emitted and analysis values", e.EventID)
+	}
+	if len(e.ContentOmitted) > 3 {
+		return fmt.Errorf("event %s: too many content_omitted fields", e.EventID)
+	}
+	for i, field := range e.ContentOmitted {
+		if !slices.Contains(allowed, field) || slices.Contains(e.ContentOmitted[:i], field) {
+			return fmt.Errorf("event %s: invalid content_omitted field %q", e.EventID, field)
+		}
+		var body string
+		switch field {
+		case "content":
+			body = e.ContentForAnalysis()
+		case "tool_input":
+			body = e.ToolInputForAnalysis()
+		case "tool_result":
+			body = e.ToolResultForAnalysis()
+		default:
+			return fmt.Errorf("event %s: invalid content_omitted field %q", e.EventID, field)
+		}
+		if body != "" {
+			return fmt.Errorf("event %s: content_omitted field %q has a body", e.EventID, field)
+		}
 	}
 	for _, payload := range []struct {
 		text      string

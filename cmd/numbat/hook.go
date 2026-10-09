@@ -89,6 +89,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	fs.Var(&emitValues, "emit", emitFlagHelp()+"; enforce mode requires findings")
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
+	maxRecordBytes := fs.Int("max-record-bytes", 0, maxRecordBytesHelp)
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events when the integration exposes them")
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
@@ -151,6 +152,10 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 		fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 0
 	}
+	if *maxRecordBytes < 0 {
+		fmt.Fprintln(stderr, "hook: --max-record-bytes must be non-negative")
+		return 0
+	}
 	if err := validateContentSelection(content, sel); err != nil {
 		fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 0
@@ -202,6 +207,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 		sel:              sel,
 		content:          content,
 		contentScope:     scope,
+		maxRecordBytes:   *maxRecordBytes,
 		includeReasoning: *includeReasoning,
 		stateDB:          *stateDB,
 		modes:            outputValues,
@@ -257,6 +263,7 @@ type hookOptions struct {
 	sel              emitSelection
 	content          contentMode
 	contentScope     contentScope
+	maxRecordBytes   int
 	includeReasoning bool
 	stateDB          string
 	modes            []string
@@ -323,9 +330,9 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	run := runID()
 	var em *output.Emitter
 	if opts.enforce {
-		em = output.NewWithSinkAndDiagnostics(sink, run, contentEmitterOptions(opts.content, opts.contentScope)...)
+		em = output.NewWithSinkAndDiagnostics(sink, run, contentEmitterOptions(opts.content, opts.contentScope, opts.maxRecordBytes)...)
 	} else {
-		em = output.NewWithSink(sink, stderr, run, contentEmitterOptions(opts.content, opts.contentScope)...)
+		em = output.NewWithSink(sink, stderr, run, contentEmitterOptions(opts.content, opts.contentScope, opts.maxRecordBytes)...)
 	}
 	closeWithDiagnostic := func(err error) error {
 		em.Diag("error", err.Error())

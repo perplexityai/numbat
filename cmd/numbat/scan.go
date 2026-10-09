@@ -37,6 +37,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&emitValues, "emit", emitFlagHelp())
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
+	maxRecordBytes := fs.Int("max-record-bytes", 0, maxRecordBytesHelp)
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
 	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	var outputValues multiFlag
@@ -101,6 +102,10 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	if *maxRecordBytes < 0 {
+		fmt.Fprintln(stderr, "scan: --max-record-bytes must be non-negative")
+		return 2
+	}
 	reasoning, err := applyDeprecatedProfile(*profileFlag, *includeReasoning)
 	if err != nil {
 		fmt.Fprintf(stderr, "scan: %v\n", err)
@@ -153,7 +158,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Runtime failures get a summary; usage errors above do not start a scan.
-	em := output.NewWithSink(sink, stderr, runID(), contentEmitterOptions(content, scope)...)
+	em := output.NewWithSink(sink, stderr, runID(), contentEmitterOptions(content, scope, *maxRecordBytes)...)
 
 	roots := []string(paths)
 	if len(roots) == 0 {

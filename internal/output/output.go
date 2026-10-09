@@ -162,10 +162,11 @@ type StatsReporter interface {
 type Emitter struct {
 	runID    string
 	endpoint Endpoint
-	// Content options are fixed before concurrent use.
+	// Output options are fixed before concurrent use.
 	fullContent        bool
 	rawContent         bool
 	messageContentOnly bool
+	maxRecordBytes     int
 
 	mu                sync.Mutex
 	sink              Sink
@@ -194,6 +195,12 @@ func WithRawContent() EmitterOption { return func(e *Emitter) { e.rawContent = t
 // fields keep the normal preview policy; analysis content is unchanged.
 func WithMessageContentOnly() EmitterOption {
 	return func(e *Emitter) { e.messageContentOnly = true }
+}
+
+// WithMaxRecordBytes limits each encoded record, including its newline, before
+// it reaches any sink. Zero disables the limit; negative values fail emission.
+func WithMaxRecordBytes(limit int) EmitterOption {
+	return func(e *Emitter) { e.maxRecordBytes = limit }
 }
 
 // Stats is a point-in-time snapshot of emitter counters.
@@ -277,6 +284,10 @@ func (e *Emitter) emitLocked(recordType string, payload any) error {
 		return err
 	}
 	line = append(line, '\n')
+	line, err = limitRecord(fields, line, e.maxRecordBytes)
+	if err != nil {
+		return err
+	}
 	n, err := e.sink.Write(line)
 	if err != nil {
 		return err
@@ -302,8 +313,7 @@ func (e *Emitter) EmitFinding(f model.Finding) error {
 // EmitEvent writes one normalized event as an NDJSON line (record_type=event).
 // The event is redacted on the way out (redact.Event), masking secret-like
 // values while preserving useful evidence context.
-// Rules have already evaluated the unredacted event upstream, so this affects
-// output only, never detection.
+// This projection affects output only; rules evaluate the original event.
 func (e *Emitter) EmitEvent(ev model.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

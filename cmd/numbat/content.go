@@ -75,7 +75,9 @@ func contentScopeFlagHelp() string {
 	return "scope of full/raw content: all|messages (messages keeps tool previews and metadata; does not affect local detection)"
 }
 
-func contentEmitterOptions(mode contentMode, scope contentScope) []output.EmitterOption {
+const maxRecordBytesHelp = "maximum bytes per output record including newline (0 disables; oversized content bodies are omitted)"
+
+func contentEmitterOptions(mode contentMode, scope contentScope, maxRecordBytes int) []output.EmitterOption {
 	var opts []output.EmitterOption
 	switch mode {
 	case contentRaw:
@@ -85,6 +87,9 @@ func contentEmitterOptions(mode contentMode, scope contentScope) []output.Emitte
 	}
 	if scope == contentScopeMessages {
 		opts = append(opts, output.WithMessageContentOnly())
+	}
+	if maxRecordBytes != 0 {
+		opts = append(opts, output.WithMaxRecordBytes(maxRecordBytes))
 	}
 	return opts
 }

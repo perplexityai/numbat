@@ -17,9 +17,34 @@
   ],
   "dependentRequired": {
     "content": ["content_bytes"],
-    "content_bytes": ["content"],
-    "content_truncated": ["content", "content_bytes"]
+    "content_truncated": ["content_bytes"]
   },
+  "allOf": [
+    {
+      "if": { "required": ["content_bytes"] },
+      "then": {
+        "anyOf": [
+          { "required": ["content"] },
+          {
+            "required": ["content_omitted"],
+            "properties": { "content_omitted": { "contains": { "const": "content" } } }
+          }
+        ]
+      }
+    },
+    {
+      "if": { "required": ["content_omitted"], "properties": { "content_omitted": { "contains": { "const": "content" } } } },
+      "then": { "not": { "required": ["content"] } }
+    },
+    {
+      "if": { "required": ["content_omitted"], "properties": { "content_omitted": { "contains": { "const": "tool_input" } } } },
+      "then": { "not": { "required": ["tool_input"] } }
+    },
+    {
+      "if": { "required": ["content_omitted"], "properties": { "content_omitted": { "contains": { "const": "tool_result" } } } },
+      "then": { "not": { "required": ["tool_result"] } }
+    }
+  ],
   "properties": {
     "schema_version": { "const": "0.5.0" },
     "record_type": { "const": "event" },
@@ -121,6 +146,14 @@
       "description": "Mapped message-body byte count before Numbat's 1 MiB bound and output redaction"
     },
     "content_truncated": { "type": "boolean" },
+    "content_omitted": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "enum": ["content", "tool_input", "tool_result"] },
+      "description": "Bodies omitted to fit the record output limit; original byte counts and capture truncation flags are unchanged."
+    },
     "tool_input": { "type": "string", "description": "Source tool arguments encoded as JSON; may be a marked fragment when truncated." },
     "tool_input_bytes": { "type": "integer", "minimum": 0 },
     "tool_input_truncated": { "type": "boolean" },

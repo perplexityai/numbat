@@ -199,6 +199,9 @@ can inspect the truncation flags without reading the body. Content rules use
 the bounded CEL evaluation budget. Output redaction never changes local rule
 input; redacted exports cannot reconstruct original values during replay.
 
+`event.content_omitted` lists bodies removed by the record output limit. Reading
+a listed body during replay also produces a scoped evaluation error.
+
 ### Event fields
 
 The CEL `event` map always contains every key below. `exit_code`, `duration_ms`,
@@ -229,6 +232,7 @@ uses `0`, and `tags` uses an empty list.
 | `event.tool_input_bytes` | int | `event.tool_result_bytes` | int |
 | `event.tool_input_truncated` | bool | `event.tool_result_truncated` | bool |
 | `event.tool_name` | string | `event.url` | string |
+| `event.content_omitted` | list(string) | | |
 
 The [event schema](schema/v0.5.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and

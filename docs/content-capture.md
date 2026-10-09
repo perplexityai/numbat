@@ -36,6 +36,7 @@ See [rule semantics](rules.md#event-fields) and the
 | Each mapped tool input/result | Retains up to 16 MiB of JSON with byte count and truncation flag. |
 | Artifact JSONL line | Existing 16 MiB source-line bound; oversized lines produce diagnostics. Whole-artifact limits also apply. |
 | Live hook / OTLP request | Existing 4 MiB request bound; oversized requests are rejected with diagnostics. |
+| Emitted NDJSON record | Optional `--max-record-bytes N`, including the newline; default `0` disables this output limit. |
 | HTTP sink buffer | 64 MiB; a larger record cannot be buffered. Delivery failures remain observable. |
 | Shipper / case / rule-fixture record | 64 MiB record bound; receiver limits can be lower. |
 
@@ -45,6 +46,18 @@ JSON escaping and paired input/result content. None of these limits guarantees
 that the originating agent supplied a complete result. Inspect diagnostics as
 well as truncation flags. A receiver's HTTP 413 can still prevent delivery;
 `ship` retains the source file record and reports the rejected record.
+
+`--max-record-bytes` applies in scan, hooks and collect after content selection
+and redaction, before writing identical records to stdout, files or HTTP.
+Oversized events lose the largest encoded body first (`content`, `tool_input`
+or `tool_result`) until they fit. `content_omitted` lists removed fields; byte
+counts, capture truncation flags and other metadata stay unchanged. Local
+detection still uses retained originals. An irreducible record fails emission
+rather than dropping metadata; in enforce mode, output failure prevents a deny.
+
+`ship` transports the saved records unchanged. Omitted bodies are not recoverable
+from those records; retain source artifacts if needed. This is a record limit,
+not an HTTP request limit: batching and receiver limits still apply.
 
 Incomplete tool JSON is retained as a flagged prefix in raw mode. Full mode
 replaces it with an omission marker because a partial document cannot safely

@@ -313,6 +313,10 @@ type Event struct {
 	ContentBytes     int    `json:"content_bytes,omitempty"`
 	ContentTruncated bool   `json:"content_truncated,omitempty"`
 
+	// ContentOmitted names bodies withheld to fit the record output size limit.
+	// Original byte counts and capture truncation flags remain unchanged.
+	ContentOmitted []string `json:"content_omitted,omitempty"`
+
 	// Tool payloads are JSON-encoded strings. Missing fields remain absent;
 	// an explicit null or empty string is retained as JSON null or "".
 	// Parsers retain originals privately until an output projection is selected.
@@ -397,6 +401,7 @@ func (e Event) celView() map[string]any {
 		"content":                   e.contentForAnalysis(),
 		"content_bytes":             e.contentBytesForAnalysis(),
 		"content_truncated":         e.contentTruncatedForAnalysis(),
+		"content_omitted":           toAnySlice(e.ContentOmitted),
 		"tags":                      toAnySlice(e.Tags),
 		"confidence":                e.Confidence,
 	}

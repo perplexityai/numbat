@@ -51,6 +51,12 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 	if ev.ToolResultTruncatedForAnalysis() || ev.ToolResultForAnalysis() == "" && ev.ToolResultBytesForAnalysis() > 0 {
 		view["tool_result"] = types.NewErr("tool result is incomplete")
 	}
+	for _, field := range ev.ContentOmitted {
+		switch field {
+		case "content", "tool_input", "tool_result":
+			view[field] = types.NewErr("%s was omitted from record output", field)
+		}
+	}
 
 	detection["event"] = adapter.NativeToValue(detection["event"])
 	if !needShellCommands {

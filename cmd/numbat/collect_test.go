@@ -232,7 +232,7 @@ expr: event.content.contains("MESSAGE_TAIL") || (event.tool_input.contains("PRIV
 					t.Fatal(err)
 				}
 				var records, diags bytes.Buffer
-				em := output.New(&records, &diags, "run-test", contentEmitterOptions(content, contentScope)...)
+				em := output.New(&records, &diags, "run-test", contentEmitterOptions(content, contentScope, 0)...)
 				c, err := newCollector(collectorConfig{
 					emit: em, runID: "run-test", sel: emitSelection{events: true, findings: true},
 					ruleDirs: []string{rulesDir}, noBuiltin: true,

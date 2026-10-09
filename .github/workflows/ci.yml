@@ -124,6 +124,9 @@ jobs:
       - name: fuzz OTLP decoder
         run: go test -run='^$' -fuzz='^FuzzOTLPLogs$' -fuzztime=30s ./internal/otel/
 
+      - name: fuzz record output limit
+        run: go test -run='^$' -fuzz='^FuzzRecordLimit$' -fuzztime=30s ./internal/output/
+
   coverage:
     name: coverage (informational)
     runs-on: ubuntu-latest

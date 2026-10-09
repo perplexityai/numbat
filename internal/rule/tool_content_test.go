@@ -1,12 +1,41 @@
 package rule
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/redact"
 )
+
+func TestOmittedContentDoesNotBecomeCleanNegative(t *testing.T) {
+	for _, field := range []string{"content", "tool_input", "tool_result"} {
+		event := model.Event{EventType: model.EventToolResult, ContentOmitted: []string{field}}
+		engine := mustEngine(t, Rule{
+			ID: "test.omitted", Severity: model.SeverityHigh,
+			Expr: fmt.Sprintf(`!event.%s.contains("bad")`, field),
+		})
+		matches, err := engine.Eval(event)
+		if err == nil || len(matches) != 0 {
+			t.Fatalf("%s treated as clean: matches=%d err=%v", field, len(matches), err)
+		}
+		engine = mustEngine(t, Rule{
+			ID: "test.scoped", Severity: model.SeverityHigh,
+			Expr: fmt.Sprintf(`event.event_type == "command.exec" && !event.%s.contains("bad")`, field),
+		})
+		if matches, err := engine.Eval(event); err != nil || len(matches) != 0 {
+			t.Fatalf("%s error escaped its scope: %v", field, err)
+		}
+		engine = mustEngine(t, Rule{
+			ID: "test.metadata", Severity: model.SeverityHigh,
+			Expr: fmt.Sprintf(`"%s" in event.content_omitted`, field),
+		})
+		if matches, err := engine.Eval(event); err != nil || len(matches) != 1 {
+			t.Fatalf("%s metadata unavailable: %v", field, err)
+		}
+	}
+}
 
 func TestRulesSeeOriginalToolBodies(t *testing.T) {
 	eng := mustEngine(t, Rule{

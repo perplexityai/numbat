@@ -3,6 +3,7 @@ package redact
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 
 	"github.com/perplexityai/numbat/internal/model"
 )
@@ -33,8 +34,10 @@ func Event(ev model.Event) model.Event {
 	ev.ContentPreviewTruncated = ev.ContentPreviewTruncated || previewTruncated
 	ev.ToolInput, ev.ToolResult = "", ""
 	ev.Content = ""
-	ev.ContentBytes = 0
-	ev.ContentTruncated = false
+	if !slices.Contains(ev.ContentOmitted, "content") {
+		ev.ContentBytes = 0
+		ev.ContentTruncated = false
+	}
 	ev.MCPServer = String(ev.MCPServer)
 	ev.MCPTool = String(ev.MCPTool)
 	ev.ProjectPath = String(ev.ProjectPath)

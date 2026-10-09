@@ -63,6 +63,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&emitValues, "emit", emitFlagHelp())
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
 	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
+	maxRecordBytes := fs.Int("max-record-bytes", 0, maxRecordBytesHelp)
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout))
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
@@ -115,6 +116,10 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	if *maxRecordBytes < 0 {
+		fmt.Fprintln(stderr, "collect: --max-record-bytes must be non-negative")
+		return 2
+	}
 	if err := validateContentSelection(content, sel); err != nil {
 		fmt.Fprintf(stderr, "collect: %v\n", err)
 		fs.Usage()
@@ -156,7 +161,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rid := runID()
-	em := output.NewWithSink(sink, stderr, rid, contentEmitterOptions(content, scope)...)
+	em := output.NewWithSink(sink, stderr, rid, contentEmitterOptions(content, scope, *maxRecordBytes)...)
 	rcv, err := newCollector(collectorConfig{
 		emit:      em,
 		runID:     rid,

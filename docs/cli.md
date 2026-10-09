@@ -99,6 +99,8 @@ agent's transcript.
                              full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
 --content-scope all|messages  full/raw body selection (default all; messages keeps
                              tool previews and metadata; local detection unchanged)
+--max-record-bytes N         maximum encoded record bytes, including newline
+                             (default 0: unlimited; omit oversized event bodies)
 --include-reasoning          include source-recorded reasoning events
 --profile evidence|full      deprecated alias; full enables --include-reasoning
 --rules-dir DIR              operator rules to add or replace by id
@@ -406,6 +408,8 @@ IDs so receivers can deduplicate it.
                              full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
 --content-scope all|messages  full/raw body selection (default all; messages keeps
                              tool previews and metadata)
+--max-record-bytes N         maximum encoded record bytes, including newline
+                             (default 0: unlimited; omit oversized event bodies)
 --output SINK                record sink: stdout, file, or http
                              (repeatable; default stdout; stdout cannot be combined)
 --output-file PATH           destination path (required when output includes file)
@@ -615,6 +619,8 @@ below.
                              full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
 --content-scope all|messages  full/raw body selection (default all; messages keeps
                              tool previews and metadata)
+--max-record-bytes N         maximum encoded record bytes, including newline
+                             (default 0: unlimited; omit oversized event bodies)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --enforce                    opt-in enforce mode: block an action when a rule
@@ -688,6 +694,7 @@ default. This agent process deadline is separate from the hook handler's
                              (default preview; full/raw require events or all)
 --content-scope all|messages  full/raw body selection installed hooks use (default all;
                              messages keeps tool previews and metadata)
+--max-record-bytes N         record byte limit installed hooks use (default 0)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --output SINK                record sink installed hook commands use:

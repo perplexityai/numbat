@@ -41,6 +41,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		emitValues        multiFlag
 		contentValue      = "preview"
 		contentScopeValue = "all"
+		maxRecordBytes    int
 		includeReasoning  bool
 		outputValues      multiFlag
 		outputFileValue   string
@@ -60,6 +61,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		fs.Var(&emitValues, "emit", "records emitted by live integrations: findings, events, indicators, or all (repeatable; default findings; enforce mode requires findings)")
 		fs.StringVar(&contentValue, "content", "preview", contentFlagHelp())
 		fs.StringVar(&contentScopeValue, "content-scope", "all", contentScopeFlagHelp())
+		fs.IntVar(&maxRecordBytes, "max-record-bytes", 0, maxRecordBytesHelp)
 		fs.BoolVar(&includeReasoning, "include-reasoning", false, "include source-recorded reasoning events when an integration exposes them")
 		fs.Var(&outputValues, "output", outputFlagHelp(outputModeFile)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
 		fs.StringVar(&outputFileValue, "output-file", "", "destination path when --output includes file (default findings.ndjson, or records.ndjson when --emit includes events/indicators)")
@@ -106,6 +108,10 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "hook %s: unexpected argument %q\n", action, fs.Arg(0))
+		return 2
+	}
+	if maxRecordBytes < 0 {
+		fmt.Fprintln(stderr, "hook install: --max-record-bytes must be non-negative")
 		return 2
 	}
 
@@ -194,6 +200,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 			emit:             emitValues,
 			content:          content,
 			contentScope:     scope,
+			maxRecordBytes:   maxRecordBytes,
 			includeReasoning: includeReasoning,
 			modes:            outputValues,
 			file:             outputFileValue,
@@ -295,6 +302,7 @@ type installRuntimeConfig struct {
 	emit             []string
 	content          contentMode
 	contentScope     contentScope
+	maxRecordBytes   int
 	includeReasoning bool
 	modes            []string
 	file             string
@@ -314,6 +322,9 @@ type installRuntimeConfig struct {
 }
 
 func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error) {
+	if cfg.maxRecordBytes < 0 {
+		return nil, fmt.Errorf("--max-record-bytes must be non-negative")
+	}
 	emitSel, err := parseEmit(cfg.emit)
 	if err != nil {
 		return nil, err
@@ -378,6 +389,9 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 	}
 	if cfg.contentScope == contentScopeMessages {
 		args = append(args, "--content-scope=messages")
+	}
+	if set["max-record-bytes"] {
+		args = append(args, "--max-record-bytes", strconv.Itoa(cfg.maxRecordBytes))
 	}
 	if cfg.includeReasoning {
 		args = append(args, "--include-reasoning")
