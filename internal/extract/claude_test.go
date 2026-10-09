@@ -52,12 +52,12 @@ func TestExtractClaudeMapsAllShapes(t *testing.T) {
 		{model.EventCommandExec, model.ActorAssistant, "Bash", "make build", "", nil},
 		// t1 is the Read call's result: its tool_use_id is not a command call, so
 		// it stays tool.result even though a top-level toolUseResult is present.
-		{model.EventToolResult, model.ActorTool, "", "", "", nil},
+		{model.EventToolResult, model.ActorTool, "Read", "", "", nil},
 		{model.EventFileWrite, model.ActorAssistant, "Write", "", "/home/dev/proj/out.txt", nil},
 		{model.EventToolCall, model.ActorAssistant, "Grep", "", "", nil},
 		// t2 is the Bash call's result: correlated to the command.exec, it is a
 		// command.result, and is_error still drives the tool_error tag.
-		{model.EventCommandResult, model.ActorTool, "", "", "", []string{"tool_error"}},
+		{model.EventCommandResult, model.ActorTool, "Bash", "", "", []string{"tool_error"}},
 	}
 	acts := activityEvents(res.Events)
 	if len(acts) != len(wants) {

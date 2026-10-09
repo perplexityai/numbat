@@ -388,7 +388,7 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 		tracker = sequence.NewTracker(seqs, sequence.DefaultConfig())
 	}
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	matched := 0
 	matchedRules := map[string]int{}
 	line := 0

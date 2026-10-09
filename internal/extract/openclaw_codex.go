@@ -87,6 +87,16 @@ func (e OpenClawExtractor) mapCodexResponseItem(res *Result, src Source, sha str
 		res.diag(src.Path, line, "malformed response_item payload")
 		return
 	}
+	start := len(res.Events)
+	defer func() {
+		if len(res.Events) == start {
+			return
+		}
+		retainCodexToolContent(res.Events[start:], ri.Type, payload, st.mcpResults[ri.CallID])
+		if ri.Type == codexRIFunctionCallOutput || ri.Type == codexRICustomToolCallOut {
+			delete(st.mcpResults, ri.CallID)
+		}
+	}()
 	switch ri.Type {
 	case codexRIMessage:
 		e.emitCodexMessage(res, src, sha, st, line, &ri)
@@ -311,13 +321,14 @@ func (e OpenClawExtractor) mapCodexEventMsg(res *Result, src Source, sha string,
 		ev.Tags = []string{em.Type}
 		res.appendEvent(st, ev, false)
 	case codexEMMcpToolCallEnd:
-		// The response_item layer already emitted the tool.call/tool.result for this
-		// MCP invocation, so this end-event is NOT re-emitted (that would double-count
-		// the timeline). It is read ONLY for its structured Result: on a recorded
-		// failure the matching tool.result for the call_id is tagged TagToolError,
-		// falling back to noting the failed call_id when the output has not landed yet
-		// (out-of-order). Success / unrecognized shape leaves the result untagged; no
-		// prose body is scraped.
+		if !attachMCPResult(res, em.CallID, em.Result) && em.CallID != "" && len(em.Result) > 0 {
+			if st.mcpResults == nil {
+				st.mcpResults = make(map[string]json.RawMessage)
+			}
+			st.mcpResults[em.CallID] = em.Result
+		}
+		// Join the native result to the canonical output without emitting a
+		// duplicate completion. Only structured status determines failure.
 		if isErr, ok := codexMcpResultIsError(em.Result); ok && isErr {
 			if !markToolResultError(res, em.CallID) {
 				st.noteFailedMCPCall(em.CallID)

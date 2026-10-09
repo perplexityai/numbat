@@ -45,6 +45,14 @@ var tokenMetricKeys = map[string]struct{}{
 
 // JSON redacts one JSON value without producing invalid JSON.
 func JSON(raw []byte) ([]byte, error) {
+	value, err := redactedJSONValue(raw)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
+func redactedJSONValue(raw []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var value any
@@ -62,7 +70,7 @@ func JSON(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(redacted)
+	return redacted, nil
 }
 
 func redactJSONValue(value any) (any, error) {

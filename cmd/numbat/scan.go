@@ -52,7 +52,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--content preview|full] [--include-reasoning] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
+		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--content preview|full|raw] [--include-reasoning] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
 		fmt.Fprintln(stderr, "\nScans supported on-disk agent artifacts and emits redacted findings, events, or indicators as NDJSON.")
 		fmt.Fprintf(stderr, "Automatic-discovery agents: %s.\n", artifactAgentUsage())
 		fmt.Fprintln(stderr, "Preserve vendor directory layouts when scanning copied or mounted artifacts.")
@@ -178,7 +178,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return failScan(em, err.Error())
 		}
 	}
-	captureContent := content == contentFull || sel.indicators || sel.findings && eng != nil && eng.UsesContent()
+	captureContent := content != contentPreview || sel.indicators || sel.findings && eng != nil && eng.UsesContent()
 
 	sc := &scanner{
 		emit:             em,

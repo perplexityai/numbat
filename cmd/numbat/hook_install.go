@@ -79,7 +79,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "usage: numbat hook %s %s [--settings PATH] [--managed]", action, agentArg)
 		if action == "install" {
-			fmt.Fprint(stderr, " [--emit KIND ...] [--content preview|full] [--include-reasoning] [--output SINK ...] [--rules-dir DIR ...] [--no-builtin-rules] [--enforce]")
+			fmt.Fprint(stderr, " [--emit KIND ...] [--content preview|full|raw] [--include-reasoning] [--output SINK ...] [--rules-dir DIR ...] [--no-builtin-rules] [--enforce]")
 		}
 		fmt.Fprintln(stderr)
 		switch action {
@@ -361,8 +361,11 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 			args = append(args, "--emit", mode)
 		}
 	}
-	if cfg.content == contentFull {
+	switch cfg.content {
+	case contentFull:
 		args = append(args, "--content=full")
+	case contentRaw:
+		args = append(args, "--content=raw")
 	}
 	if cfg.includeReasoning {
 		args = append(args, "--include-reasoning")

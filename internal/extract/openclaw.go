@@ -49,6 +49,7 @@ func (OpenClawExtractor) Agent() string { return model.AgentOpenClaw }
 // the two to distinguish "recognized rows, no tool activity" (a quiet but valid
 // transcript) from "unparsed flavor / nothing recognized" (a real coverage gap).
 type openClawState struct {
+	mcpResults       map[string]json.RawMessage
 	sessionID        string
 	projectPath      string
 	currentTimestamp string
@@ -90,6 +91,7 @@ func (st *openClawState) takeCommandCall(id string) bool {
 }
 
 func (st *openClawState) resetCall(id string) {
+	delete(st.mcpResults, id)
 	delete(st.commandCalls, id)
 	delete(st.failedMCPCallIDs, id)
 	st.codexCodeMode.forgetCall(id)
@@ -269,6 +271,8 @@ func (e OpenClawExtractor) mapLine(res *Result, src Source, sha string, st *open
 // mapNativeLine decodes one native SessionEntry. The forensic signal lives in
 // type:"message" entries carrying stable normalized AgentMessages.
 func (e OpenClawExtractor) mapNativeLine(res *Result, src Source, sha string, st *openClawState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var entry openClawEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		res.diag(src.Path, line, "malformed JSON line")
@@ -664,6 +668,7 @@ func (e OpenClawExtractor) baseSub(src Source, sha string, st *openClawState, li
 // fields. It returns whether the call is a command tool, so a correlated
 // tool_result becomes a command.result.
 func classifyOpenClawTool(ev *model.Event, name string, input map[string]json.RawMessage) (isCommand bool) {
+	ev.SetToolInput(input)
 	defer func() {
 		if ev.EventType == model.EventToolCall {
 			ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)

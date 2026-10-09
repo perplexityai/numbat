@@ -11,6 +11,8 @@ import (
 )
 
 var expectedCELFieldTypes = map[string]string{
+	"tool_input": "string", "tool_input_bytes": "int", "tool_input_truncated": "bool",
+	"tool_result": "string", "tool_result_bytes": "int", "tool_result_truncated": "bool",
 	"source_agent":              "string",
 	"source_type":               "string",
 	"timestamp":                 "string",

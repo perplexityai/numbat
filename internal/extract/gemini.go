@@ -277,12 +277,13 @@ func (e GeminiExtractor) emitFunctionCall(res *Result, src Source, sha, ptrRoot 
 // a command.result (ordered after its command.exec, since the call part was
 // emitted first); any other becomes a tool.result. Exit code and tool_error are
 // read ONLY from structured response fields; a read's result body is never
-// previewed so file content is never stored.
+// previewed; explicit tool-result capture retains the source body.
 func (e GeminiExtractor) emitFunctionResponse(res *Result, src Source, sha, ptrRoot string, msgIdx, partIdx int, fr *geminiFunctionResponse, pending []geminiPendingCall) {
 	call := correlateGeminiResponse(pending, fr)
 	ev := e.base(src, sha, msgIdx, partIdx, 0)
 	ev.Actor = model.ActorTool
 	ev.Confidence = model.ConfidenceHigh
+	ev.SetToolResult(fr.Response)
 	ev.ToolName = fr.Name
 	ev.ToolCallID = fr.ID
 	ev.Evidence.JSONPointer = geminiPartPointer(ptrRoot, msgIdx, partIdx, "functionResponse")
@@ -300,7 +301,7 @@ func (e GeminiExtractor) emitFunctionResponse(res *Result, src Source, sha, ptrR
 			ev.MCPServer, ev.MCPTool = server, tool
 		}
 	}
-	// A read result body is file content; never store it. Other results are
+	// File bodies stay out of previews; full tool results are retained separately. Other results are
 	// previewed so the result names what came back, not just that one happened.
 	if !isRead {
 		ev.ContentPreview = preview(geminiResponsePreview(fr.Response))
@@ -365,6 +366,7 @@ func (e GeminiExtractor) base(src Source, sha string, msgIdx, partIdx, sub int) 
 // an unknown tool is never mislabeled. It returns whether the call is the shell
 // tool so a correlated functionResponse becomes a command.result.
 func classifyGeminiTool(ev *model.Event, fc *geminiFunctionCall) bool {
+	ev.SetToolInput(fc.Args)
 	ev.ToolName = fc.Name
 	ev.ToolCallID = fc.ID
 	switch fc.Name {

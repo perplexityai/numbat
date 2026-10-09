@@ -348,6 +348,7 @@ func (e GeminiExtractor) emitGeminiSessionTool(res *Result, src Source, sha, ses
 	if !geminiToolReturnsFileContent(tool.Name) {
 		result.ContentPreview = preview(geminiSessionResultPreview(tool.Result, tool.ResultDisplay))
 	}
+	result.SetToolResult(tool.Result)
 	if response := geminiSessionFunctionResponse(tool.Result, tool.ID, tool.Name); response != nil {
 		if code, ok := geminiResponseExitCode(response.Response); ok {
 			result.ExitCode = &code

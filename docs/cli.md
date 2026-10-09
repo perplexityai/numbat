@@ -95,8 +95,8 @@ agent's transcript.
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings)
---content preview|full       conversation content in event output (default preview;
-                             full is redacted and bounded to 1 MiB)
+--content preview|full|raw       message and tool content in event output (default preview;
+                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
 --include-reasoning          include source-recorded reasoning events
 --profile evidence|full      deprecated alias; full enables --include-reasoning
 --rules-dir DIR              operator rules to add or replace by id
@@ -141,7 +141,7 @@ directories.
 
 Repeat `--output` to fan out the same NDJSON stream to more than one sink, for
 example `--output file --output http`. Direct HTTP is not a durable queue. Its
-16 MiB memory buffer rejects any larger record. A failed batch is retried
+64 MiB memory buffer rejects any larger record. A failed batch is retried
 after the retry interval when another record arrives, then once more at close;
 it is never spooled to disk. After a delivery failure, a full buffer drops the
 oldest complete records to retain the newest records; the close error reports
@@ -199,7 +199,7 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 
 ```json
 {
-  "schema_version": "0.4.0",
+  "schema_version": "0.5.0",
   "record_type": "indicator",
   "run_id": "run-example-01",
   "endpoint": {
@@ -221,18 +221,34 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 }
 ```
 
-### Message content
+### Message and tool content
 
 Events contain a redacted `content_preview` of at most 200 Unicode code points
-by default. `--content full` adds bounded, redacted `content` to prompt,
-assistant, and reasoning events; it requires `--emit events` or `--emit all`.
-`content_bytes` is the mapped body size before the 1 MiB bound and output
-redaction, while `content_truncated` reports that Numbat applied the bound.
+by default. One option controls all mapped message and tool content:
+
+| Mode | Exported content |
+| --- | --- |
+| `--content preview` (default) | Redacted previews and typed fields; tool byte counts and truncation flags, without tool bodies. |
+| `--content full` | Redacted message bodies, tool inputs and tool results. |
+| `--content raw` | Unredacted mapped message bodies, tool inputs, tool results and typed fields. |
+
+Full and raw require `--emit events` or `--emit all`. Message `content` is
+bounded to 1 MiB; each JSON-encoded `tool_input` and `tool_result` is bounded
+to 16 MiB. The corresponding `*_bytes` fields count bytes before retention
+and redaction; `*_truncated` flags incomplete retention. A redacted incomplete
+JSON payload is replaced by an omission marker. Raw means mapped content,
+not the complete source transcript. Both modes can include file bodies,
+patches and non-text tool content. See [content capture](content-capture.md)
+for source and transport limits.
+
+Local rules inspect retained originals independently of the export mode.
+Redaction applies at emission, so a rule can match content omitted from the
+chosen export. Replaying a redacted export cannot restore original secrets.
 
 `--include-reasoning` adds reasoning summaries or thinking blocks that the
 source persisted or exposed to a live integration. It does not recover hidden
-model chain-of-thought, and it is independent of `--content`: without
-`--content full`, reasoning events still carry only a preview. Rules and
+model chain-of-thought, and it is independent of `--content`: with
+`--content preview`, reasoning events still carry only a preview. Rules and
 indicator extraction can inspect bounded message content without enabling
 full-content output.
 
@@ -250,7 +266,7 @@ is omitted when that event has no valid timestamp.
 
 numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`,
 `finding`, `enforcement`, `indicator`, or `scan_summary`) plus a `run_id` and
-`schema_version` (`0.4.0`). Every line carries an `endpoint` object with
+`schema_version` (`0.5.0`). Every line carries an `endpoint` object with
 `hostname`, `os`, `arch`,
 `username`, and `uid`; set `NUMBAT_DEVICE_ID` to add a stable opaque
 `endpoint.device_id` for fleet joins.
@@ -289,7 +305,7 @@ A one-batch run can therefore report zero for both; use `http_failed`,
 diagnostics, and the process exit code to determine delivery health.
 
 Machine-readable JSON Schemas for the record stream and each `record_type` live
-under [schema/v0.4.0](schema/v0.4.0/). Use `record-stream.schema.json` when
+under [schema/v0.5.0](schema/v0.5.0/). Use `record-stream.schema.json` when
 validating arbitrary NDJSON lines, or route on `record_type` and validate against
 the per-record schema.
 
@@ -327,8 +343,8 @@ explicit-root `--path` modes as `scan`.
                              agent locations under $HOME plus supported
                              agent home/data env overrides)
 --case-id ID                 case identifier stamped on every event
---content preview|full       conversation content in JSON output (default preview;
-                             full is redacted and bounded to 1 MiB)
+--content preview|full|raw       message and tool content in JSON output (default preview;
+                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
 --include-reasoning          include source-recorded reasoning events
 --profile evidence|full      deprecated alias; full enables --include-reasoning
 --format text|json           output format (default text)
@@ -341,7 +357,7 @@ numbat timeline --path ~/.claude/projects --path ~/.codex --format json
 numbat timeline --agent codex --include-reasoning --content full --format json
 ```
 
-`--content full` is available only with `--format json`; the text view remains a
+`--content full` and `--content raw` are available only with `--format json`; the text view remains a
 compact preview.
 
 ## collect
@@ -377,8 +393,8 @@ IDs so receivers can deduplicate it.
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings)
---content preview|full       conversation content in event output (default preview;
-                             full is redacted and bounded to 1 MiB)
+--content preview|full|raw       message and tool content in event output (default preview;
+                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
 --output SINK                record sink: stdout, file, or http
                              (repeatable; default stdout; stdout cannot be combined)
 --output-file PATH           destination path (required when output includes file)
@@ -454,7 +470,7 @@ tails a numbat NDJSON file and sends batches to an HTTP endpoint outside the
 agent's hook path. Accepted batches advance the checkpoint only after a `2xx`.
 Eligible retained records are delivered at-least-once across endpoint outages
 and process restarts while the input and its rotations remain available.
-Records larger than 8 MiB or individually rejected with HTTP `413` are logged
+Records larger than 64 MiB or individually rejected with HTTP `413` are logged
 and skipped, advancing the checkpoint as detailed below.
 
 Use file-only hook output with `ship`. Selecting direct HTTP on the same hook
@@ -510,7 +526,7 @@ attempting the remaining suffix. If one record is still rejected with `413`,
 `ship` logs its input path, byte offset and size on stderr, advances the durable
 checkpoint past it, and continues delivering later records. That record remains
 in the input file but is skipped from HTTP delivery, like records over the local
-8 MiB limit. Retain the input and rotations if these records need to be recovered
+64 MiB limit. Retain the input and rotations if these records need to be recovered
 through a receiver that accepts them. Changing the endpoint replays retained
 records, including previously skipped records.
 
@@ -522,7 +538,7 @@ Splitting is specific to `ship`; direct HTTP output remains best-effort.
 
 `ship` never truncates or rotates the input. Retention remains the operator's
 responsibility, and undelivered records are only as durable as that file and its
-host. A complete record larger than 8 MiB remains in the input but is skipped
+host. A complete record larger than 64 MiB remains in the input but is skipped
 from HTTP delivery with a stderr diagnostic so later records can continue.
 Prefer an existing fleet forwarder when one is already available.
 
@@ -584,8 +600,8 @@ below.
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings; enforce mode
                              requires findings)
---content preview|full       conversation content in event output (default preview;
-                             full is redacted and bounded to 1 MiB)
+--content preview|full|raw       message and tool content in event output (default preview;
+                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --enforce                    opt-in enforce mode: block an action when a rule
@@ -655,7 +671,7 @@ default. This agent process deadline is separate from the hook handler's
                              findings, events, indicators, or all
                              (repeatable; default findings; enforce mode requires
                              findings)
---content preview|full       conversation content installed hook commands emit
+--content preview|full|raw       message and tool content installed hook commands emit
                              (default preview; full requires events or all)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
@@ -818,7 +834,7 @@ conflicting content is an error. If a source contains findings but not their
 cited event records, the build succeeds
 with an incomplete-events warning; capture `--emit all` when the bundle should
 contain both. Inputs use the current record schema; other schema versions are
-skipped with a warning, and a source line that reaches the 8 MiB input cap fails
+skipped with a warning, and a source line that reaches the 64 MiB input cap fails
 the build. The manifest records the build time and `evidence_mode` (`none`,
 `raw`, or `redacted`). Evidence entries carry separate hashes for the source
 bytes at copy time and the bytes stored in the bundle, so a redacted copy is
@@ -871,7 +887,7 @@ a manifest.
 ## version
 
 `numbat version` prints the tool version and the record schema version
-(`0.4.0`). Release and schema versions advance independently; the schema changes
+(`0.5.0`). Release and schema versions advance independently; the schema changes
 only when the emitted record contract changes.
 
 ## Exit status

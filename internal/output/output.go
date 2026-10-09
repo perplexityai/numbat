@@ -10,6 +10,7 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -163,6 +164,7 @@ type Emitter struct {
 	endpoint Endpoint
 	// fullContent is fixed by a constructor option before concurrent use.
 	fullContent bool
+	rawContent  bool
 
 	mu                sync.Mutex
 	sink              Sink
@@ -178,11 +180,14 @@ type Emitter struct {
 // EmitterOption configures an Emitter before it is used.
 type EmitterOption func(*Emitter)
 
-// WithFullContent includes redacted, bounded conversation content in event
+// WithFullContent includes redacted, bounded message and tool content in event
 // records. The default projection emits only content_preview.
 func WithFullContent() EmitterOption {
 	return func(e *Emitter) { e.fullContent = true }
 }
+
+// WithRawContent explicitly includes unredacted mapped content in event output.
+func WithRawContent() EmitterOption { return func(e *Emitter) { e.rawContent = true } }
 
 // Stats is a point-in-time snapshot of emitter counters.
 type Stats struct {
@@ -246,7 +251,7 @@ func (nopCloseSink) Close() error { return nil }
 // emitLocked marshals payload, injects the record_type/run_id envelope, and
 // writes the resulting object as one NDJSON line. The caller holds e.mu.
 func (e *Emitter) emitLocked(recordType string, payload any) error {
-	b, err := json.Marshal(payload)
+	b, err := marshalRecordJSON(payload)
 	if err != nil {
 		return err
 	}
@@ -260,7 +265,7 @@ func (e *Emitter) emitLocked(recordType string, payload any) error {
 		fields["schema_version"], _ = json.Marshal(model.SchemaVersion)
 	}
 	fields["endpoint"], _ = json.Marshal(e.endpoint)
-	line, err := json.Marshal(fields)
+	line, err := marshalRecordJSON(fields)
 	if err != nil {
 		return err
 	}
@@ -296,7 +301,9 @@ func (e *Emitter) EmitEvent(ev model.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var projected model.Event
-	if e.fullContent {
+	if e.rawContent {
+		projected = redact.EventWithRawContent(ev)
+	} else if e.fullContent {
 		projected = redact.EventWithContent(ev)
 	} else {
 		projected = redact.Event(ev)
@@ -440,4 +447,16 @@ func (e *Emitter) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.sink.Close()
+}
+
+// Records are JSON, not HTML. Avoid expanding source text such as patches and
+// markup sixfold before applying the transport's byte limit.
+func marshalRecordJSON(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }

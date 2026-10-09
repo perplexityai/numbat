@@ -109,7 +109,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full] [--include-reasoning] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full|raw] [--include-reasoning] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}

@@ -218,6 +218,7 @@ func mapRecord(resourceAttrs []keyValue, rec logRecord, eventID string) MapResul
 	if !classify(&ev, &a, rec) {
 		return MapResult{SourceAgent: sourceAgent}
 	}
+	retainToolContent(&ev, rec)
 	applyCommonContext(&ev, &a)
 	return MapResult{Event: ev, Mapped: true, SourceAgent: sourceAgent}
 }
@@ -347,6 +348,24 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 			}
 		}
 	}()
+
+	// A recorded result is a completion, including an empty or null result.
+	recordAttrs := newAttrs(nil, rec.attributes)
+	if _, ok := recordAttrs.m[attrGenAIToolCallResult]; ok {
+		ev.EventType = model.EventToolResult
+		ev.Actor = model.ActorTool
+		if server, tool, ok := splitMCPName(name); ok {
+			ev.MCPServer, ev.MCPTool = server, tool
+		}
+		if isShellToolName(name) {
+			ev.EventType = model.EventCommandResult
+			applyCommandResultMetadata(ev, a)
+		}
+		if errored(a, rec) {
+			ev.Tags = append(ev.Tags, model.TagToolError)
+		}
+		return
+	}
 
 	rawURL := a.str(attrURLFull, attrURL, attrHTTPURL)
 	if name == mcpFetchToolName {

@@ -1176,6 +1176,7 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 	if ev.EventType == model.EventToolCall && ev.ContentPreview == "" {
 		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(r.toolInputValue())
 	}
+	retainToolContent(&ev, r)
 	if ev.SubAgent == "" {
 		ev.SubAgent = r.subAgent()
 	}

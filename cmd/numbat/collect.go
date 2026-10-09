@@ -76,7 +76,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat collect [--addr 127.0.0.1:4318] [--emit KIND ...] [--content preview|full] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "usage: numbat collect [--addr 127.0.0.1:4318] [--emit KIND ...] [--content preview|full|raw] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		fmt.Fprintln(stderr, "\nReceives live OTLP/HTTP protobuf logs from supported AI agents and emits")
 		fmt.Fprintln(stderr, "selected records through the shared detection pipeline.")
 		fmt.Fprintln(stderr, "\nAt the default address, send logs to http://"+defaultOTLPAddr+otlpLogsPath+".")

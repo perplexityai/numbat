@@ -251,8 +251,8 @@ switch (mode) {
 	if postTool.Payload["exit_code"] != float64(7) {
 		t.Errorf("after_tool_call exit_code = %#v", postTool.Payload)
 	}
-	if _, exists := postTool.Payload["result"]; exists {
-		t.Errorf("after_tool_call leaked raw result: %#v", postTool.Payload)
+	if response, ok := postTool.Payload["tool_response"].(map[string]any); !ok || response["result"] == nil {
+		t.Errorf("after_tool_call dropped result: %#v", postTool.Payload)
 	}
 	if _, exists := fractionalExit.Payload["exit_code"]; exists {
 		t.Errorf("fractional result exit code should be omitted: %#v", fractionalExit.Payload)
@@ -443,7 +443,7 @@ await waitForCaptures(++expectedCaptures, "message_received");
 hooks.get("after_tool_call").handler({
   timestamp: 1710000000124, sessionKey: "parent", toolName: "exec",
   params: { command: "true" }, durationMs: 12,
-  result: { details: { exitCode: 7 }, content: privateCycle },
+  result: { details: { exitCode: 7 }, content: [{ type: "text", text: "RESULT_CANARY" }] },
 }, { agentId: "main" });
 await waitForCaptures(++expectedCaptures, "after_tool_call");
 hooks.get("after_tool_call").handler({

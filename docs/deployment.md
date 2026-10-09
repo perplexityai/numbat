@@ -45,7 +45,7 @@ response was delivered or honored by the host.
 
 Use `--emit all --output-file ~/.numbat/live.ndjson` when you want the complete
 live event stream. It uses conversation previews by default; add
-`--content full` only when bounded, redacted message text is required. Use
+`--content full` only when bounded, redacted message and tool content is required. Use
 repeated `--output` flags when you also want a direct HTTP delivery attempt:
 
 ```bash
@@ -70,7 +70,7 @@ proxy.
 Where the host has no external shipper, `numbat ship` is an optional native
 forwarder that tails the file output and delivers eligible retained records
 at-least-once while their input segments remain available, off the hook's
-critical path (see [cli.md](cli.md#ship)). Records larger than 8 MiB
+critical path (see [cli.md](cli.md#ship)). Records larger than 64 MiB
 or individually rejected with HTTP `413` are logged and skipped.
 It uses the capture file as its only on-disk queue and does not replace a mature
 shipper where one already runs. Configure
@@ -605,3 +605,7 @@ For live OTLP/HTTP, run `numbat collect` and point the agent exporter at
   [plugin CLI](https://docs.openclaw.ai/cli/plugins)
 - Kiro: [hook management](https://kiro.dev/docs/hooks/management/) and
   [IDE global-hook release](https://kiro.dev/changelog/ide/1-0-182/)
+
+`--content raw` exports mapped content without redaction. See
+[content capture](content-capture.md) for source coverage, limits and the
+difference between original local rule input and exported records.

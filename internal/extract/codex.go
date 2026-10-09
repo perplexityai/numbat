@@ -87,6 +87,7 @@ type codexState struct {
 	responsePromptIDs     map[string]struct{}
 	pendingResponsePrompt *model.Event
 	pendingTools          map[string]codexPendingTool
+	mcpResults            map[string]json.RawMessage
 	// codeMode correlates static exec cells through Codex's internal wait/poll
 	// calls so long-running commands keep one semantic identity.
 	codeMode codexCodeModeTracker
@@ -135,6 +136,7 @@ func (st *codexState) noteToolCall(ev model.Event) {
 
 func (st *codexState) resetCall(id string) {
 	delete(st.pendingTools, id)
+	delete(st.mcpResults, id)
 	delete(st.failedMCPCallIDs, id)
 	st.codeMode.forgetCall(id)
 }
@@ -239,6 +241,8 @@ func (e CodexExtractor) emitSessionEnd(res *Result, src Source, sha string, st *
 
 // mapLine decodes one rollout line and dispatches on the outer "type".
 func (e CodexExtractor) mapLine(res *Result, src Source, sha string, st *codexState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var rl codexLine
 	if err := json.Unmarshal(raw, &rl); err != nil {
 		if st.forkReplay {
@@ -408,6 +412,15 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		return
 	}
 	start := len(res.Events)
+	defer func() {
+		if len(res.Events) == start {
+			return
+		}
+		retainCodexToolContent(res.Events[start:], ri.Type, payload, st.mcpResults[ri.CallID])
+		if ri.Type == codexRIFunctionCallOutput || ri.Type == codexRICustomToolCallOut {
+			delete(st.mcpResults, ri.CallID)
+		}
+	}()
 	switch ri.Type {
 	case codexRIMessage:
 		e.emitMessage(res, src, sha, st, line, ts, &ri)
@@ -846,15 +859,14 @@ func (e CodexExtractor) mapEventMsg(res *Result, src Source, sha string, st *cod
 		ev.Tags = []string{em.Type}
 		res.Events = append(res.Events, ev)
 	case codexEMMcpToolCallEnd:
-		// The response_item layer already emitted the tool.call/tool.result for
-		// this MCP invocation, so this end-event is NOT re-emitted as its own
-		// timeline event (that would double-count). It is read only for its
-		// structured result: when that result records a failure, the existing
-		// tool.result for the same call_id is tagged TagToolError — the same
-		// structured-failure signal Claude/Gemini stamp — so an at-rest MCP tool
-		// failure is not a false negative. Only the structured Result is consulted;
-		// no prose body is scraped. A success or an unrecognized result shape
-		// leaves the tool.result untagged.
+		if !attachMCPResult(res, em.CallID, em.Result) && em.CallID != "" && len(em.Result) > 0 {
+			if st.mcpResults == nil {
+				st.mcpResults = make(map[string]json.RawMessage)
+			}
+			st.mcpResults[em.CallID] = em.Result
+		}
+		// Join the native result to the canonical output without emitting a
+		// duplicate completion. Only structured status determines failure.
 		if isErr, ok := codexMcpResultIsError(em.Result); ok && isErr {
 			if !markToolResultError(res, em.CallID) {
 				// The output has not been emitted yet (end-event preceded it);

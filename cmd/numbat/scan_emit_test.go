@@ -392,6 +392,46 @@ func TestScanFullContentRequiresEvents(t *testing.T) {
 	}
 }
 
+func TestScanToolContentModes(t *testing.T) {
+	secret := "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	input := `{"unknown":"` + strings.Repeat("x", 70000) + `INPUT_TAIL","password":"` + secret + `","n":9007199254740993}`
+	body := `{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"c","name":"mcp__notes__save","input":` + input + `}]}}
+{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"c","content":"RESULT_TAIL"}]}}`
+	p := writeTranscript(t, body)
+	for _, mode := range []string{"preview", "full", "raw"} {
+		t.Run(mode, func(t *testing.T) {
+			out, errb, code := runCLI("scan", "--path", p, "--emit", "events", "--content", mode)
+			if code != 0 {
+				t.Fatalf("exit=%d stderr=%s", code, errb)
+			}
+			var call, result model.Event
+			for _, ev := range decodeEventRecords(t, out) {
+				if ev.EventType == model.EventToolCall {
+					call = ev
+				}
+				if ev.EventType == model.EventToolResult {
+					result = ev
+				}
+			}
+			if call.ToolInputBytes != len(input) || result.ToolResultBytes == 0 {
+				t.Fatal("missing payload size metadata")
+			}
+			if mode == "preview" {
+				if call.ToolInput != "" || result.ToolResult != "" || strings.Contains(out, secret) {
+					t.Fatal("preview exposed payloads")
+				}
+				return
+			}
+			if !strings.Contains(call.ToolInput, "INPUT_TAIL") || !strings.Contains(call.ToolInput, "9007199254740993") || !strings.Contains(result.ToolResult, "RESULT_TAIL") {
+				t.Fatal("lost tool content or numeric precision")
+			}
+			if strings.Contains(out, secret) != (mode == "raw") {
+				t.Fatal("wrong redaction policy")
+			}
+		})
+	}
+}
+
 func TestScanReasoningCanEmitFullContent(t *testing.T) {
 	p := writeTranscript(t, emitTranscript)
 	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--include-reasoning", "--content", "full")

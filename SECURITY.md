@@ -36,6 +36,12 @@ environment values, credentials, and MCP configuration.
 - Default record output is findings only. Normal output never includes a
   complete raw transcript, but records can retain redacted commands, paths,
   URLs, content previews, endpoint identity, and model context.
+- `--content full` explicitly includes bounded, redacted message text and tool
+  arguments/results, including source code, file bodies and patches when
+  provided. `--content raw` includes mapped content without redaction. Neither
+  mode archives the entire source transcript. Rules inspect retained originals
+  before output redaction. Choose the mode and storage access controls for the
+  intended analysis; redaction can remove security-relevant evidence.
 - Redaction masks recognized secret patterns; it is not a declassification or
   data-loss-prevention boundary. Review records and redacted case evidence
   before sharing them.

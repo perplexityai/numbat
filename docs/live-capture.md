@@ -112,7 +112,7 @@ events or indicators are selected, the default becomes
 `--emit all`. `--emit events` alone is collection-only and skips the local
 rule engine; `--emit all` includes findings and runs it. Event records use
 bounded previews by default; add
-`--content full` to retain bounded, redacted conversation text when the agent
+`--content full` to retain bounded, redacted message and tool content when the agent
 exposes it. Add `--include-reasoning` for source-exposed Pi, OpenCode, and
 Kilo reasoning; hidden model chain-of-thought is not reconstructed. Repeat
 `--output file --output http --http-url URL` to keep the file and also attempt
@@ -228,7 +228,11 @@ record stream; ship it with the fleet's existing log forwarder, EDR, or OS
 retention tooling. Where the host has no such shipper, `numbat ship` is an
 optional native forwarder that tails that file and
 delivers eligible retained records at-least-once to an HTTP endpoint while their
-input segments remain available. Records larger than 8 MiB or individually
+input segments remain available. Records larger than 64 MiB or individually
 rejected with HTTP `413` are logged and skipped. See [cli.md](cli.md#ship) for
 the complete limits. Use file-only hook output with
 `ship` so the same record is not also sent through direct HTTP.
+
+`--content raw` exports mapped content without redaction. See
+[content capture](content-capture.md) for source coverage, limits and the
+difference between original local rule input and exported records.

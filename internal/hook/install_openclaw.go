@@ -241,6 +241,7 @@ function serialize(payload) {
   try {
     const input = JSON.stringify(payload);
     if (typeof input !== "string" || Buffer.byteLength(input, "utf8") > MAX_STDIN_BYTES) {
+      process.stderr.write("numbat: hook payload exceeds input limit; capture omitted\n");
       return undefined;
     }
     return input;
@@ -379,6 +380,7 @@ export default {
         duration_ms: event.durationMs,
         is_error: typeof event.error === "string" && event.error.length > 0,
         exit_code: toolExitCode(event.result),
+        tool_response: { result: event.result, error: event.error },
       });
     });
     api.on("llm_output", (rawEvent, rawCtx) => {
