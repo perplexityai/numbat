@@ -14,7 +14,8 @@ numbat scan [--agent NAME ... | --path FILE|DIR ...]
 numbat timeline [--agent NAME ... | --path FILE|DIR ...]
                                         reconstruct a per-session chronological view
 numbat collect [--addr HOST:PORT]        receive OTLP/HTTP protobuf logs; emit records
-numbat ship --input-file F --http-url U  tail a local record file to an HTTP endpoint
+numbat ship (--spool-file S | --input-file F) --http-url U
+                                        send queued or legacy file records to HTTP
 numbat hook EVENT --agent NAME           live integration callback (normally not run by hand)
 numbat hook install --agent NAME|all     install numbat's live integrations
 numbat hook uninstall --agent NAME|all   remove numbat-owned live integrations
@@ -102,9 +103,10 @@ agent's transcript.
 --rules-dir DIR              operator rules to add or replace by id
                              (repeatable)
 --no-builtin-rules           load only --rules-dir rules
---output SINK                record sink: stdout, file, or http
+--output SINK                record sink: stdout, file, spool, or http
                              (repeatable; default stdout; stdout cannot be combined)
 --output-file PATH           destination path (required when output includes file)
+--spool-file PATH            durable queue path (required when output includes spool)
 ```
 
 HTTP sink flags (used when output includes `http`):
@@ -139,6 +141,11 @@ With file output, `scan` creates or truncates the destination and requires its
 parent directory to exist. `collect` and `hook` append and create missing parent
 directories.
 
+With spool output, each write commits one complete NDJSON record to a durable
+queue. A successful write means that the complete record is committed. Use
+`numbat ship --spool-file PATH` to deliver the queue. File and spool output
+cannot be combined. Either one can be combined with direct HTTP output.
+
 Repeat `--output` to fan out the same NDJSON stream to more than one sink, for
 example `--output file --output http`. Direct HTTP is not a durable queue. Its
 16 MiB memory buffer rejects any larger record. A failed batch is retried
@@ -147,8 +154,8 @@ it is never spooled to disk. After a delivery failure, a full buffer drops the
 oldest complete records to retain the newest records; the close error reports
 the drop count. A retry after an ambiguous transport failure can duplicate a
 batch, so receivers should tolerate repeated record ids. For production
-retention, keep file output and let a log forwarder ship it. numbat does not
-rotate files itself.
+retention, use spool output with `numbat ship`, or use file output with a fleet
+forwarder. numbat does not rotate files or manage host storage.
 
 ```
 # scan only automatically discovered Codex artifacts
@@ -271,8 +278,8 @@ A scan stream always terminates with a `scan_summary` whose `status` is
 `complete`, `partial`, or `error`. `partial` covers parsed runs with artifact
 failures or record-delivery failures observed before the summary was written.
 Operational diagnostics normally use a separate NDJSON stream on stderr. After
-an enforce-mode hook opens its required file or HTTP sink, diagnostics are
-written to that sink so details stay out of the host control channel.
+an enforce-mode hook opens its required file, spool, or HTTP sink, diagnostics
+are written to that sink so details stay out of the host control channel.
 Exit codes: `0` when the scan parses at least one artifact and output delivery
 succeeds; `1` when initialization fails before scanning (home/default-root
 discovery, `--rules-dir` validation, or rule-engine compilation), when zero
@@ -352,9 +359,9 @@ telemetry through the same pipeline `scan` uses. It listens on
 (the standard OTLP/HTTP path), with identity or gzip content encoding. It serves
 **OTLP/HTTP only** — there is no gRPC listener (`:4317`), so an agent that
 defaults to gRPC must be switched to HTTP.
-The startup banner, shutdown note, and diagnostics are written to stderr; the
-selected record sink (`stdout`, `file`, `http`, or repeated `file` + `http`)
-stays reserved for records.
+The startup banner, shutdown note, and diagnostics are written to stderr. The
+selected record sink stays reserved for records. It can be `stdout`, `file`,
+`spool`, `http`, or one durable sink plus `http`.
 
 The receiver has no client authentication or TLS. Keep the default loopback
 bind, or place an off-loopback listener behind network controls and an
@@ -379,9 +386,10 @@ IDs so receivers can deduplicate it.
                              or all (repeatable; default findings)
 --content preview|full       conversation content in event output (default preview;
                              full is redacted and bounded to 1 MiB)
---output SINK                record sink: stdout, file, or http
+--output SINK                record sink: stdout, file, spool, or http
                              (repeatable; default stdout; stdout cannot be combined)
 --output-file PATH           destination path (required when output includes file)
+--spool-file PATH            durable queue path (required when output includes spool)
 --rules-dir DIR              operator rules to add or replace by id
                              (repeatable)
 --no-builtin-rules           load only --rules-dir rules
@@ -449,23 +457,31 @@ collector for that telemetry.
 
 ## ship
 
-`ship` is an optional forwarder for hosts without an existing log shipper. It
-tails a numbat NDJSON file and sends batches to an HTTP endpoint outside the
-agent's hook path. Accepted batches advance the checkpoint only after a `2xx`.
-Eligible retained records are delivered at-least-once across endpoint outages
-and process restarts while the input and its rotations remain available.
-Records larger than 8 MiB or individually rejected with HTTP `413` are logged
-and skipped, advancing the checkpoint as detailed below.
+`ship` sends records to an HTTP endpoint outside the agent's hook path. It can
+drain a transactional spool or tail a legacy NDJSON file.
 
-Use file-only hook output with `ship`. Selecting direct HTTP on the same hook
-would send each record through both paths.
+For spool input, `ship` reads the oldest complete records first. It removes
+only the delivered prefix after the endpoint returns `2xx`. Failed delivery
+keeps every selected record. A record appended during delivery remains queued
+for the next request.
+
+For legacy file input, accepted batches advance the checkpoint after a `2xx`.
+Eligible records are delivered at least once while the input and its rotations
+remain available. Legacy records larger than 8 MiB, individually rejected with
+HTTP `413`, or lines that are not a single JSON object are logged and skipped,
+advancing the checkpoint as detailed below.
+
+Select exactly one input mode. Use spool-only or file-only hook output with
+`ship`. Direct HTTP on the same hook sends each record through both paths.
 
 ### ship flags
 
 ```
---input-file PATH            append-only NDJSON file to ship (required)
---state-file PATH            delivery checkpoint (default <input-file>.ship-state)
---poll DURATION              interval between input-file polls (default 2s)
+--spool-file PATH            transactional record queue to drain
+--input-file PATH            legacy append-only NDJSON file to tail
+                             (exactly one input path is required)
+--state-file PATH            legacy file checkpoint (default <input-file>.ship-state)
+--poll DURATION              interval between source polls (default 2s)
 --max-batch-bytes N           maximum uncompressed bytes per batch (1..4194304;
                              default 4194304); larger single records sent alone
 --http-url URL               ingest URL (required)
@@ -480,39 +496,56 @@ would send each record through both paths.
 
 ```
 numbat hook install --agent codex --emit all \
-  --output file --output-file ~/.numbat/records.ndjson
+  --output spool --spool-file ~/.numbat/records.spool
 
 NUMBAT_HTTP_TOKEN=... numbat ship \
-  --input-file ~/.numbat/records.ndjson \
+  --spool-file ~/.numbat/records.spool \
   --http-url https://ingest.example/numbat \
   --http-auth bearer
 ```
 
-The default state file is `<input-file>.ship-state`; override it with
-`--state-file`. It binds the acknowledged offset to the input file and endpoint.
-On rotation, `ship` drains retained, same-directory record files before moving
-to the active file. Keep rotations uncompressed until the state reaches the new
-active file; a segment deleted during an outage cannot be recovered.
-Changing the endpoint or losing valid state replays retained records. Receivers
-must tolerate duplicates, using stable record identifiers where present.
+Spool input does not use `--state-file`. The queue stores its own delivery
+state. The spool sink rejects partial records, multiple records in one write,
+non-object JSON, and records larger than 8 MiB. The queue keeps undelivered
+records. numbat does not delete them to free storage.
+
+For legacy input, the default state file is `<input-file>.ship-state`. Override
+it with `--state-file`. It binds the acknowledged offset to the input file and
+endpoint. On rotation, `ship` drains retained files before the active file.
+Keep rotations uncompressed until the state reaches the active file. A segment
+deleted during an outage cannot be recovered.
+
+Changing the endpoint or losing valid legacy state replays retained records.
+An ambiguous HTTP result can also cause a repeated spool batch. Receivers must
+tolerate duplicates and use stable record identifiers where present.
+
+`ship` never truncates or rotates a legacy input. Retention remains the
+operator's responsibility. A complete record larger than 8 MiB remains in the
+input but is skipped, so later records can continue. A line that is not a single
+JSON object, such as two records glued together by an interrupted append, is
+skipped the same way so one poisoned line cannot stall the queue. Prefer an
+existing fleet forwarder when one is already available.
 
 Use `--max-batch-bytes 900000` for a receiver or proxy configured with a 1 MB
-request limit, leaving room for headers and other request overhead. For
-devbox/Panther delivery, this also stays below a 1 MiB wire-body limit; verify
-the effective limit across the ingest path. The default remains 4 MiB. The limit counts NDJSON
-bytes before optional gzip compression, not headers. A single record larger
+request limit, leaving room for headers and other request overhead. Verify the
+effective limit across the ingest path. The default remains 4 MiB. The limit
+counts NDJSON bytes before optional gzip compression, not headers. A single record larger
 than the batch limit is attempted alone, so a record that the receiver accepts
 is not discarded merely because it exceeds the configured batch size.
 
-When a receiver returns HTTP `413`, `ship` retries smaller requests split only
-at NDJSON record boundaries. It checkpoints every accepted prefix before
-attempting the remaining suffix. If one record is still rejected with `413`,
-`ship` logs its input path, byte offset and size on stderr, advances the durable
-checkpoint past it, and continues delivering later records. That record remains
-in the input file but is skipped from HTTP delivery, like records over the local
-8 MiB limit. Retain the input and rotations if these records need to be recovered
-through a receiver that accepts them. Changing the endpoint replays retained
-records, including previously skipped records.
+When a receiver returns HTTP `413`, `ship` retries smaller requests containing
+only whole records. For a spool, it selects a smaller FIFO prefix and
+acknowledges only the prefix accepted with `2xx`. A single record still rejected
+with `413` remains queued: delivery pauses and retries with backoff until the
+receiver accepts it. Later records are not shipped past that record.
+
+For legacy files, `ship` checkpoints every accepted prefix before attempting
+the remaining suffix. If one record is still rejected with `413`, it logs the
+input path, byte offset and size on stderr, advances the durable checkpoint
+past it, and continues. That record remains in the input file but is skipped
+from HTTP delivery, like records over the local 8 MiB limit. Retain the input
+and rotations to recover these records through a receiver that accepts them.
+Changing the endpoint replays retained legacy records, including skipped ones.
 
 Other HTTP failures and ambiguous transport errors keep their full
 unacknowledged request eligible for replay. Receivers must reject a `413` request
@@ -520,18 +553,12 @@ without ingesting it; if they ingest any part before rejecting, the split retrie
 can duplicate those records. A `2xx` must mean the whole request was accepted.
 Splitting is specific to `ship`; direct HTTP output remains best-effort.
 
-`ship` never truncates or rotates the input. Retention remains the operator's
-responsibility, and undelivered records are only as durable as that file and its
-host. A complete record larger than 8 MiB remains in the input but is skipped
-from HTTP delivery with a stderr diagnostic so later records can continue.
-Prefer an existing fleet forwarder when one is already available.
-
 `--http-auth`, `--http-timeout`, `--http-gzip`, the HMAC header options, and
 `--http-allow-insecure` match the [scan HTTP options](#scan), including the wire
 contract and environment-only secrets. Failed delivery retries use exponential
 backoff with jitter. `ship` runs until SIGINT or SIGTERM; an in-flight request
 is bounded by `--http-timeout`. During adaptive delivery, a successful in-flight
-request is checkpointed before shutdown, and no further split request starts
+request is acknowledged before shutdown, and no further split request starts
 after cancellation is observed.
 
 ## hook
@@ -598,10 +625,11 @@ below.
                              (default $HOME/.numbat/state.db)
 --installed-by NAME          provenance marker written by `hook install`;
                              accepted but inert (ignored at runtime)
---output SINK                record sink: stdout, file, or http
+--output SINK                record sink: stdout, file, spool, or http
                              (repeatable; default stdout; stdout cannot be combined
                              and is unavailable in enforce mode)
 --output-file PATH           destination path (required when output includes file)
+--spool-file PATH            durable queue path (required when output includes spool)
 --rules-dir DIR              operator rules to add or replace by id
                              (repeatable)
 --no-builtin-rules           load only --rules-dir rules
@@ -609,15 +637,14 @@ below.
 
 On `numbat hook`, stdout is reserved for the agent's control response, so
 monitor-mode `--output=stdout` records are written to **stderr** instead.
-Enforce mode requires `--emit findings` (or `all`) and a `file` and/or `http`
-sink; stdout output is rejected so operator findings cannot enter the agent's
-control channel. After that sink opens, enforce-mode diagnostics are emitted as
-records on it even when only findings were selected; decision failures return
-only a generic message on hook stderr. For durable capture use
-`--output=file`; repeat `--output file --output http` only when you also want a
-direct HTTP delivery attempt. `--emit` has the same record selection as `scan`
-and `collect`. Hook HTTP requests default to a five-second timeout so a slow
-sink does not consume the agent hook's full execution window.
+Enforce mode requires `--emit findings` (or `all`) and a `file`, `spool`, or
+`http` sink. Stdout output is rejected, so findings cannot enter the agent's
+control channel. After the sink opens, enforce-mode diagnostics are emitted as
+records on it. Decision failures return only a generic message on hook stderr.
+Use file output with an external forwarder. Use spool output with `numbat ship`.
+Add direct HTTP only when you also want an immediate delivery attempt. `--emit`
+has the same record selection as `scan` and `collect`. Hook HTTP requests use a
+five-second timeout by default.
 
 The HTTP sink flags (`--http-url`, `--http-auth`, `--http-batch-size`,
 `--http-gzip`, `--http-timeout`, `--http-sig-header`, `--http-timestamp-header`,
@@ -660,13 +687,16 @@ default. This agent process deadline is separate from the hook handler's
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --output SINK                record sink installed hook commands use:
-                             stdout, file, or http (repeatable; default file;
+                             stdout, file, spool, or http (repeatable; default file;
                              stdout cannot be combined and writes records to
                              hook stderr because hook stdout is reserved for
                              the agent response; unavailable in enforce mode)
 --output-file PATH           destination path when output includes file
                              (default findings.ndjson for findings only;
                              records.ndjson when events/indicators are selected)
+--spool-file PATH            queue path when output includes spool
+                             (default findings.spool for findings only;
+                             records.spool when events/indicators are selected)
 --rules-dir DIR              operator rules installed hooks add or replace by id
                              (repeatable)
 --no-builtin-rules           install hook commands that load only --rules-dir
@@ -687,14 +717,12 @@ Each `--rules-dir` must be a concrete, readable install-time path; deferred
 paths such as `$HOME/rules` are rejected in this mode.
 
 Install-time output flags are baked into the command written to the agent's hook
-configuration. Findings-only installs write
-`$HOME/.numbat/findings.ndjson`; selecting events or indicators changes the
-default to `$HOME/.numbat/records.ndjson`. Use `--output-file PATH` to change
-that file, or
-`--output file --output http --http-url URL` to keep the local file and also
-attempt direct delivery. HTTP auth secrets are not written into hook settings; the
-installed hook reads `NUMBAT_HTTP_TOKEN` or `NUMBAT_HTTP_HMAC_KEY` from its
-runtime environment when `--http-auth` selects one of those modes.
+configuration. File output uses `$HOME/.numbat/findings.ndjson` for findings
+only. It uses `$HOME/.numbat/records.ndjson` when events or indicators are
+selected. Spool output uses the corresponding `.spool` names. Use
+`--output-file PATH` or `--spool-file PATH` to change the selected destination.
+HTTP auth secrets are not written into hook settings. The installed hook reads
+`NUMBAT_HTTP_TOKEN` or `NUMBAT_HTTP_HMAC_KEY` from its runtime environment.
 
 `hook install` accepts the same eight HTTP flags listed under
 [hook](#hook-flags), with the same defaults, including the five-second

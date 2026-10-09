@@ -13,7 +13,7 @@
 //	numbat scan [--agent NAME ... | --path FILE|DIR ...]      scan agent artifacts; emit selected NDJSON records
 //	numbat timeline [--agent NAME ... | --path FILE|DIR ...]  reconstruct a per-session chronological view
 //	numbat collect [--addr 127.0.0.1:4318]   receive OTLP/HTTP protobuf logs; emit records
-//	numbat ship --input-file F --http-url U  tail a local record file to an HTTP endpoint
+//	numbat ship (--spool-file S | --input-file F) --http-url U  send local records to an HTTP endpoint
 //	numbat hook (install|uninstall|status)   manage live agent integrations
 //	numbat agents                            report detected and supported local agents
 //	numbat rules check                       validate and compile rules; run companion tests
@@ -203,7 +203,7 @@ usage:
   numbat scan [--agent NAME ... | --path FILE|DIR ...]      scan agent artifacts; emit records (NDJSON)
   numbat timeline [--agent NAME ... | --path FILE|DIR ...]  reconstruct a per-session chronological view (text|json)
   numbat collect [--addr 127.0.0.1:4318]   receive OTLP/HTTP protobuf logs; emit records
-  numbat ship --input-file F --http-url U  tail a local record file to an HTTP endpoint
+  numbat ship (--spool-file S | --input-file F) --http-url U  send local records to an HTTP endpoint
   numbat hook EVENT --agent NAME           live integration callback (normally not run by hand)
   numbat hook install --agent NAME|all     install numbat's live integrations
   numbat hook uninstall --agent NAME|all   remove numbat-owned live integrations

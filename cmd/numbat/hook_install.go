@@ -43,6 +43,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		includeReasoning  bool
 		outputValues      multiFlag
 		outputFileValue   string
+		spoolFileValue    string
 		httpURL           string
 		httpBatch         = 500
 		httpTimeout       = defaultHookHTTPTimeout
@@ -59,8 +60,9 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		fs.Var(&emitValues, "emit", "records emitted by live integrations: findings, events, indicators, or all (repeatable; default findings; enforce mode requires findings)")
 		fs.StringVar(&contentValue, "content", "preview", contentFlagHelp())
 		fs.BoolVar(&includeReasoning, "include-reasoning", false, "include source-recorded reasoning events when an integration exposes them")
-		fs.Var(&outputValues, "output", outputFlagHelp(outputModeFile)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
+		fs.Var(&outputValues, "output", outputFlagHelp(outputModeFile)+". stdout mode writes records to hook stderr and is unavailable in enforce mode")
 		fs.StringVar(&outputFileValue, "output-file", "", "destination path when --output includes file (default findings.ndjson, or records.ndjson when --emit includes events/indicators)")
+		fs.StringVar(&spoolFileValue, "spool-file", "", "durable queue path when --output includes spool (default findings.spool, or records.spool when --emit includes events/indicators)")
 		fs.StringVar(&httpURL, "http-url", "", "ingest URL (required when --output includes http)")
 		fs.IntVar(&httpBatch, "http-batch-size", 500, "records per HTTP POST")
 		fs.DurationVar(&httpTimeout, "http-timeout", defaultHookHTTPTimeout, "HTTP request timeout")
@@ -189,6 +191,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 			includeReasoning: includeReasoning,
 			modes:            outputValues,
 			file:             outputFileValue,
+			spool:            spoolFileValue,
 			httpURL:          httpURL,
 			httpBatch:        httpBatch,
 			httpTimeout:      httpTimeout,
@@ -289,6 +292,7 @@ type installRuntimeConfig struct {
 	includeReasoning bool
 	modes            []string
 	file             string
+	spool            string
 	httpURL          string
 	httpBatch        int
 	httpTimeout      time.Duration
@@ -377,6 +381,9 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 	if !sinks.file && cfg.file != "" {
 		return nil, fmt.Errorf("--output-file is only valid when --output includes file")
 	}
+	if !sinks.spool && cfg.spool != "" {
+		return nil, fmt.Errorf("--spool-file is only valid when --output includes spool")
+	}
 	if !sinks.http && cfg.httpURL != "" {
 		return nil, fmt.Errorf("--http-url is only valid when --output includes http")
 	}
@@ -387,6 +394,9 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 		}
 		if cfg.httpURL != "" {
 			return nil, fmt.Errorf("--http-url is only valid when --output includes http")
+		}
+		if cfg.spool != "" {
+			return nil, fmt.Errorf("--spool-file is only valid when --output includes spool")
 		}
 		return append(args, "--output=stdout"), nil
 	}
@@ -410,13 +420,42 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 			} else {
 				file = hook.DefaultRecordsPath(home)
 			}
-		} else if !filepath.IsAbs(file) && !runtimeExpandedPath(file) {
-			file, err = filepath.Abs(file)
-			if err != nil {
-				return nil, fmt.Errorf("resolve --output-file %q: %w", cfg.file, err)
-			}
+		}
+		file, err = resolveInstalledSinkPath("--output-file", file)
+		if err != nil {
+			return nil, err
 		}
 		args = append(args, "--output-file", file)
+	}
+	if sinks.spool {
+		if set["spool-file"] && strings.TrimSpace(cfg.spool) == "" {
+			return nil, fmt.Errorf("--spool-file must not be empty")
+		}
+		path := cfg.spool
+		if path == "" {
+			findingsOnly := emitSel.defaultFindingsOnly()
+			if cfg.managed && findingsOnly {
+				path = "$HOME/.numbat/findings.spool"
+			} else if cfg.managed {
+				path = "$HOME/.numbat/records.spool"
+			} else if findingsOnly {
+				path = hook.DefaultFindingsSpoolPath(home)
+			} else {
+				path = hook.DefaultRecordsSpoolPath(home)
+			}
+		}
+		path, err = resolveInstalledSinkPath("--spool-file", path)
+		if err != nil {
+			return nil, err
+		}
+		expandedPath, expandErr := expandHookPath(path)
+		if expandErr != nil {
+			return nil, fmt.Errorf("resolve --spool-file %q: %w", path, expandErr)
+		}
+		if _, err := hookStatePath("", expandedPath); err != nil {
+			return nil, err
+		}
+		args = append(args, "--spool-file", path)
 	}
 	if sinks.http {
 		if cfg.httpURL == "" {
@@ -511,6 +550,40 @@ func validateInstallEnforcementPolicy(ruleDirs []string, noBuiltin bool) error {
 
 func runtimeExpandedPath(path string) bool {
 	return strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) || strings.Contains(path, "$")
+}
+
+func resolveInstalledSinkPath(name, path string) (string, error) {
+	if !runtimeExpandedPath(path) {
+		if filepath.IsAbs(path) {
+			return filepath.Clean(path), nil
+		}
+		resolved, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s %q: %w", name, path, err)
+		}
+		return resolved, nil
+	}
+	if homeAnchoredPath(path) {
+		return path, nil
+	}
+
+	resolved, err := expandHookPath(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s %q: %w", name, path, err)
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("%s must resolve to an absolute path; got %q", name, resolved)
+	}
+	return resolved, nil
+}
+
+func homeAnchoredPath(path string) bool {
+	for _, prefix := range []string{"$HOME/", `$HOME\`, "${HOME}/", `${HOME}\`, "~/", `~\`} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func httpOnlyInstallFlagNames() []string {

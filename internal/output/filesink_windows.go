@@ -17,12 +17,12 @@ func isNoFollowErr(err error) bool {
 	return errors.Is(err, winfile.ErrReparsePoint)
 }
 
-func writeFileLocked(f *os.File, p []byte) (n int, err error) {
+func writeFileLocked(f *os.File, p []byte, repairNewline bool) (n int, err error) {
 	if err := winfile.LockExclusive(f); err != nil {
 		return 0, err
 	}
 	defer func() {
 		err = errors.Join(err, winfile.Unlock(f))
 	}()
-	return f.Write(p)
+	return appendRecordLocked(f, p, repairNewline)
 }

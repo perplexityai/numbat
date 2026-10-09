@@ -16,13 +16,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/perplexityai/numbat/internal/output"
+	"github.com/perplexityai/numbat/internal/spool"
 )
 
 const (
@@ -70,6 +70,7 @@ type shipRead struct {
 	rotated          bool
 	reset            bool
 	skippedOversized bool
+	skippedMalformed bool
 	guard            []byte
 }
 
@@ -86,9 +87,10 @@ type shipSinkFactory func() (output.Sink, error)
 func runShip(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ship", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	inputPath := fs.String("input-file", "", "append-only NDJSON file to ship (required)")
+	inputPath := fs.String("input-file", "", "legacy append-only NDJSON file to ship")
+	spoolPath := fs.String("spool-file", "", "durable record queue to ship (use instead of --input-file)")
 	statePath := fs.String("state-file", "", "delivery checkpoint (default <input-file>.ship-state)")
-	poll := fs.Duration("poll", defaultShipPoll, "interval between input-file polls")
+	poll := fs.Duration("poll", defaultShipPoll, "interval between source polls")
 	maxBatchBytes := fs.Int64("max-batch-bytes", maxShipBatchBytes, "maximum uncompressed bytes per batch (1..4194304; larger single records are attempted alone)")
 	httpURL := fs.String("http-url", "", "ingest URL (required)")
 	httpTimeout := fs.Duration("http-timeout", 30*time.Second, "HTTP request timeout")
@@ -98,8 +100,10 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	httpAllowInsecure := fs.Bool("http-allow-insecure", false, "allow plain http to non-loopback hosts")
 	httpGzip := fs.Bool("http-gzip", false, "gzip the HTTP POST body")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat ship --input-file PATH --http-url URL [--state-file PATH] [--poll DUR] [HTTP options]")
-		fmt.Fprintln(stderr, "\nTails an append-only numbat NDJSON file to an HTTP endpoint with a durable")
+		fmt.Fprintln(stderr, "usage: numbat ship (--spool-file PATH | --input-file PATH) --http-url URL [--state-file PATH] [--poll DUR] [HTTP options]")
+		fmt.Fprintln(stderr, "\nDrains a transactional numbat spool, or tails a legacy append-only NDJSON file,")
+		fmt.Fprintln(stderr, "to an HTTP endpoint. Spool records are acknowledged only after a successful POST.")
+		fmt.Fprintln(stderr, "Legacy file input uses a durable")
 		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
 		fmt.Fprintln(stderr, "Records larger than 8 MiB or individually rejected with HTTP 413 are logged,\nretained in the input file, and skipped from HTTP delivery.")
@@ -117,8 +121,10 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
-	if strings.TrimSpace(*inputPath) == "" {
-		fmt.Fprintln(stderr, "ship: --input-file is required")
+	inputSet := strings.TrimSpace(*inputPath) != ""
+	spoolSet := strings.TrimSpace(*spoolPath) != ""
+	if inputSet == spoolSet {
+		fmt.Fprintln(stderr, "ship: exactly one of --spool-file or --input-file is required")
 		fs.Usage()
 		return 2
 	}
@@ -137,13 +143,29 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ship: --max-batch-bytes must be between 1 and %d, got %d\n", maxShipBatchBytes, *maxBatchBytes)
 		return 2
 	}
-	if *statePath == "" {
-		*statePath = *inputPath + ".ship-state"
-	}
-	if sameShipPath(*inputPath, *statePath) || sameShipPath(*inputPath, *statePath+".lock") {
-		fmt.Fprintln(stderr, "ship: --state-file and its lock must differ from --input-file")
-		fs.Usage()
-		return 2
+	if spoolSet {
+		if *statePath != "" {
+			fmt.Fprintln(stderr, "ship: --state-file is only valid with legacy --input-file")
+			fs.Usage()
+			return 2
+		}
+	} else {
+		if *statePath == "" {
+			*statePath = *inputPath + ".ship-state"
+		}
+		for _, candidate := range []string{*statePath, *statePath + ".lock"} {
+			same, err := sameShipPath(*inputPath, candidate)
+			if err != nil {
+				fmt.Fprintf(stderr, "ship: compare input and state paths: %v\n", err)
+				fs.Usage()
+				return 2
+			}
+			if same {
+				fmt.Fprintln(stderr, "ship: --state-file and its lock must differ from --input-file")
+				fs.Usage()
+				return 2
+			}
+		}
 	}
 	var httpFlagsSet []string
 	fs.Visit(func(f *flag.Flag) {
@@ -178,6 +200,24 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		_ = s.Close()
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if spoolSet {
+		store := spool.New(*spoolPath)
+		if _, err := store.Peek(int(*maxBatchBytes)); spoolOpenIsFatal(err) {
+			fmt.Fprintf(stderr, "ship: open spool: %v\n", err)
+			return 1
+		}
+		lock, err := acquireShipLock(*spoolPath + ".ship.lock")
+		if err != nil {
+			fmt.Fprintf(stderr, "ship: acquire spool shipper lock: %v\n", err)
+			return 1
+		}
+		defer lock.Close()
+		fmt.Fprintf(stderr, "numbat ship: shipping spool %s to the configured HTTP endpoint (Ctrl-C to stop)\n", *spoolPath)
+		return runSpoolShipLoop(ctx, store, *poll, int(*maxBatchBytes), factory, stderr)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(*statePath), 0o700); err != nil {
 		fmt.Fprintf(stderr, "ship: create state directory: %v\n", err)
 		return 1
@@ -189,26 +229,25 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	}
 	defer lock.Close()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	fmt.Fprintf(stderr, "numbat ship: shipping %s to the configured HTTP endpoint (Ctrl-C to stop)\n", *inputPath)
 	return runShipLoop(ctx, *inputPath, *statePath, shipDestinationID(*httpURL), *poll, *maxBatchBytes, factory, stderr)
 }
 
-func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, maxBatchBytes int64, factory shipSinkFactory, stderr io.Writer) int {
-	cursor, err := readShipCursor(statePath, destination)
-	if err != nil {
-		fmt.Fprintf(stderr, "ship: read state %s: %v\n", statePath, err)
-		return 1
-	}
-	if cursor.resetReason != "" {
-		fmt.Fprintf(stderr, "ship: %s; replaying retained records\n", cursor.resetReason)
-		cursor.resetReason = ""
-	}
+func spoolOpenIsFatal(err error) bool {
+	return err != nil && !errors.Is(err, spool.ErrBusy)
+}
+
+func runSpoolShipLoop(ctx context.Context, store spool.Store, poll time.Duration, maxBytes int, factory shipSinkFactory, stderr io.Writer) int {
+	return runShipRetryLoop(ctx, poll, stderr, func() error {
+		return drainSpoolAvailable(ctx, store, maxBytes, factory)
+	})
+}
+
+func runShipRetryLoop(ctx context.Context, poll time.Duration, stderr io.Writer, drain func() error) int {
 	stalled := false
 	failures := 0
 	for {
-		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxBatchBytes, factory, stderr)
+		err := drain()
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -235,6 +274,64 @@ func runShipLoop(ctx context.Context, inputPath, statePath, destination string, 
 		case <-timer.C:
 		}
 	}
+}
+
+func drainSpoolAvailable(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory) error {
+	for ctx.Err() == nil {
+		sent, err := shipSpoolBatch(ctx, store, maxBytes, factory)
+		if err != nil || !sent {
+			return err
+		}
+	}
+	return nil
+}
+
+func shipSpoolBatch(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory) (bool, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		batch, err := store.Peek(maxBytes)
+		if err != nil {
+			return false, fmt.Errorf("read spool: %w", err)
+		}
+		if len(batch.Records) == 0 {
+			return false, nil
+		}
+		blob := bytes.Join(batch.Records, nil)
+		if err := shipBatch(factory, blob); err != nil {
+			if status, ok := output.HTTPStatusCode(err); !ok || status != http.StatusRequestEntityTooLarge {
+				return true, err
+			}
+			if len(batch.Records) == 1 {
+				return true, fmt.Errorf("HTTP 413 rejected %d-byte spool record; retained in queue: %w", len(blob), err)
+			}
+			// Obtain a fresh, smaller prefix with its own opaque Ack identity.
+			// Never acknowledge a rejected record just to advance the queue.
+			maxBytes = max(1, len(blob)/2)
+			continue
+		}
+		if err := store.Ack(batch); err != nil {
+			return true, fmt.Errorf("acknowledge spool batch: %w", err)
+		}
+		return true, nil
+	}
+}
+
+func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, maxBatchBytes int64, factory shipSinkFactory, stderr io.Writer) int {
+	cursor, err := readShipCursor(statePath, destination)
+	if err != nil {
+		fmt.Fprintf(stderr, "ship: read state %s: %v\n", statePath, err)
+		return 1
+	}
+	if cursor.resetReason != "" {
+		fmt.Fprintf(stderr, "ship: %s; replaying retained records\n", cursor.resetReason)
+		cursor.resetReason = ""
+	}
+	return runShipRetryLoop(ctx, poll, stderr, func() error {
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxBatchBytes, factory, stderr)
+		return err
+	})
 }
 
 func shipRetryDelay(base time.Duration, failures int) time.Duration {
@@ -319,10 +416,12 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		if len(batch.blob) == 0 {
 			if batch.n > 0 {
 				// readShipBatch reports n>0 with an empty blob only when it
-				// skipped an oversized record; the offset must still advance
-				// past those bytes or the same record blocks the next read.
+				// skipped an oversized or malformed record; the offset must still
+				// advance past those bytes or the same record blocks the next read.
 				if batch.skippedOversized {
 					fmt.Fprintf(stderr, "ship: %s: record at offset %d exceeds %d-byte limit; skipped from HTTP delivery and retained in the input file\n", inputPath, cursor.checkpoint.Offset, maxShipRecordBytes)
+				} else if batch.skippedMalformed {
+					fmt.Fprintf(stderr, "ship: %s: record at offset %d is not a single JSON object; skipped from HTTP delivery and retained in the input file\n", inputPath, cursor.checkpoint.Offset)
 				}
 				drained := cursor.checkpoint.DrainedFileIDs
 				cursor.checkpoint = newShipCheckpoint(
@@ -420,6 +519,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 	var buf bytes.Buffer
 	var consumed int64
 	var skipped bool
+	var skippedMalformed bool
 	var skippedGuard []byte
 	for buf.Len() == 0 || int64(buf.Len()) < maxBytes {
 		line, readErr := readShipLine(br, maxShipRecordBytes)
@@ -436,6 +536,19 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 			break
 		}
 		if line.complete {
+			if !isShippableRecord(line.bytes) {
+				// A partial record left by a short append, glued onto the next
+				// record, is not a single JSON object; ingestion would reject the
+				// whole batch on it. Ship any good records buffered so far, then
+				// skip this line on the next empty batch so the queue drains past it.
+				if buf.Len() > 0 {
+					break
+				}
+				consumed += line.consumed
+				skippedMalformed = true
+				skippedGuard = line.bytes
+				break
+			}
 			if buf.Len() > 0 && int64(buf.Len())+line.consumed > maxBytes {
 				break
 			}
@@ -468,6 +581,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		modTime:          info.ModTime(),
 		rotated:          source.rotated,
 		skippedOversized: skipped,
+		skippedMalformed: skippedMalformed,
 		guard:            skippedGuard,
 	}, nil
 }
@@ -816,14 +930,92 @@ func shipDestinationID(rawURL string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func sameShipPath(a, b string) bool {
-	a, errA := filepath.Abs(filepath.Clean(a))
-	b, errB := filepath.Abs(filepath.Clean(b))
-	if errA != nil || errB != nil {
-		return false
+func sameShipPath(a, b string) (bool, error) {
+	a, err := pathWithResolvedParent(a)
+	if err != nil {
+		return false, fmt.Errorf("resolve %q: %w", a, err)
 	}
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
+	b, err = pathWithResolvedParent(b)
+	if err != nil {
+		return false, fmt.Errorf("resolve %q: %w", b, err)
 	}
-	return a == b
+	if a == b {
+		return true, nil
+	}
+
+	aParent, aInfo, err := existingShipPath(a)
+	if err != nil {
+		return false, fmt.Errorf("inspect %q: %w", a, err)
+	}
+	bParent, bInfo, err := existingShipPath(b)
+	if err != nil {
+		return false, fmt.Errorf("inspect %q: %w", b, err)
+	}
+	if !os.SameFile(aInfo, bInfo) {
+		return false, nil
+	}
+	aRelative, err := filepath.Rel(aParent, a)
+	if err != nil {
+		return false, err
+	}
+	bRelative, err := filepath.Rel(bParent, b)
+	if err != nil {
+		return false, err
+	}
+	if aRelative == "." && bRelative == "." {
+		return true, nil
+	}
+	if aRelative == "." || bRelative == "." {
+		return false, nil
+	}
+	if !filepath.IsLocal(aRelative) || !filepath.IsLocal(bRelative) {
+		return false, errors.New("resolved path escapes its existing parent")
+	}
+	return probeSameShipPath(aParent, aRelative, bRelative)
+}
+
+func existingShipPath(path string) (string, os.FileInfo, error) {
+	for {
+		info, err := os.Stat(path)
+		if err == nil {
+			return path, info, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", nil, err
+		}
+		path = parent
+	}
+}
+
+func probeSameShipPath(parent, aRelative, bRelative string) (same bool, err error) {
+	root, err := os.MkdirTemp(parent, ".numbat-path-identity-")
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = errors.Join(err, os.RemoveAll(root)) }()
+
+	aPath := filepath.Join(root, aRelative)
+	if err := os.MkdirAll(filepath.Dir(aPath), 0o700); err != nil {
+		return false, err
+	}
+	file, err := os.OpenFile(aPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false, err
+	}
+	aInfo, statErr := file.Stat()
+	if err := errors.Join(statErr, file.Close()); err != nil {
+		return false, err
+	}
+	bInfo, err := os.Stat(filepath.Join(root, bRelative))
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(aInfo, bInfo), nil
 }

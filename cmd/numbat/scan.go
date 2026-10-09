@@ -41,6 +41,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout))
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
+	spoolFile := fs.String("spool-file", "", "durable queue path (required when --output includes spool)")
 	httpURL := fs.String("http-url", "", "ingest URL (required when --output includes http)")
 	httpBatch := fs.Int("http-batch-size", 500, "records per HTTP POST")
 	httpTimeout := fs.Duration("http-timeout", 30*time.Second, "HTTP request timeout")
@@ -128,6 +129,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		modes:         outputValues,
 		defaultMode:   outputModeStdout,
 		file:          *outputFile,
+		spool:         *spoolFile,
 		httpURL:       *httpURL,
 		httpBatch:     *httpBatch,
 		httpTimeout:   *httpTimeout,

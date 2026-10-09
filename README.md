@@ -6,8 +6,8 @@ pre-action blocking, and forensic reconstruction.
 numbat observes supported desktop, CLI, IDE, and gateway agents through local
 hooks and plugins, OTLP/HTTP logs, and on-disk session artifacts. Live and
 at-rest activity is normalized into one event model and evaluated by the same
-CEL rule engine. Detection runs locally; records can be written to stdout or a
-local file and optionally delivered over HTTP.
+CEL rule engine. Detection runs locally. Records can be written to stdout, a
+local file, or a durable on-disk queue, and delivered over HTTP.
 
 The [coverage matrix](docs/agent-coverage.md#matrix) is authoritative for each
 host and surface. Blocking is off by default and limited to supported

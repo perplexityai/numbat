@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
+	"github.com/perplexityai/numbat/internal/spool"
 	"github.com/perplexityai/numbat/internal/version"
 )
 
@@ -16,11 +18,12 @@ import (
 const (
 	outputModeStdout = "stdout"
 	outputModeFile   = "file"
+	outputModeSpool  = "spool"
 	outputModeHTTP   = "http"
 )
 
 func outputFlagHelp(defaultMode string) string {
-	return fmt.Sprintf("where to write records: stdout, file, or http (repeatable; default %s; stdout cannot be combined)", defaultMode)
+	return fmt.Sprintf("where to write records: stdout, file, spool, or http (repeatable, default %s, stdout cannot be combined)", defaultMode)
 }
 
 // Environment variables carrying HTTP auth secrets. Secrets are never accepted
@@ -46,6 +49,7 @@ type sinkConfig struct {
 	modes         []string
 	defaultMode   string
 	file          string
+	spool         string
 	httpURL       string
 	httpBatch     int
 	httpMaxBuffer int
@@ -83,11 +87,10 @@ var httpOnlyFlags = map[string]bool{
 
 // buildSink validates the output flag combination and constructs the records
 // sink. stdout (the default) wraps the provided writer without taking ownership
-// of it. File and HTTP sinks require their respective flags; choosing both fans
-// the identical stream to the file and to HTTP. Cross-mode flags (for example
-// --output-file without file) are rejected so a mistaken invocation fails loudly
-// rather than silently ignoring an argument. HTTP auth secrets are read from the
-// environment here, never from a flag.
+// of it. File, spool, and HTTP sinks require their respective flags. File and
+// spool are mutually exclusive so one run has one durable local record stream.
+// Cross-mode flags are rejected so a mistaken invocation fails loudly.
+// HTTP auth secrets are read from the environment here, never from a flag.
 func buildSink(cfg sinkConfig, stdout io.Writer) (output.Sink, error) {
 	sel, err := parseOutputSinks(cfg.modes, cfg.defaultMode)
 	if err != nil {
@@ -104,6 +107,9 @@ func buildSink(cfg sinkConfig, stdout io.Writer) (output.Sink, error) {
 	if !sel.file && cfg.file != "" {
 		return nil, fmt.Errorf("--output-file is only valid when --output includes file")
 	}
+	if !sel.spool && cfg.spool != "" {
+		return nil, fmt.Errorf("--spool-file is only valid when --output includes spool")
+	}
 	if !sel.http && cfg.httpURL != "" {
 		return nil, fmt.Errorf("--http-url is only valid when --output includes http")
 	}
@@ -115,11 +121,17 @@ func buildSink(cfg sinkConfig, stdout io.Writer) (output.Sink, error) {
 		if cfg.httpURL != "" {
 			return nil, fmt.Errorf("--http-url is only valid when --output includes http")
 		}
+		if cfg.spool != "" {
+			return nil, fmt.Errorf("--spool-file is only valid when --output includes spool")
+		}
 		return stdoutSink{stdout}, nil
 	}
 
 	if sel.file && strings.TrimSpace(cfg.file) == "" {
 		return nil, fmt.Errorf("--output including file requires --output-file PATH")
+	}
+	if sel.spool && strings.TrimSpace(cfg.spool) == "" {
+		return nil, fmt.Errorf("--output including spool requires --spool-file PATH")
 	}
 	if sel.http {
 		if err := validateHTTPAuthFlags(cfg.httpAuth, cfg.httpFlagsSet); err != nil {
@@ -181,6 +193,9 @@ func buildSink(cfg sinkConfig, stdout io.Writer) (output.Sink, error) {
 			sinks = append(sinks, s)
 		}
 	}
+	if sel.spool {
+		sinks = append(sinks, spoolSink{store: spool.New(cfg.spool)})
+	}
 	if httpSink != nil {
 		sinks = append(sinks, httpSink)
 	}
@@ -202,6 +217,7 @@ func validateHTTPAuthFlags(auth string, flags []string) error {
 type outputSinks struct {
 	stdout bool
 	file   bool
+	spool  bool
 	http   bool
 }
 
@@ -212,6 +228,9 @@ func (s outputSinks) canonicalModes() []string {
 	var modes []string
 	if s.file {
 		modes = append(modes, outputModeFile)
+	}
+	if s.spool {
+		modes = append(modes, outputModeSpool)
 	}
 	if s.http {
 		modes = append(modes, outputModeHTTP)
@@ -241,6 +260,8 @@ func parseOutputSinks(values []string, defaultMode string) (outputSinks, error) 
 			sinks.stdout = true
 		case outputModeFile:
 			sinks.file = true
+		case outputModeSpool:
+			sinks.spool = true
 		case outputModeHTTP:
 			sinks.http = true
 		default:
@@ -255,13 +276,16 @@ func parseOutputSinks(values []string, defaultMode string) (outputSinks, error) 
 		return outputSinks{}, invalidOutputError("")
 	}
 	if sinks.stdout && len(seen) > 1 {
-		return outputSinks{}, fmt.Errorf("invalid --output %q: stdout cannot be combined with file or http", strings.Join(values, " "))
+		return outputSinks{}, fmt.Errorf("invalid --output %q: stdout cannot be combined with file, spool, or http", strings.Join(values, " "))
+	}
+	if sinks.file && sinks.spool {
+		return outputSinks{}, fmt.Errorf("invalid --output %q: file and spool cannot be combined", strings.Join(values, " "))
 	}
 	return sinks, nil
 }
 
 func invalidOutputError(raw string) error {
-	return fmt.Errorf("invalid --output %q: want stdout, file, or http", raw)
+	return fmt.Errorf("invalid --output %q: want stdout, file, spool, or http", raw)
 }
 
 // httpAuthFromEnv maps the --http-auth mode onto an output.HTTPAuth, reading the
@@ -293,3 +317,23 @@ func httpAuthFromEnv(mode string) (output.HTTPAuth, error) {
 type stdoutSink struct{ io.Writer }
 
 func (stdoutSink) Close() error { return nil }
+
+// spoolSink accepts exactly one complete, supported NDJSON record per Write.
+// Put returns only after bbolt commits the whole value, so no repair path is
+// needed after an interrupted hook process.
+type spoolSink struct{ store spool.Store }
+
+func (sink spoolSink) Write(p []byte) (int, error) {
+	if len(p) == 0 || len(p) > maxShipRecordBytes || p[len(p)-1] != '\n' || bytes.Count(p, []byte("\n")) != 1 {
+		return 0, fmt.Errorf("spool sink: record must be one complete NDJSON line of at most %d bytes", maxShipRecordBytes)
+	}
+	if !isShippableRecord(p[:len(p)-1]) {
+		return 0, fmt.Errorf("spool sink: record must be a JSON object")
+	}
+	if err := sink.store.Put(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (spoolSink) Close() error { return nil }

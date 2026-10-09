@@ -1,7 +1,9 @@
 package output
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -69,19 +71,63 @@ func openFileSink(path string, appendMode bool) (Sink, error) {
 		f.Close()
 		return nil, fmt.Errorf("file sink: tighten perms on %q: %w", path, err)
 	}
-	return &fileSink{file: f}, nil
+	return &fileSink{file: f, appendMode: appendMode}, nil
 }
 
 // fileSink serializes each write at the file descriptor so separate hook
 // processes appending to the same records file cannot interleave NDJSON lines.
 type fileSink struct {
-	file *os.File
+	file       *os.File
+	appendMode bool
 }
 
 func (s *fileSink) Write(p []byte) (int, error) {
-	return writeFileLocked(s.file, p)
+	return writeFileLocked(s.file, p, s.appendMode)
 }
 
 func (s *fileSink) Close() error {
 	return s.file.Close()
+}
+
+// appendRecordLocked writes one complete record to f while the caller holds the
+// file lock. It keeps the file from ever ending mid-record so the next record
+// cannot concatenate onto a partial line: a missing trailing newline left by an
+// earlier short append is repaired first (append sinks only, which open for
+// reading), and a short or failed write is rolled back to the pre-write size.
+func appendRecordLocked(f *os.File, p []byte, repairNewline bool) (int, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return f.Write(p)
+	}
+	size := info.Size()
+	if _, err := f.Seek(size, io.SeekStart); err != nil {
+		return 0, err
+	}
+	if repairNewline && size > 0 {
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, size-1); err != nil {
+			return 0, err
+		}
+		if last[0] != '\n' {
+			if _, err := f.Write([]byte{'\n'}); err != nil {
+				_ = f.Truncate(size)
+				return 0, err
+			}
+			size++
+		}
+	}
+	n, err := f.Write(p)
+	if err == nil && n == len(p) {
+		return n, nil
+	}
+	if truncErr := f.Truncate(size); truncErr != nil {
+		err = errors.Join(err, truncErr)
+	}
+	if err == nil {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }

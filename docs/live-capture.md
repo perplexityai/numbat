@@ -116,20 +116,28 @@ bounded previews by default; add
 exposes it. Add `--include-reasoning` for source-exposed Pi, OpenCode, and
 Kilo reasoning; hidden model chain-of-thought is not reconstructed. Repeat
 `--output file --output http --http-url URL` to keep the file and also attempt
-direct HTTP delivery. Direct HTTP alone is not durable: it has bounded in-memory
-buffering, but no disk spool. numbat does not rotate output files itself; for
-long-running all-event streams, let your log forwarder or OS retention policy
-manage the file. Hook HTTP requests use a five-second timeout by default; change
-it with `--http-timeout`. Agents normally wait for the callback process to exit,
-so direct HTTP adds request latency on the hook path. HTTP auth secrets are never
-written into hook settings;
-when `--http-auth` is `bearer` or `hmac-sha256`, the installed hook reads
+direct HTTP delivery. Direct HTTP alone is not durable. Select `--output spool`
+for a transactional disk queue, then run `numbat ship --spool-file PATH`.
+Spool output defaults to `$HOME/.numbat/findings.spool` or
+`$HOME/.numbat/records.spool`. Change it with `--spool-file PATH`.
+
+numbat does not rotate output files or manage host storage. Use a fleet
+forwarder for file output. For regular files, a short append (for example, a full
+disk) is rolled back and a missing trailing newline is repaired before the next
+write, so records never concatenate onto a partial line. Linux FIFO outputs
+remain write-only pipes and report a disconnected reader as an output failure.
+Supervise `numbat ship` for
+spool output. Hook HTTP requests use a five-second timeout by default; change it
+with `--http-timeout`.
+Agents normally wait for the callback process to exit, so direct HTTP adds
+request latency on the hook path. HTTP auth secrets are never written into hook
+settings. When `--http-auth` is `bearer` or `hmac-sha256`, the installed hook reads
 `NUMBAT_HTTP_TOKEN` or `NUMBAT_HTTP_HMAC_KEY` from the agent's runtime
 environment. The live hook handler always reserves stdout for the agent's
 allow/deny response (zero bytes on successful Kiro hooks), so `--output=stdout`
 writes records to stderr in hook mode
 and is mainly for manual monitor-mode testing. Enforce mode requires findings
-and an out-of-band `file` and/or `http` sink; it rejects stdout output so
+and an out-of-band `file`, `spool`, or `http` sink. It rejects stdout output, so
 finding details cannot enter the immediate agent control response. The deployer
 is responsible for restricting the agent's filesystem or network access to that
 sink when stronger isolation is required.
@@ -141,14 +149,15 @@ Gemini's millisecond-based hooks use five seconds; Junie's `UserPromptSubmit`
 uses 10 seconds and `SessionEnd` uses two seconds.
 This bounds a stuck callback instead of inheriting Claude Code or Codex's
 ten-minute default. It is a process deadline imposed by the agent, distinct from
-`--http-timeout`, which bounds one HTTP request inside numbat. Prefer file output
-plus a forwarder when delivery may take longer than the hook's deadline.
+`--http-timeout`, which bounds one HTTP request inside numbat. Use file output
+with an external forwarder, or use spool output with `numbat ship`.
 
 Examples:
 
 ```
 numbat hook install --agent codex --emit all --output-file ~/.numbat/codex.ndjson
 numbat hook install --agent claude --output file --output http --http-url https://ingest.example/numbat
+numbat hook install --agent codex --emit all --output spool --spool-file ~/.numbat/codex.spool
 ```
 
 PowerShell uses the same flags:
@@ -221,14 +230,19 @@ metrics, so trace-only exporters such as VS Code Copilot Chat and OpenHands
 observability should use hooks or a full OpenTelemetry collector. The `/v1/logs`
 endpoint and per-agent setup are documented in [cli.md](cli.md#collect).
 
-## Delivering files off-host
+## Delivering records off-host
 
 With file-only output, hooks do not wait on the network. The file is the durable
 record stream; ship it with the fleet's existing log forwarder, EDR, or OS
-retention tooling. Where the host has no such shipper, `numbat ship` is an
-optional native forwarder that tails that file and
-delivers eligible retained records at-least-once to an HTTP endpoint while their
-input segments remain available. Records larger than 8 MiB or individually
-rejected with HTTP `413` are logged and skipped. See [cli.md](cli.md#ship) for
-the complete limits. Use file-only hook output with
-`ship` so the same record is not also sent through direct HTTP.
+retention tooling.
+
+If the host has no external forwarder, select spool-only output. Run
+`numbat ship --spool-file PATH` as a supervised process. Failed HTTP delivery
+keeps the queued records. Successful delivery removes only the delivered
+prefix. See [cli.md](cli.md#ship) for the complete contract.
+
+`numbat ship` also accepts a legacy file through `--input-file`. Legacy records
+larger than 8 MiB or individually rejected with HTTP `413` are logged and skipped.
+Spool records rejected with `413` remain queued and pause delivery.
+Use one local durable output with `ship`. Direct HTTP on the same hook sends a
+second copy.
