@@ -8,10 +8,8 @@
 //
 //   - High precision. Agent, sensor source, session id, and project path all
 //     partition the window; artifact events additionally partition on their
-//     exact source path. A step predicate that errors evaluates as false,
-//     and a wall-clock window whose endpoint timestamps are missing or
-//     disordered never matches: every ambiguity resolves to a documented false
-//     negative, never a fabricated chain.
+//     exact source path. A step predicate that errors evaluates as false, and
+//     missing or disordered endpoint timestamps prevent a wall-clock match.
 //   - Determinism. Matching is a pure function of the observed event order
 //     and the events' own timestamps. The tracker never reads the wall clock,
 //     so identical input yields identical matches on every run.
@@ -195,11 +193,9 @@ func NewTracker(rules []*rule.SequenceRule, cfg Config) *Tracker {
 }
 
 // Observe feeds one event through every sequence rule and returns its detection
-// and enforcement matches in rule load order. Step-evaluation errors are joined
-// into the returned error alongside any matches (mirroring Engine.Eval); an
-// erroring step counts as false, so an error can suppress a chain but never
-// invent one. Observe is nil-safe — a nil Tracker observes nothing — so a
-// caller whose rule set has no sequences skips the nil check.
+// and enforcement matches in rule load order. Candidate evaluation can narrow
+// enforcement eligibility but cannot create a detection step. A nil Tracker
+// observes nothing, so callers with no sequence rules can skip the nil check.
 func (t *Tracker) Observe(ev model.Event) (Observation, error) {
 	if t == nil {
 		return Observation{}, nil
@@ -327,28 +323,20 @@ func project(rules []*rule.SequenceRule, ev model.Event, seq uint64) (entry, []e
 	}
 	e.ts, e.tsOK = parseTimestamp(ev.Timestamp)
 	var errs []error
-	activations := rule.PrepareSequenceActivations(ev, rules)
-	if activations.Err != nil {
-		errs = append(errs, activations.Err)
+	activations, activationErr := rule.PrepareSequenceActivations(ev, rules)
+	if activationErr != nil {
+		errs = append(errs, activationErr)
 	}
 	for ri, r := range rules {
 		for si := 0; si < r.StepCount(); si++ {
-			if activations.Err != nil && r.StepUsesShellCommands(si) && !activations.ShellUsable {
-				continue
-			}
-			ok, evalErr := r.EvalStep(si, activations.Detection)
+			evaluation, evalErr := r.EvalStep(si, activations)
 			if evalErr != nil {
 				errs = append(errs, evalErr)
-				continue
 			}
-			if !ok {
-				continue
+			if evaluation.Match {
+				e.masks[ri] |= 1 << si
 			}
-			e.masks[ri] |= 1 << si
-			if !r.Rule().IsEnforceEligible() {
-				continue
-			}
-			if r.StepUsesShellCommands(si) && !activations.ShellEnforcementSafe {
+			if !evaluation.EnforcementMatch {
 				continue
 			}
 			e.enforcementMasks[ri] |= 1 << si

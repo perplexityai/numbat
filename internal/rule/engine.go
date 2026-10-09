@@ -28,10 +28,11 @@ import (
 // compiled SequenceRules into a window tracker (internal/sequence) that owns
 // the partitioned state.
 type Engine struct {
-	env               *cel.Env
-	rules             []compiledRule
-	usesShellCommands bool
-	usesContent       bool
+	env                 *cel.Env
+	rules               []compiledRule
+	usesShellCommands   bool
+	usesShellCandidates bool
+	usesContent         bool
 }
 
 // compiledRule is one compiled rule of either shape: program is set for a
@@ -45,6 +46,7 @@ type compiledRule struct {
 
 type compiledExpression struct {
 	program           cel.Program
+	candidateProgram  cel.Program
 	usesShellCommands bool
 	usesContent       bool
 }
@@ -55,14 +57,15 @@ const contentRuleCostLimit uint64 = 10_000_000
 // distills the validated spec (window, cap) next to the compiled step
 // programs so a tracker never re-parses YAML fields on the hot path.
 type SequenceRule struct {
-	rule              Rule
-	steps             []compiledExpression
-	within            time.Duration // 0 = no wall-clock window
-	withinEvents      int           // 0 = no event-count window
-	maxMatches        int           // resolved, >= 1
-	usesShellCommands bool
-	usesContent       bool
-	adapter           types.Adapter
+	rule                Rule
+	steps               []compiledExpression
+	within              time.Duration // 0 = no wall-clock window
+	withinEvents        int           // 0 = no event-count window
+	maxMatches          int           // resolved, >= 1
+	usesShellCommands   bool
+	usesShellCandidates bool
+	usesContent         bool
+	adapter             types.Adapter
 }
 
 // Rule returns the source rule (id, severity, tags, ...).
@@ -80,28 +83,35 @@ func (s *SequenceRule) WithinEvents() int { return s.withinEvents }
 // MaxMatches returns the per-(rule, session) finding cap, always >= 1.
 func (s *SequenceRule) MaxMatches() int { return s.maxMatches }
 
-// EvalStep evaluates one step predicate against a prebuilt activation. An eval
-// error reports false: an erroring predicate must never fabricate a link in a
-// chain, so the failure surfaces as a diagnostic and, at worst, a documented
-// false negative.
-func (s *SequenceRule) EvalStep(i int, activation map[string]any) (bool, error) {
-	if i < 0 || i >= len(s.steps) {
-		return false, fmt.Errorf("rule %q: step index %d out of range", s.rule.ID, i)
-	}
-	out, _, err := s.steps[i].program.Eval(activation)
-	if err != nil {
-		return false, fmt.Errorf("rule %q step %d: evaluation failed", s.rule.ID, i+1)
-	}
-	return asBool(out), nil
+// StepEvaluation keeps a detection match separate from permission to enforce it.
+type StepEvaluation struct {
+	Match            bool
+	EnforcementMatch bool
 }
 
-// StepUsesShellCommands reports whether step i depends on the derived command
-// projection.
-func (s *SequenceRule) StepUsesShellCommands(i int) bool {
+// EvalStep evaluates detection against the complete event projection. Candidate
+// evaluation can only narrow enforcement eligibility for a clean match.
+func (s *SequenceRule) EvalStep(i int, activations SequenceActivations) (StepEvaluation, error) {
 	if i < 0 || i >= len(s.steps) {
-		return false
+		return StepEvaluation{}, fmt.Errorf("rule %q: step index %d out of range", s.rule.ID, i)
 	}
-	return s.steps[i].usesShellCommands
+	step := s.steps[i]
+	prepared := activations.prepared
+	if prepared.err != nil && step.usesShellCommands && !prepared.shellUsable {
+		return StepEvaluation{}, nil
+	}
+	evaluation := evaluateExpression(step, prepared, s.rule.IsEnforceEligible())
+	var errs []error
+	if evaluation.detectionErr != nil {
+		errs = append(errs, fmt.Errorf("rule %q step %d: evaluation failed", s.rule.ID, i+1))
+	}
+	if evaluation.candidateErr != nil {
+		errs = append(errs, fmt.Errorf("rule %q step %d: candidate evaluation failed", s.rule.ID, i+1))
+	}
+	return StepEvaluation{
+		Match:            evaluation.detectionMatch,
+		EnforcementMatch: evaluation.enforcementMatch,
+	}, errors.Join(errs...)
 }
 
 // newEnv builds the CEL environment shared by every rule. `event` uses emitted
@@ -119,6 +129,7 @@ func newEnv() (*cel.Env, error) {
 		ext.Lists(),
 		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable(shellCommandsVariable, cel.ListType(cel.ObjectType("rule.ShellCommand"))),
+		cel.Variable(shellCommandCandidatesVariable, cel.ListType(cel.ListType(cel.ObjectType("rule.ShellCommand")))),
 	)
 }
 
@@ -143,12 +154,13 @@ func newEngine(sources []Source, checked CheckedExpressions) (*Engine, error) {
 	}
 
 	var (
-		compiled          []compiledRule
-		seen              = map[string]string{}
-		expressions       = map[string]compiledExpression{}
-		errs              []error
-		usesShellCommands bool
-		usesContent       bool
+		compiled            []compiledRule
+		seen                = map[string]string{}
+		expressions         = map[string]compiledExpression{}
+		errs                []error
+		usesShellCommands   bool
+		usesShellCandidates bool
+		usesContent         bool
 	)
 	for _, source := range sources {
 		for i := range source.Rules {
@@ -178,6 +190,9 @@ func newEngine(sources []Source, checked CheckedExpressions) (*Engine, error) {
 			if c.program.usesShellCommands {
 				usesShellCommands = true
 			}
+			if c.seq == nil && c.rule.IsEnforceEligible() && c.program.usesShellCommands {
+				usesShellCandidates = true
+			}
 			if c.program.usesContent || c.seq != nil && c.seq.usesContent {
 				usesContent = true
 			}
@@ -186,7 +201,13 @@ func newEngine(sources []Source, checked CheckedExpressions) (*Engine, error) {
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
-	return &Engine{env: env, rules: compiled, usesShellCommands: usesShellCommands, usesContent: usesContent}, nil
+	return &Engine{
+		env:                 env,
+		rules:               compiled,
+		usesShellCommands:   usesShellCommands,
+		usesShellCandidates: usesShellCandidates,
+		usesContent:         usesContent,
+	}, nil
 }
 
 // sourceLabel renders a stable, unambiguous source label for diagnostics. The
@@ -291,8 +312,9 @@ func isRuleIDAlnum(c byte) bool {
 // type, known event fields). A sequence rule also distills its validated
 // window into the SequenceRule a tracker consumes.
 func compileRule(env *cel.Env, expressions map[string]compiledExpression, checked CheckedExpressions, r Rule) (compiledRule, error) {
+	needCandidate := r.IsEnforceEligible()
 	if r.Sequence == nil {
-		prg, err := compileCachedExpr(env, expressions, checked, r.Expr)
+		prg, err := compileCachedExpr(env, expressions, checked, r.Expr, needCandidate)
 		if err != nil {
 			return compiledRule{}, err
 		}
@@ -302,7 +324,7 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, checke
 	usesShellCommands := false
 	usesContent := false
 	for i, st := range r.Sequence.Steps {
-		prg, err := compileCachedExpr(env, expressions, checked, st.Expr)
+		prg, err := compileCachedExpr(env, expressions, checked, st.Expr, needCandidate)
 		if err != nil {
 			return compiledRule{}, fmt.Errorf("step %d: %w", i+1, err)
 		}
@@ -316,22 +338,25 @@ func compileRule(env *cel.Env, expressions map[string]compiledExpression, checke
 		return compiledRule{}, err
 	}
 	return compiledRule{rule: r, seq: &SequenceRule{
-		rule:              r,
-		steps:             steps,
-		within:            within,
-		withinEvents:      r.Sequence.WithinEvents,
-		maxMatches:        r.Sequence.resolvedMaxMatches(),
-		usesShellCommands: usesShellCommands,
-		usesContent:       usesContent,
-		adapter:           env.CELTypeAdapter(),
+		rule:                r,
+		steps:               steps,
+		within:              within,
+		withinEvents:        r.Sequence.WithinEvents,
+		maxMatches:          r.Sequence.resolvedMaxMatches(),
+		usesShellCommands:   usesShellCommands,
+		usesShellCandidates: needCandidate && usesShellCommands,
+		usesContent:         usesContent,
+		adapter:             env.CELTypeAdapter(),
 	}}, nil
 }
 
-func compileCachedExpr(env *cel.Env, expressions map[string]compiledExpression, checked CheckedExpressions, expr string) (compiledExpression, error) {
+func compileCachedExpr(env *cel.Env, expressions map[string]compiledExpression, checked CheckedExpressions, expr string, needCandidate bool) (compiledExpression, error) {
 	if compiled, ok := expressions[expr]; ok {
-		return compiled, nil
+		if !needCandidate || !compiled.usesShellCommands || compiled.candidateProgram != nil {
+			return compiled, nil
+		}
 	}
-	compiled, err := compileExpr(env, checked, expr)
+	compiled, err := compileExpr(env, checked, expr, needCandidate)
 	if err == nil {
 		expressions[expr] = compiled
 	}
@@ -340,10 +365,10 @@ func compileCachedExpr(env *cel.Env, expressions map[string]compiledExpression, 
 
 // compileExpr loads a matching checked expression when available, otherwise it
 // parses and type-checks the source. Runtime program construction is shared.
-func compileExpr(env *cel.Env, checked CheckedExpressions, expr string) (compiledExpression, error) {
+func compileExpr(env *cel.Env, checked CheckedExpressions, expr string, needCandidate bool) (compiledExpression, error) {
 	if ast, ok := checkedExpressionAST(expr, checked); ok {
 		if err := validateRuleAST(ast); err == nil {
-			if compiled, err := programExpr(env, ast); err == nil {
+			if compiled, err := programExpr(env, ast, needCandidate); err == nil {
 				return compiled, nil
 			}
 		}
@@ -352,7 +377,7 @@ func compileExpr(env *cel.Env, checked CheckedExpressions, expr string) (compile
 	if err != nil {
 		return compiledExpression{}, err
 	}
-	return programExpr(env, ast)
+	return programExpr(env, ast, needCandidate)
 }
 
 func checkExpr(env *cel.Env, expr string) (*cel.Ast, error) {
@@ -370,13 +395,17 @@ func validateRuleAST(ast *cel.Ast) error {
 	if !ast.OutputType().IsExactType(cel.BoolType) {
 		return fmt.Errorf("expr must be boolean, got %s", ast.OutputType())
 	}
+	if astReferencesGlobal(ast, shellCommandCandidatesVariable) {
+		return fmt.Errorf("expr uses reserved identifier %q", shellCommandCandidatesVariable)
+	}
 	if err := checkEventFields(ast); err != nil {
 		return err
 	}
 	return nil
 }
 
-func programExpr(env *cel.Env, ast *cel.Ast) (compiledExpression, error) {
+func programExpr(env *cel.Env, ast *cel.Ast, needCandidate bool) (compiledExpression, error) {
+	usesShellCommands := astReferencesGlobal(ast, shellCommandsVariable)
 	usesContent := astReferencesEventField(ast, "content") ||
 		astReferencesEventField(ast, "content_bytes") ||
 		astReferencesEventField(ast, "content_truncated")
@@ -388,11 +417,61 @@ func programExpr(env *cel.Env, ast *cel.Ast) (compiledExpression, error) {
 	if err != nil {
 		return compiledExpression{}, fmt.Errorf("program expr: %w", err)
 	}
+	var candidateProgram cel.Program
+	if needCandidate && usesShellCommands {
+		candidateAST, err := shellCandidateAST(env, ast)
+		if err != nil {
+			return compiledExpression{}, err
+		}
+		candidateProgram, err = env.Program(candidateAST, programOptions...)
+		if err != nil {
+			return compiledExpression{}, fmt.Errorf("program candidate enforcement expr: %w", err)
+		}
+	}
 	return compiledExpression{
 		program:           prg,
-		usesShellCommands: astReferencesGlobal(ast, shellCommandsVariable),
+		candidateProgram:  candidateProgram,
+		usesShellCommands: usesShellCommands,
 		usesContent:       usesContent,
 	}, nil
+}
+
+const shellCandidateTemplate = shellCommandCandidatesVariable + ".exists(" + shellCommandsVariable + ", true)"
+
+func shellCandidateAST(env *cel.Env, predicate *cel.Ast) (*cel.Ast, error) {
+	template, issues := env.Compile(shellCandidateTemplate)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("compile candidate enforcement template: %w", issues.Err())
+	}
+	optimizer, err := cel.NewStaticOptimizer(shellCandidateOptimizer{predicate: predicate})
+	if err != nil {
+		return nil, fmt.Errorf("build candidate enforcement optimizer: %w", err)
+	}
+	optimized, issues := optimizer.Optimize(env, template)
+	if issues != nil && issues.Err() != nil {
+		return nil, fmt.Errorf("check candidate enforcement expr: %w", issues.Err())
+	}
+	return optimized, nil
+}
+
+type shellCandidateOptimizer struct {
+	predicate *cel.Ast
+}
+
+func (o shellCandidateOptimizer) Optimize(ctx *cel.OptimizerContext, wrapper *celast.AST) *celast.AST {
+	root := wrapper.Expr()
+	if root.Kind() != celast.ComprehensionKind {
+		ctx.ReportErrorAtID(root.ID(), "candidate enforcement template did not expand to a comprehension")
+		return wrapper
+	}
+	loopStep := root.AsComprehension().LoopStep()
+	if loopStep.Kind() != celast.CallKind || len(loopStep.AsCall().Args()) != 2 {
+		ctx.ReportErrorAtID(loopStep.ID(), "candidate enforcement template has an invalid loop step")
+		return wrapper
+	}
+	predicate := loopStep.AsCall().Args()[1]
+	ctx.UpdateExpr(predicate, ctx.CopyASTAndMetadata(o.predicate.NativeRep()))
+	return wrapper
 }
 
 func astReferencesEventField(ast *cel.Ast, field string) bool {
@@ -653,7 +732,7 @@ func (e *Engine) RuleIDs() []string {
 // the others; it is returned alongside any matches so callers can surface it
 // as a diagnostic without losing detections.
 func (e *Engine) Eval(ev model.Event) ([]Match, error) {
-	activations := prepareActivations(e.env.CELTypeAdapter(), ev, e.usesShellCommands)
+	activations := prepareActivations(e.env.CELTypeAdapter(), ev, e.usesShellCommands, e.usesShellCandidates)
 	var (
 		matches []Match
 		errs    = []error{activations.err}
@@ -665,24 +744,51 @@ func (e *Engine) Eval(ev model.Event) ([]Match, error) {
 		if activations.err != nil && c.program.usesShellCommands && !activations.shellUsable {
 			continue
 		}
-		out, _, err := c.program.program.Eval(activations.detection)
-		if err != nil {
+		evaluation := evaluateExpression(c.program, activations, c.rule.IsEnforceEligible())
+		if evaluation.detectionErr != nil {
 			errs = append(errs, fmt.Errorf("rule %q: evaluation failed", c.rule.ID))
-			continue
 		}
-		if asBool(out) {
-			enforcementMatch := c.rule.IsEnforceEligible()
-			if enforcementMatch && c.program.usesShellCommands && !activations.shellEnforcementSafe {
-				enforcementMatch = false
-			}
+		if evaluation.candidateErr != nil {
+			errs = append(errs, fmt.Errorf("rule %q: candidate evaluation failed", c.rule.ID))
+		}
+		if evaluation.detectionMatch {
 			matches = append(matches, Match{
 				Rule:             cloneRule(c.rule),
 				Event:            ev,
-				EnforcementMatch: enforcementMatch,
+				EnforcementMatch: evaluation.enforcementMatch,
 			})
 		}
 	}
 	return matches, errors.Join(errs...)
+}
+
+type expressionEvaluation struct {
+	detectionMatch   bool
+	enforcementMatch bool
+	detectionErr     error
+	candidateErr     error
+}
+
+func evaluateExpression(expr compiledExpression, activations sequenceActivations, enforceEligible bool) expressionEvaluation {
+	out, _, detectionErr := expr.program.Eval(activations.detection)
+	detectionMatch := detectionErr == nil && asBool(out)
+	evaluation := expressionEvaluation{
+		detectionMatch:   detectionMatch,
+		enforcementMatch: detectionMatch && enforceEligible,
+		detectionErr:     detectionErr,
+	}
+	if !detectionMatch || !enforceEligible || !expr.usesShellCommands || activations.shellEnforcementSafe {
+		return evaluation
+	}
+	if expr.candidateProgram == nil {
+		evaluation.enforcementMatch = false
+		evaluation.candidateErr = errors.New("candidate enforcement program unavailable")
+		return evaluation
+	}
+	candidate, _, candidateErr := expr.candidateProgram.Eval(activations.detection)
+	evaluation.enforcementMatch = candidateErr == nil && asBool(candidate)
+	evaluation.candidateErr = candidateErr
+	return evaluation
 }
 
 // asBool reports whether a CEL result is a true boolean. Any non-bool result

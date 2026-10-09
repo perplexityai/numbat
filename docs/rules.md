@@ -397,16 +397,12 @@ visible `$WhatIfPreference = $true` for known cmdlet names and exact
 module-qualified forms. Ambient preference and command-resolution state are not
 inferred.
 
-For a shell-derived match, blocking has a narrower eligibility boundary than
-detection: the complete shell program must be one static simple command or one
-static POSIX pipeline. Supported transparent launchers are allowed only when
-their final child command is also in that subset. Multiple statements, control
-flow, same-script functions, inline child interpreters, `eval` or
-`Invoke-Expression`, substitutions, runtime-dependent values, PowerShell or CMD
-pipelines, previews, parser diagnostics, and truncated projections remain
-detection-only. A rule may still use `shell_commands` alongside structured
+For shell-derived blocking, `numbat` first evaluates the rule against the
+complete command list. An already-matching rule must then match an eligible
+parser-derived candidate. This safety check cannot create a detection. Both
+sides of `&&` and `||` are checked. A rule can still use `shell_commands` with
 fields such as `event.file_path`; a matching commandless structured event does
-not require a shell projection. See [Enforcement](enforcement.md).
+not need a shell projection. See [Enforcement](enforcement.md).
 
 ## Enforcement rules
 
@@ -418,9 +414,8 @@ Enforcement uses the same CEL expressions as detection; there is no separate
 rule language or required predicate shape. Raw `event.command` remains
 available, but it matches literal input and can therefore match text that the
 shell would not execute. Use `shell_commands` when blocking depends on parsed
-command semantics. A shell-derived match can detect broad shell syntax, but a
-deny requires the complete shell program to be inside the static subset
-described above.
+command semantics. A shell-derived deny requires one eligible parser-derived
+candidate as described above.
 
 All built-ins ship monitor-only. To enforce one, copy its complete YAML into an
 operator directory, keep the same ID, set `enforce: true`, and bump the rule

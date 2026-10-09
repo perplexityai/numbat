@@ -85,11 +85,6 @@ func TestBuiltinCheckedEngineMetadataParity(t *testing.T) {
 			checkedSequence.MaxMatches() != sourceSequence.MaxMatches() {
 			t.Fatalf("checked sequence %d metadata differs from source", i)
 		}
-		for step := range checkedSequence.StepCount() {
-			if checkedSequence.StepUsesShellCommands(step) != sourceSequence.StepUsesShellCommands(step) {
-				t.Fatalf("checked sequence %d step %d shell projection differs from source", i, step)
-			}
-		}
 	}
 }
 

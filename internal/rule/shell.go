@@ -3,6 +3,7 @@ package rule
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/google/cel-go/common/types"
@@ -13,11 +14,12 @@ import (
 )
 
 const (
-	shellCommandsVariable    = "shell_commands"
-	maxShellCommandBytes     = 256 << 10
-	maxShellCommands         = 64
-	maxShellListItems        = 512
-	maxCommandExpansionDepth = 4
+	shellCommandsVariable          = "shell_commands"
+	shellCommandCandidatesVariable = "__numbat_shell_command_candidates"
+	maxShellCommandBytes           = 256 << 10
+	maxShellCommands               = 64
+	maxShellListItems              = 512
+	maxCommandExpansionDepth       = 4
 )
 
 type commandDialect uint8
@@ -39,7 +41,7 @@ type sequenceActivations struct {
 // prepareActivations adds the rule-only shell command projection when a
 // compiled expression references it. Detection sees every statically proven
 // command. The projection is never emitted.
-func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands bool) sequenceActivations {
+func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands, needShellCandidates bool) sequenceActivations {
 	detection := ev.CELActivation()
 	detection["event"] = adapter.NativeToValue(detection["event"])
 	if !needShellCommands {
@@ -49,8 +51,11 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 			shellEnforcementSafe: true,
 		}
 	}
-	analysis := analyzeEventShellCommandsDetailed(ev)
+	analysis := analyzeEventShellCommandsDetailed(ev, needShellCandidates)
 	detection[shellCommandsVariable] = shellCommandList(adapter, analysis.commands)
+	if needShellCandidates {
+		detection[shellCommandCandidatesVariable] = shellCommandCandidateList(adapter, analysis.enforcementCandidates)
+	}
 	return sequenceActivations{
 		detection:            detection,
 		shellUsable:          analysis.usable,
@@ -91,40 +96,34 @@ func shellCommandList(adapter types.Adapter, commands []ShellCommand) ref.Val {
 	return types.NewRefValList(adapter, values)
 }
 
-// SequenceActivations contains the CEL activation and command-analysis status
-// shared by every sequence step for one event.
+func shellCommandCandidateList(adapter types.Adapter, candidates [][]ShellCommand) ref.Val {
+	values := make([]ref.Val, len(candidates))
+	for i, commands := range candidates {
+		values[i] = shellCommandList(adapter, commands)
+	}
+	return types.NewRefValList(adapter, values)
+}
+
+// SequenceActivations shares one event's analysis across steps without exposing its safety flags.
 type SequenceActivations struct {
-	Detection            map[string]any
-	ShellUsable          bool
-	ShellEnforcementSafe bool
-	Err                  error
+	prepared sequenceActivations
 }
 
 // PrepareSequenceActivations builds the command view shared by every sequence
 // step for an event.
-func PrepareSequenceActivations(ev model.Event, rules []*SequenceRule) SequenceActivations {
+func PrepareSequenceActivations(ev model.Event, rules []*SequenceRule) (SequenceActivations, error) {
 	var adapter types.Adapter = types.DefaultTypeAdapter
 	if len(rules) > 0 {
 		adapter = rules[0].adapter
 	}
+	needShellCommands := false
+	needShellCandidates := false
 	for _, r := range rules {
-		if r.usesShellCommands {
-			prepared := prepareActivations(adapter, ev, true)
-			return SequenceActivations{
-				Detection:            prepared.detection,
-				ShellUsable:          prepared.shellUsable,
-				ShellEnforcementSafe: prepared.shellEnforcementSafe,
-				Err:                  prepared.err,
-			}
-		}
+		needShellCommands = needShellCommands || r.usesShellCommands
+		needShellCandidates = needShellCandidates || r.usesShellCandidates
 	}
-	prepared := prepareActivations(adapter, ev, false)
-	return SequenceActivations{
-		Detection:            prepared.detection,
-		ShellUsable:          prepared.shellUsable,
-		ShellEnforcementSafe: prepared.shellEnforcementSafe,
-		Err:                  prepared.err,
-	}
+	prepared := prepareActivations(adapter, ev, needShellCommands, needShellCandidates)
+	return SequenceActivations{prepared: prepared}, prepared.err
 }
 
 type fatalShellAnalysisError struct {
@@ -149,14 +148,18 @@ type shellAnalyzer struct {
 	enforcementUnsafe         bool
 	statementCounter          int64
 	pipelineCounter           int64
+	unsafePipelines           map[int64]bool
+	unsafeStatements          map[int64]bool
+	statementParents          map[int64]int64
 	halt                      bool
 }
 
 type shellAnalysis struct {
-	commands        []ShellCommand
-	usable          bool
-	enforcementSafe bool
-	err             error
+	commands              []ShellCommand
+	enforcementCandidates [][]ShellCommand
+	usable                bool
+	enforcementSafe       bool
+	err                   error
 }
 
 func analyzeShellCommands(source string) ([]ShellCommand, bool, error) {
@@ -164,24 +167,32 @@ func analyzeShellCommands(source string) ([]ShellCommand, bool, error) {
 }
 
 func analyzeEventShellCommands(ev model.Event) ([]ShellCommand, bool, error) {
-	analysis := analyzeEventShellCommandsDetailed(ev)
+	analysis := analyzeEventShellCommandsDetailed(ev, false)
 	return analysis.commands, analysis.usable, analysis.err
 }
 
-func analyzeEventShellCommandsDetailed(ev model.Event) shellAnalysis {
-	return analyzeShellCommandsDetailed(ev.Command, commandDialectHint(ev.ToolName))
+func analyzeEventShellCommandsDetailed(ev model.Event, needCandidates bool) shellAnalysis {
+	return analyzeShellCommandsDetailedWithCandidates(ev.Command, commandDialectHint(ev), needCandidates)
 }
 
 func analyzeShellCommandsAs(source string, dialect commandDialect) ([]ShellCommand, bool, error) {
-	analysis := analyzeShellCommandsDetailed(source, dialect)
+	analysis := analyzeShellCommandsDetailedWithCandidates(source, dialect, false)
 	return analysis.commands, analysis.usable, analysis.err
 }
 
 func analyzeShellCommandsDetailed(source string, dialect commandDialect) shellAnalysis {
+	return analyzeShellCommandsDetailedWithCandidates(source, dialect, true)
+}
+
+func analyzeShellCommandsDetailedWithCandidates(source string, dialect commandDialect, needCandidates bool) shellAnalysis {
 	if strings.TrimSpace(source) == "" {
 		return shellAnalysis{usable: true, enforcementSafe: true}
 	}
-	a := shellAnalyzer{}
+	a := shellAnalyzer{
+		unsafePipelines:  make(map[int64]bool),
+		unsafeStatements: make(map[int64]bool),
+		statementParents: make(map[int64]int64),
+	}
 	a.parseDialect(source, dialect, 0, nil)
 	err := errors.Join(a.issues...)
 	enforcementSafe := !a.enforcementUnsafe && len(a.commands) > 0
@@ -193,28 +204,40 @@ func analyzeShellCommandsDetailed(source string, dialect commandDialect) shellAn
 			}
 		}
 	}
+	var candidates [][]ShellCommand
+	if needCandidates && !a.halt {
+		candidates = posixEnforcementCandidates(a.commands, a.unsafePipelines, a.unsafeStatements, a.statementParents)
+	}
 	return shellAnalysis{
-		commands:        a.commands,
-		usable:          err == nil || len(a.commands) > 0,
-		enforcementSafe: enforcementSafe,
-		err:             err,
+		commands:              a.commands,
+		enforcementCandidates: candidates,
+		usable:                err == nil || len(a.commands) > 0,
+		enforcementSafe:       enforcementSafe,
+		err:                   err,
 	}
 }
 
-func commandDialectHint(toolName string) commandDialect {
-	switch commandProgram(strings.TrimSpace(toolName)) {
+func commandDialectHint(ev model.Event) commandDialect {
+	switch commandProgram(strings.TrimSpace(ev.ToolName)) {
 	case "bash", "sh", "zsh", "dash", "ksh", "mksh":
 		return dialectPOSIX
 	case "powershell", "pwsh":
 		return dialectPowerShell
 	case "cmd":
 		return dialectCMD
-	default:
-		return dialectAuto
+	case "exec_command":
+		if ev.SourceAgent == model.AgentCodex && runtime.GOOS != "windows" {
+			return dialectPOSIX
+		}
 	}
+	return dialectAuto
 }
 
 func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, depth int, wrappers []ShellWrapper) {
+	// Scripts recovered from interpreter input are detection-only in every dialect.
+	if depth > 0 {
+		defer a.markCommandsUnsafe(len(a.commands))
+	}
 	if a.halt {
 		return
 	}
@@ -260,11 +283,17 @@ func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, dept
 	if !posixEnforcementShapeSafe(file) {
 		a.enforcementUnsafe = true
 	}
-	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers)
+	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers, 0)
 }
 
-func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functions map[string]*syntax.Stmt, activeFunctions map[string]bool, wrappers []ShellWrapper) {
+func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functions map[string]*syntax.Stmt, activeFunctions map[string]bool, wrappers []ShellWrapper, parent int64) {
 	relations := a.buildPOSIXRelations(root)
+	for statement, id := range relations.statements {
+		if relations.parents[statement] == 0 {
+			relations.parents[statement] = parent
+		}
+		a.statementParents[id] = relations.parents[statement]
+	}
 	syntax.Walk(root, func(node syntax.Node) bool {
 		if a.halt {
 			return false
@@ -280,7 +309,17 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			return false
 		case *syntax.Stmt:
 			ctx := relations.context(node)
+			statementStart := len(a.commands)
+			for _, redirect := range node.Redirs {
+				if redirect.Hdoc != nil {
+					a.markPipelineUnsafe(ctx)
+				}
+			}
 			if declaration, ok := node.Cmd.(*syntax.DeclClause); ok {
+				if ctx.pipelineID != 0 {
+					a.markStatementsUnsafe(node, ctx.statementIDs)
+					a.markPipelineUnsafe(ctx)
+				}
 				command, add, err := projectPOSIXDeclaration(source, declaration, node.Redirs, wrappers, ctx)
 				if err != nil {
 					a.report(err)
@@ -293,21 +332,41 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			}
 			call, ok := node.Cmd.(*syntax.CallExpr)
 			if !ok {
-				if node.Cmd == nil && len(node.Redirs) > 0 {
-					command, add, err := projectPOSIXCommand(source, nil, nil, node.Redirs, wrappers, ctx)
+				if len(node.Redirs) > 0 {
+					redirectCommand, add, err := projectPOSIXCommand(source, nil, nil, node.Redirs, wrappers, ctx)
 					if err != nil {
 						a.report(err)
+						if node.Cmd != nil {
+							a.markStatementsUnsafe(node.Cmd, ctx.statementIDs)
+						}
+						a.markPipelineUnsafe(ctx)
 						return true
 					}
-					if add {
-						return a.add(command)
+					if !commandSafeForEnforcement(redirectCommand) {
+						if node.Cmd != nil {
+							a.markStatementsUnsafe(node.Cmd, ctx.statementIDs)
+						}
+						a.markPipelineUnsafe(ctx)
 					}
+					if node.Cmd == nil && add {
+						return a.add(redirectCommand)
+					}
+				}
+				if node.Cmd != nil {
+					if ctx.pipelineID != 0 {
+						a.markStatementsUnsafe(node, ctx.statementIDs)
+					}
+					a.markPipelineUnsafe(ctx)
 				}
 				return true
 			}
 			command, add, err := projectPOSIXCommand(source, call.Args, call.Assigns, node.Redirs, wrappers, ctx)
 			if err != nil {
 				a.report(err)
+				if ctx.pipelineID != 0 {
+					a.unsafeStatements[ctx.statementID] = true
+				}
+				a.markPipelineUnsafe(ctx)
 				return true
 			}
 			if name, ok := commandName(call.Args); ok && functions[name] != nil {
@@ -321,6 +380,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			args := call.Args
 			commandWrappers := cloneWrappers(wrappers)
 			allowShellBuiltins := !command.FunctionCall
+			wrapperSafe := true
 			for !command.FunctionCall {
 				wrapperName, _ := commandName(args)
 				inner, enforcementSafe := unwrapCommand(args)
@@ -328,16 +388,16 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					break
 				}
 				if !enforcementSafe {
-					a.enforcementUnsafe = true
+					wrapperSafe = false
 				}
 				wrapperProgram := commandProgram(wrapperName)
 				if !allowShellBuiltins && (wrapperProgram == "command" || wrapperProgram == "exec") {
-					a.enforcementUnsafe = true
+					wrapperSafe = false
 				}
 				// Basename projection aids detection but cannot prove that a
 				// path-qualified program implements the wrapper's semantics.
 				if wrapperName != commandProgram(wrapperName) {
-					a.enforcementUnsafe = true
+					wrapperSafe = false
 				}
 				wrapper, err := wrapperProjection(source, args, inner)
 				if err != nil {
@@ -348,7 +408,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					childName, _ := commandName(inner)
 					switch commandProgram(childName) {
 					case "command", "exec":
-						a.enforcementUnsafe = true
+						wrapperSafe = false
 					}
 				}
 				commandWrappers = append(commandWrappers, wrapper)
@@ -359,6 +419,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					a.report(err)
 					break
 				}
+				innerCommand.enforcementUnsafe = !wrapperSafe
 				if add && !a.add(innerCommand) {
 					return false
 				}
@@ -368,9 +429,9 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				if script, dialect, wrapper, ok, err := wrapperScript(source, args); err != nil {
 					a.report(err)
 				} else if ok {
-					a.enforcementUnsafe = true
 					innerWrappers := append(cloneWrappers(commandWrappers), wrapper)
 					a.parseDialect(script, dialect, depth+1, innerWrappers)
+					a.markCommandsUnsafe(statementStart)
 				}
 				if script, ok := interpreterHeredoc(args, node.Redirs); ok {
 					wrapper, err := projectInterpreterWrapper(source, args)
@@ -379,21 +440,26 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					} else {
 						innerWrappers := append(cloneWrappers(commandWrappers), wrapper)
 						a.parseDialect(script, dialectPOSIX, depth+1, innerWrappers)
+						a.markCommandsUnsafe(statementStart)
 					}
 				}
 			}
 			if allowShellBuiltins {
 				if script, ok := evalScript(source, args); ok {
-					a.enforcementUnsafe = true
 					a.parseDialect(script, dialectPOSIX, depth+1, commandWrappers)
+					a.markCommandsUnsafe(statementStart)
 				}
 			}
 			if command.FunctionCall {
 				if name, ok := commandName(call.Args); ok {
 					if body := functions[name]; body != nil && depth < maxCommandExpansionDepth && !activeFunctions[name] {
+						start := len(a.commands)
 						activeFunctions[name] = true
-						a.walk(source, body, depth+1, functions, activeFunctions, commandWrappers)
+						a.walk(source, body, depth+1, functions, activeFunctions, commandWrappers, ctx.statementID)
 						delete(activeFunctions, name)
+						// Shell state may replace or unset the definition before this
+						// call. Keep the recovered body available to detection only.
+						a.markCommandsUnsafe(start)
 					}
 				}
 			}

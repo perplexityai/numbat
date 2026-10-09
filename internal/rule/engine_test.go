@@ -194,6 +194,33 @@ func TestShellCommandsReferenceDetectionHonorsComprehensionScope(t *testing.T) {
 	}
 }
 
+func TestShellCandidateProgramsCompileOnlyForEnforcedRules(t *testing.T) {
+	const expr = `shell_commands.exists(command, command.name == "cat")`
+	monitor := mustEngine(t, Rule{
+		ID: "t.monitor", Severity: model.SeverityLow, Expr: expr,
+	})
+	if monitor.usesShellCandidates || monitor.rules[0].program.candidateProgram != nil {
+		t.Fatal("monitor-only rule compiled enforcement candidates")
+	}
+
+	enforced := mustEngine(t,
+		Rule{ID: "t.monitor", Severity: model.SeverityLow, Expr: expr},
+		Rule{ID: "t.enforced", Severity: model.SeverityLow, Enforce: boolPtr(true), Expr: expr},
+	)
+	if !enforced.usesShellCandidates || enforced.rules[1].program.candidateProgram == nil {
+		t.Fatal("enforced rule did not compile enforcement candidates")
+	}
+
+	disabled := false
+	disabledEnforcement := mustEngine(t,
+		Rule{ID: "t.disabled", Severity: model.SeverityLow, Enabled: &disabled, Enforce: boolPtr(true), Expr: expr},
+		Rule{ID: "t.monitor", Severity: model.SeverityLow, Expr: expr},
+	)
+	if disabledEnforcement.usesShellCandidates {
+		t.Fatal("disabled enforcement rule enabled candidate analysis")
+	}
+}
+
 func TestShadowedShellCommandsDoesNotAnalyzeCommand(t *testing.T) {
 	eng := mustEngine(t, Rule{
 		ID:       "shadow",
@@ -532,7 +559,7 @@ func TestEngineDoesNotInferPowerShellPreviewForNativeCommandsOrAmbientState(t *t
 	}
 }
 
-func TestEngineDoesNotEnforcePartialShellAnalysis(t *testing.T) {
+func TestEngineEnforcesCompleteCandidateWithDynamicSibling(t *testing.T) {
 	enforce := true
 	eng := mustEngine(t, Rule{
 		ID:       "t.remove",
@@ -550,8 +577,8 @@ func TestEngineDoesNotEnforcePartialShellAnalysis(t *testing.T) {
 	if err == nil {
 		t.Fatal("Eval succeeded, want dynamic-command diagnostic")
 	}
-	if len(matches) != 1 || matches[0].EnforcementMatch {
-		t.Fatalf("partial static match = %+v, want detection-only rm witness", matches)
+	if len(matches) != 1 || !matches[0].EnforcementMatch {
+		t.Fatalf("partial static match = %+v, want enforceable rm candidate", matches)
 	}
 
 	eng = mustEngine(t, Rule{
@@ -600,6 +627,14 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `command wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `exec wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `nohup wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `false && wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `true || wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `if false; then wipefs -a /dev/sda; fi`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `for x in one; do wipefs -a /dev/sda; done`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo ready; wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `! wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda &`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo "$(wipefs -a /dev/sda)"`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Stop-Process -Name target -Force`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Stop-Process -Name target -Force 2>&1`},
 		{EventType: model.EventCommandExec, ToolName: "cmd.exe", Command: `del C:\target`},
@@ -613,11 +648,7 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 	}
 
 	detectionOnly := []model.Event{
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `false && wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `true || wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `if false; then wipefs -a /dev/sda; fi`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `for x in one; do wipefs -a /dev/sda; done`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `run(){ wipefs -a /dev/sda; }; run`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs(){ echo safe; }; wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `eval 'wipefs -a /dev/sda'`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `command eval 'wipefs -a /dev/sda'`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `command exec wipefs -a /dev/sda`},
@@ -647,13 +678,8 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `env -u PATH wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `exec -a wipe wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `pwsh -Command 'Stop-Process -Name target -Force'`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo "$(wipefs -a /dev/sda)"`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda --no-*`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda --{no-act,other}`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo ready; wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `"$next"; wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `! wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda &`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Write-Output ready; Stop-Process -Name target -Force`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `if ($false) { Stop-Process -Name target -Force }`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Write-Output target | Stop-Process -Force`},
@@ -841,6 +867,19 @@ func TestNewEngineRejectsEventAliases(t *testing.T) {
 		Expr:     `[{"command": "safe", "local_field": "x"}].exists(event, event.command == "safe" && event.local_field == "x") && event.event_type == "command.exec"`,
 	}}}}); err != nil {
 		t.Fatalf("fields on shadowed local named event rejected: %v", err)
+	}
+}
+
+func TestNewEngineRejectsInternalCandidateVariable(t *testing.T) {
+	_, err := NewEngine([]Source{{Name: "test", Rules: []Rule{{
+		ID:       "t.internal_candidate",
+		Title:    "internal candidate",
+		Version:  "1",
+		Severity: model.SeverityLow,
+		Expr:     `__numbat_shell_command_candidates.size() > 0`,
+	}}}})
+	if err == nil || !strings.Contains(err.Error(), "reserved identifier") {
+		t.Fatalf("internal candidate variable error = %v, want reserved identifier", err)
 	}
 }
 
