@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // Codex-flavor mapping for OpenClaw transcripts. OpenClaw embeds Codex as one of
@@ -206,7 +207,7 @@ func (e OpenClawExtractor) mapCodexResponseItem(res *Result, src Source, sha str
 		ev.ToolName = ri.Name
 		ev.ToolCallID = ri.CallID
 		ev.EventType = model.EventToolCall
-		ev.ContentPreview = preview(string(ri.Input))
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(string(ri.Input))
 		ev.Evidence.JSONPointer = "/payload/input"
 		if server, tool, ok := splitMCPName(ri.Name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
@@ -499,6 +500,7 @@ func (e OpenClawExtractor) emitCodexFunctionCall(res *Result, src Source, sha st
 			return
 		}
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(string(ri.Arguments))
 		if server, tool, ok := splitMCPName(ri.Name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
 		} else if server, ok := codexMCPNamespaceServer(ri.Namespace); ok {

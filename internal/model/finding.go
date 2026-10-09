@@ -43,9 +43,12 @@ type Finding struct {
 	SourceType      string `json:"source_type"`
 	ProjectPathHash string `json:"project_path_hash,omitempty"`
 	SessionID       string `json:"session_id,omitempty"`
+	SessionTreeID   string `json:"session_tree_id,omitempty"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 	Model           string `json:"model,omitempty"`
 	ModelProvider   string `json:"model_provider,omitempty"`
 	SubAgent        string `json:"sub_agent,omitempty"`
+	SubAgentID      string `json:"sub_agent_id,omitempty"`
 
 	Title string `json:"title"`
 

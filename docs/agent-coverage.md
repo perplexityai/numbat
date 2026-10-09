@@ -12,6 +12,29 @@ page lists the surfaces numbat actually supports. A product name does not imply
 coverage of every desktop, CLI, IDE, ACP, gateway, or hosted mode; host limits
 are stated in the relevant row.
 
+## MCP and browser detail
+
+Generic tool calls retain supplied arguments in a redacted `content_preview`
+across artifacts, hooks, and standard OTLP tool-call logs. JSON keys are sorted
+and credentials are masked before the 200-character preview limit is applied.
+`content_preview_truncated` marks omitted input. Inputs above 64 KiB use a
+size-limit marker; malformed JSON is omitted. SQL, message text, and form values
+can still appear when secret patterns do not recognize them.
+
+- Codex transcript results inherit tool/MCP identity from a preceding call with
+  the same `call_id`; unmatched results remain unnamed.
+- CUA `js` retains code and title within the preview limit. JavaScript is not
+  parsed for actions or destinations.
+- Cline's legacy `browser_action` emits a network indicator for `launch` with an
+  HTTP(S) URL. OpenClaw's `browser` does so for `open` or `navigate`. Other actions
+  remain `tool.call` with input context and a `browser` tag.
+- Cursor's generic `MCP:<tool>` hooks retain input without inferring network
+  activity. Direct MCP pre-hooks can report the HTTP/SSE server endpoint;
+  post-hooks remain results even when they repeat it.
+
+URL arguments alone do not establish network activity; the
+[canonical MCP fetch adapter](event-model.md#mcp) extracts its action target.
+
 ## Platform conventions
 
 Release binaries target macOS, Linux, and native Windows. `~` means the current
@@ -65,18 +88,23 @@ Parser-backed at-rest paths are also the default roots used by `scan` and
 | Cline CLI | deferred SQLite sessions | `${CLINE_DIR:-~/.cline}/hooks/{TaskStart,...,SessionShutdown}`, or `CLINE_HOOKS_DIR` | yes — `PreToolUse` | The current CLI/SDK auto-discovers the global directory and accepts an additional runtime directory through `CLINE_HOOKS_DIR` / `--hooks-dir`; no hook-enable setting is required. numbat installs all current action/lifecycle files except bookkeeping-only `PreCompact`: task start/resume/complete/cancel/error, session shutdown, prompt, and pre/post tool. Project `.cline/hooks` and legacy `.clinerules/hooks` directories can be targeted with `--settings`. The legacy editor directory remains available through `--settings ~/Documents/Cline/Hooks`; its Unix files require the Hooks-tab toggle. |
 | Amp | deferred thread/history storage | `~/.config/amp/plugins/numbat.ts` | yes — `tool.call` | The generated TypeScript plugin uses Amp's stable plugin API. Monitor mode forwards asynchronously; enforce mode waits only at `tool.call` and returns Amp's native `reject-and-continue` response. Reload plugins in Amp after installation. |
 | Auggie | deferred session/task storage | `~/.augment/settings.json` plus generated scripts under `~/.augment/hooks/` | yes — `PreToolUse` | Auggie requires a script path rather than an inline command, so numbat owns explicit `.sh`/`.ps1` wrappers. Unknown strict-JSON keys are preserved; automatic install refuses comments and trailing commas instead of rewriting ambiguous input. Project paths remain available through `--settings`. |
-| Kiro IDE / CLI v3 | deferred local session state | default `~/.kiro/hooks/numbat.json`; CLI-only `${KIRO_HOME}/hooks/numbat.json` override | yes — `PreToolUse` | The default global `v1` file covers Kiro IDE 1.0.182+ and Kiro CLI 2.13.0+ with its opt-in v3 engine (`kiro-cli --v3`). When `KIRO_HOME` is set, install the default IDE file separately with `--settings ~/.kiro/hooks/numbat.json` if both hosts need coverage. Kiro 2.x hook blocks embedded in custom agents are not rewritten. |
+| Kiro IDE / CLI v3 | deferred local session state | default `~/.kiro/hooks/numbat.json`; CLI-only `${KIRO_HOME}/hooks/numbat.json` override | yes — `PreToolUse` | The default global `v1` file covers Kiro IDE 1.0.182+ and interactive Kiro CLI 2.13.0+ with its opt-in v3 engine (`kiro-cli --v3`); `--no-interactive` v3 runs load it from CLI 2.27.1. `SessionEnd` maps to `session.end` from CLI 2.25.0; numbat ignores it on older hosts, which run that trigger as a per-turn `Stop`. When `KIRO_HOME` is set, install the default IDE file separately with `--settings ~/.kiro/hooks/numbat.json` if both hosts need coverage. Kiro 2.x hook blocks embedded in custom agents are not rewritten. |
 | Goose | deferred SQLite sessions | `~/.agents/plugins/numbat/{plugin.json,hooks/hooks.json}` | yes — `PreToolUse` | Goose discovers the user-level Open Plugins package automatically. numbat covers session, prompt, tool success/failure, stop, and session-end events; exit code 2 is the clean blocking signal. A plugin listed in Goose `disabledPlugins` will not load. |
 | Kilo Code | deferred SQLite/session storage | `${XDG_CONFIG_HOME:-~/.config}/kilo/plugin/numbat.ts` | yes — `tool.execute.before` | The generated module uses Kilo's current global plugin directory and module descriptor. It works in the CLI and VS Code extension, blocks by throwing only after a clean numbat deny, and otherwise fails open. `KILO_PURE=1` disables external plugins. |
 | OpenHands | deferred conversation/event storage | repository `.openhands/hooks.json` (explicit `--settings` required) | yes — `PreToolUse` | Repository hooks work across OpenHands Cloud, CLI, and local GUI. There is no documented user-global file, so numbat does not include OpenHands in `--agent all`; install with `--agent openhands --settings /repo/.openhands/hooks.json`. |
 | Crush | deferred project-local `.crush/crush.db` (SQLite/WAL; `options.data_directory` can move it) | `$CRUSH_GLOBAL_CONFIG/crush.json` or `${XDG_CONFIG_HOME:-~/.config}/crush/crush.json`; project config via explicit `--settings` | yes — `PreToolUse` | Crush currently exposes only this preliminary action hook and only for top-level agent tool calls. numbat leaves the matcher empty to cover every tool, sets a 10-second timeout, uses exit code 2 to deny, and otherwise fails open. Restart Crush after an external config edit. |
-| Junie CLI (Early Access) | deferred local session state (record schema and path are not published) | `~/.junie/config.json`; explicit `JUNIE_CONFIG_LOCATION` / `--config-location` file via numbat's `--settings` | yes — `PreToolUse` | numbat installs session start/end, prompt, pre-tool, and stop callbacks. Prompt callbacks are interactive-only; the other installed events run in interactive and batch hosts. No hooks run in ACP/server. Junie's hook payload has no session id or cwd, so cross-event sequence correlation is unavailable. Restart Junie after installation. |
+| Junie CLI (Early Access) | deferred local session state (record schema and path are not published) | `~/.junie/config.json`; explicit `JUNIE_CONFIG_LOCATION` / `--config-location` file via numbat's `--settings` | yes — `PreToolUse` | `PreToolUse` requires Junie 2144.5 EAP / 2144.6 release (26.6.29) or later. numbat installs session start/end, prompt, pre-tool, and stop callbacks. Prompt callbacks run in interactive hosts; batch callbacks were observed in 2777.8, 2929.5, and 3646.2, but not 2144.6. The other installed events run in both. No hooks run in ACP/server. Session/project fields vary by build and callback; see the lifecycle notes below. Restart Junie after installation. |
 | Antigravity | deferred `~/.gemini/{antigravity,antigravity-cli}/brain/<conversation>/.../transcript.jsonl` | `~/.gemini/config/hooks.json` | yes — `PreToolUse` | Desktop and CLI publish the transcript locations, but not a stable record schema. Monitor mode returns `ask`; enforce mode uses the documented hard deny. |
 | Factory Droid | deferred `~/.factory/projects/**/*.jsonl` | `~/.factory/hooks.json`; project `.factory/hooks.json` via `--settings` | yes — `PreToolUse` | Root `hooks.json` is canonical. The installer preserves compatible `settings.json` events and migrates the older `.factory/hooks/hooks.json` source without dropping foreign hooks. It refuses an effective `hooksDisabled:true`. The transcript path is exposed by hooks, but its durable record format is not versioned. |
 | Grok Build | `${GROK_HOME:-~/.grok}/sessions/` (deferred record shape) | `${GROK_HOME:-~/.grok}/hooks/numbat.json` | yes — `PreToolUse` | Sessions persist automatically across TUI, headless, and ACP hosts, but the record schema is not published. Project hooks require `/hooks-trust`. |
 | Devin CLI | none | Unix: `${XDG_CONFIG_HOME:-~/.config}/devin/config.json`; Windows: `%APPDATA%\devin\config.json`; project: `.devin/hooks.v1.json` | yes — `PreToolUse` | Hook events emit `source_agent:"devin-cli"`. |
 | Hermes | `$HERMES_HOME/state.db`; otherwise Unix `~/.hermes/state.db`, Windows `%LOCALAPPDATA%\hermes\state.db` (SQLite/WAL; deferred) | shell hooks in the active profile's `config.yaml` (CLI and Gateway) | yes — `pre_tool_call` | numbat observes session, prompt/assistant, tool, approval, subagent, and finalization events. Hermes requires first-use consent per event/command pair. There is no documented project hook config. |
 | Muse Code | `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl`, recursing into nested `subagent/<id>/session.jsonl` transcripts at any depth | project `.muse/hooks.json`; user `${XDG_CONFIG_HOME:-~/.config}/muse/settings.json` (requires a top-level `"schema_version": 1` or the CLI refuses to start) | yes — `PreToolUse` | Hooks run outside the sandbox with a cleared environment restricted to `HOME`, `LOGNAME`, `PATH`, `PWD`, `SHELL`, `SHLVL`, `TMPDIR`, `USER`. `PermissionRequest` is intentionally not installed: it was verified, including in a real interactive session, to fire only for Muse's internal skill-reminder bookkeeping tool and never for a real action. Live subagent lineage has no parent-pointer field on the wire; the at-rest transcript does carry one (see the material exceptions below) but is a separate, offline signal. |
+
+Codex child rollouts provide an active child thread and explicit parent.
+Current Codex hooks provide the child thread and a shared session-tree ID, but
+not the immediate parent of a nested child; `parent_session_id` therefore stays
+absent on those live records. Parent-side spawn calls remain parent actions.
 
 With `--include-reasoning`, at-rest parsers map source-recorded reasoning from
 Claude Code, Codex, Gemini session journals, OpenClaw, Pi, Kimi Code, and legacy
@@ -125,7 +153,7 @@ matrix cell.
 | OpenCode | Live plugin capture is supported and monitor-only. The parser covers earlier JSON storage, while the current `opencode.db` store remains deferred. |
 | OpenClaw | Coverage is limited to actions crossing the typed Gateway pipeline or native Codex relay; generic ACP/ACPX and text-only backends need the underlying agent's own integration. Stable v2026.7.1 AgentMessage and embedded-Codex JSONL are parsed; unknown flavors produce diagnostics. Code Mode records with explicit `code` or `language` remain generic rather than being mislabeled as shell. Gateway mirrors and embedded rollouts can overlap and are not deduplicated. The v2026.7.2 beta/development database and compressed archives remain deferred. Root, profile, and production-policy steps live in [deployment.md](deployment.md#openclaw-production-policy). |
 | Cline | The current CLI/SDK auto-discovers its global hook directory. Project and legacy editor directories require `--settings`; the legacy editor also requires its Hooks-tab toggle. Bookkeeping-only `PreCompact` is intentionally omitted. |
-| Kiro | The default global `v1` file covers IDE 1.0.182+ and CLI 2.13.0+ v3. `KIRO_HOME` relocates only the CLI target; wire `~/.kiro/hooks/numbat.json` separately for the IDE when both roots are active. The combined `agents` row reports `WIRED=yes` when either root is wired and both are readable; an unreadable root reports an error. Verify each required root with matching `hook status` arguments. numbat does not rewrite v2 blocks embedded in individual custom agents. |
+| Kiro | The default global `v1` file covers IDE 1.0.182+ and CLI 2.13.0+ v3 (interactive; `--no-interactive` from 2.27.1). Reinstall to add `SessionEnd` to an existing file. `KIRO_HOME` relocates only the CLI target; wire `~/.kiro/hooks/numbat.json` separately for the IDE when both roots are active. The combined `agents` row reports `WIRED=yes` when either root is wired and both are readable; an unreadable root reports an error. Verify each required root with matching `hook status` arguments. numbat does not rewrite v2 blocks embedded in individual custom agents. |
 | OpenHands | Hooks are repository-scoped, so OpenHands requires an explicit `.openhands/hooks.json` path and is excluded from `--agent all`. |
 | Crush | The preliminary hook observes only top-level agent tool calls. numbat covers every tool with the documented fail-open, exit-code-2 contract. |
 | Muse Code | Hooks are validated at session startup only; there is no reload command, so a config change needs a new session. A malformed entry produces a warning and is skipped, but a fully valid file prints no confirming output at all, so `hook status` — not Muse's own console output — is the source of truth for a complete install. `bash`, `read_file`, and `write_file` are the only built-in tool names with a verified input shape for hooks; other built-in tools (`web_fetch`, `web_search`) remain generic `tool.call` there until captured. MCP tool calls need no Muse-specific mapping on the live hook path: a live run against a real streamable-HTTP MCP server showed `tool_name` is exactly `mcp__<server>__<tool>` (verified with `mcp__complex_demo__analyze_data`; hyphens in the server name become underscores), byte-for-byte Claude/Codex's convention, so numbat's existing generic `mcp__` split fills `mcp_server`/`mcp_tool` for free. The at-rest transcript records the same name, and the extractor applies the same split to both the call and its result. `--subagent-worktree-isolation` produces a real, separate git worktree per child, and that child's `cwd` encodes both the lead and child ids; the default non-isolated (shared-workspace) fan-out case has no such field and is not yet correlated to its parent on the *live hook* path. `--managed` is not implemented: the vendor-defined `managed_hooks_path` setting key is confirmed to exist, but its file-vs-directory shape and scope precedence are not. The at-rest transcript is a schema-versioned, append-only JSONL log (verified independently against real files, and cross-checked against a third-party reverse-engineering effort — github.com/specstoryai/getspecstory, Apache-2.0 — done against an older Muse Code version; the core envelope and event catalog matched across that gap). It maps `bash`/`read_file`/`write_file`/`edit_file` the same way; other native tools stay generic for the same no-fabrication reason as the hook path. Unlike the live hook stream, the transcript *does* carry an explicit subagent-to-parent pointer (a `task_stream_linked` run event, sometimes with a direct relative path to the child's own transcript), so numbat's `SubAgent` field on at-rest events is a real, verified signal even though the equivalent live field is not. Two record-envelope variants exist beyond the plain one — a "retained frame" transaction wrapper and an "omitted record" tombstone for an ephemeral status delta the runtime chose not to keep — both handled, neither documented anywhere the adapter cites. |
@@ -140,7 +168,7 @@ lifecycle boundary:
 |---|---|---|
 | OpenClaw | Eight typed session, message, tool, and subagent callbacks. `llm_input` and `llm_output` are added only with `plugins.entries.numbat.hooks.allowConversationAccess:true`. | Inbound messages can contain content; outbound delivery is content-free. Model callbacks forward only the current input or nonempty assistant text, can repeat on retries, and omit system prompt, history, reasoning, tools, usage, and raw message objects. WhatsApp inbound callbacks require a separate channel opt-in. Only `before_tool_call` can block. |
 | Hermes | Session start/finalize, LLM prompt/assistant, pre/post tool, approval, and subagent events in the active profile; CLI and Gateway use the same shell hooks. | `on_session_end` fires after each turn, so `on_session_finalize` is the true `session.end`. `on_session_reset` is followed by a new start, and transform/policy callbacks add no distinct normalized action. The canonical `state.db` remains deferred. |
-| Junie CLI (Early Access) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, and `SessionEnd` from user or explicitly supplied config. | `PermissionRequest` is omitted because an empty successful monitor callback would auto-approve the action. `StopFailure` is provider-health telemetry, and there is no post-tool event. Payloads have no session id or cwd, so sequence correlation is unavailable. Prompt hooks are TUI-only; ACP and server hosts run no hooks. |
+| Junie CLI (Early Access) | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, and `SessionEnd` from user or explicitly supplied config. | `PermissionRequest` is omitted because an empty successful monitor callback would auto-approve the action. `StopFailure` is provider-health telemetry, and there is no post-tool event. In tested 2144.6, 2777.8, and 2929.5 builds, pre-tool, stop, and session-end payloads omit session/project fields, preventing sequence correlation and project-scoped matching on those events. Tested 3646.2 includes them on all installed callbacks. Where present, `cwd` is the Junie home; numbat prefers `project_path`. ACP and server hosts run no hooks. |
 | Muse Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `Stop`, and `SessionEnd`. | `PermissionRequest` is omitted for a different reason than Junie's: it was verified — across five conditions including a real interactive session with no bypass flags — to fire only for Muse's internal `submit_reminder_decision` skill-reminder tool, never for a real tool call, so an empty monitor response is not a safety gap, only noise. `PreCompact`, `PostCompact`, and `Notification` are bookkeeping-only, matching every other portable agent. `PreLLMCall`/`PostLLMCall` carry full conversation content and are opt-in only, not installed by default. Muse also runs an internal `skill-reminder`/`verify-reminder` subagent pair on effectively every turn, unrelated to user-requested fan-out; numbat does not fabricate shell or file semantics for their sole tool, `submit_reminder_decision`, which stays generic `tool.call`. |
 
 ## Enforcement
@@ -231,16 +259,21 @@ boundary.
 
 ## Primary references
 
+- OTLP tool arguments: <https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/#gen-ai-tool-call-arguments>
+- Canonical MCP fetch tool: <https://github.com/modelcontextprotocol/servers/tree/main/src/fetch>
 - Claude Code hooks: <https://code.claude.com/docs/en/hooks>
 - Codex hooks: <https://learn.chatgpt.com/docs/hooks>
+- Codex v0.150.1 session metadata: <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/protocol.rs>
+- Codex v0.150.1 sub-agent hook context: <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/hook_runtime.rs>
 - Gemini CLI hooks: <https://geminicli.com/docs/hooks/>
 - Cursor hooks: <https://cursor.com/docs/hooks>
 - Cursor `subagentStart` deny bug (confirmed 20 July 2026): <https://forum.cursor.com/t/subagentstart-hook-deny-is-not-enforced/166143/7>
 - Windsurf hooks: <https://docs.windsurf.com/windsurf/cascade/hooks>
 - Copilot CLI hooks: <https://docs.github.com/en/copilot/reference/hooks-reference>
-- VS Code hooks: <https://code.visualstudio.com/docs/agent-customization/hooks>
+- VS Code hooks: <https://code.visualstudio.com/docs/agents/reference/hooks-reference>
 - OpenCode plugins: <https://opencode.ai/docs/plugins/>
 - OpenCode managed settings: <https://opencode.ai/docs/config/#managed-settings>
+- OpenClaw browser dispatcher: <https://github.com/openclaw/openclaw/blob/d7f8b2c3fddd1ea799a80cfd832b897766a0d480/extensions/browser/src/browser-tool-dispatch.ts>
 - OpenClaw plugin hooks: <https://docs.openclaw.ai/plugins/hooks>
 - OpenClaw plugin policy and runtime verification: <https://docs.openclaw.ai/plugins>
 - OpenClaw plugin management: <https://docs.openclaw.ai/cli/plugins>
@@ -249,7 +282,7 @@ boundary.
 - OpenClaw ACP/external-agent boundary: <https://docs.openclaw.ai/tools/acp-agents>
 - OpenClaw WhatsApp hook privacy: <https://docs.openclaw.ai/channels/whatsapp#plugin-hooks-and-privacy>
 - Antigravity hooks: <https://antigravity.google/docs/hooks>
-- Factory hooks: <https://docs.factory.ai/reference/hooks-reference>
+- Factory hooks: <https://docs.factory.com/harness/hooks>
 - Grok hooks: <https://docs.x.ai/build/features/hooks>
 - Grok sessions: <https://docs.x.ai/build/features/sessions>
 - Devin hooks: <https://docs.devin.ai/cli/extensibility/hooks/overview>
@@ -263,7 +296,8 @@ boundary.
 - Kimi Code hooks: <https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html>
 - Qwen Code hooks: <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/>
 - Qwen Code telemetry: <https://qwenlm.github.io/qwen-code-docs/en/developers/development/telemetry/>
-- Cline hooks: <https://docs.cline.bot/customization/hooks>
+- Cline hooks: <https://github.com/cline/cline/blob/main/.clinerules/hooks/README.md>
+- Cline v3.72.0 browser tool: <https://github.com/cline/cline/blob/0e7e0099cdcf5349bebc2cf86b9b5fd64650b736/src/core/task/tools/handlers/BrowserToolHandler.ts>
 - Cline CLI: <https://docs.cline.bot/cli/cli-reference>
 - Amp plugin API: <https://ampcode.com/manual/plugin-api>
 - Auggie hooks: <https://docs.augmentcode.com/cli/hooks>

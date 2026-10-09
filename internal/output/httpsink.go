@@ -132,6 +132,27 @@ type HTTPSink struct {
 	stats          SinkStats
 }
 
+type httpStatusError struct {
+	statusCode int
+	requestID  string
+}
+
+func (e *httpStatusError) Error() string {
+	if e.requestID != "" {
+		return fmt.Sprintf("http sink: server returned %d %s (request-id %q)", e.statusCode, http.StatusText(e.statusCode), e.requestID)
+	}
+	return fmt.Sprintf("http sink: server returned %d %s", e.statusCode, http.StatusText(e.statusCode))
+}
+
+// HTTPStatusCode returns the response status carried by an HTTP sink error.
+func HTTPStatusCode(err error) (int, bool) {
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) {
+		return 0, false
+	}
+	return statusErr.statusCode, true
+}
+
 // NewHTTPSink validates cfg and constructs the sink.
 func NewHTTPSink(cfg HTTPConfig) (*HTTPSink, error) {
 	if err := validateHTTPConfig(&cfg); err != nil {
@@ -483,10 +504,10 @@ func (h *HTTPSink) flushLocked() error {
 		// Surface only the status and, when present, a request-id header an
 		// operator can correlate against receiver logs.
 		drainResponseBody(resp.Body)
-		if id := responseRequestID(resp.Header); id != "" {
-			return fmt.Errorf("http sink: server returned %d %s (request-id %q)", resp.StatusCode, http.StatusText(resp.StatusCode), id)
+		return &httpStatusError{
+			statusCode: resp.StatusCode,
+			requestID:  responseRequestID(resp.Header),
 		}
-		return fmt.Errorf("http sink: server returned %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 	drainResponseBody(resp.Body)
 	h.stats.BatchesSucceeded++

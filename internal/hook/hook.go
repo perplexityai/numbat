@@ -27,6 +27,7 @@ import (
 
 	"github.com/perplexityai/numbat/internal/applypatch"
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // Agent identifiers the hook command accepts via --agent. They map onto the
@@ -495,6 +496,8 @@ func resolveKiroEvent(raw string) (Lifecycle, bool) {
 		return LifecyclePostTool, true
 	case string(LifecycleStop), string(LifecycleAssistant):
 		return LifecycleStop, true
+	case "sessionend", string(LifecycleSessionEnd):
+		return LifecycleSessionEnd, true
 	default:
 		return "", false
 	}
@@ -999,6 +1002,7 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 		SourceType:    model.SourceHook,
 		Timestamp:     r.timestamp(),
 		SessionID:     r.sessionID(),
+		SessionTreeID: r.sessionTreeID(),
 		ProjectPath:   r.cwd(),
 		Actor:         model.ActorAssistant,
 		// A hook is a live signal with no artifact line to verify against, so its
@@ -1007,6 +1011,7 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 		Confidence: model.ConfidenceMedium,
 		Evidence:   model.Evidence{ArtifactType: model.SourceHook},
 	}
+	ev.SubAgentID = r.subAgentID()
 	ev.Model = r.envStr("model", "model_name", "modelName")
 	ev.ModelProvider = r.envStr("model_provider", "modelProvider", "provider_name", "providerName")
 	if agent == AgentCursor {
@@ -1172,6 +1177,9 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 			ev.Tags = append(ev.Tags, openClawTagModelBoundary)
 		}
 	}
+	if ev.EventType == model.EventToolCall && ev.ContentPreview == "" {
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(r.toolInputValue())
+	}
 	if ev.SubAgent == "" {
 		ev.SubAgent = r.subAgent()
 	}
@@ -1187,6 +1195,11 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 // MapEvents maps one hook payload. Structured multi-file operations produce one
 // event per path so file evidence remains first-class.
 func MapEvents(lc Lifecycle, agent, sourceAgent, eventID string, payload map[string]any) []model.Event {
+	if agent == AgentKiro && lc == LifecycleSessionEnd && firstString(payload, "hook_event_name") == "Stop" {
+		// Older Kiro hosts alias a SessionEnd trigger to Stop and run it after
+		// every turn; the Stop hook already records that boundary.
+		return nil
+	}
 	base := mapEvent(lc, agent, sourceAgent, eventID, payload)
 	if lc == LifecycleAssistant && (agent == AgentPi || agent == AgentOpenCode || agent == AgentKilo) {
 		if events, ok := mapMessagePartEvents(base, eventID, payload); ok {
@@ -1377,36 +1390,38 @@ func mapToolResult(ev *model.Event, name string) {
 	}
 }
 
-// mapMCPCall maps a direct MCP invocation (Cursor beforeMCPExecution) onto the
-// tool vocabulary. The server and tool names arrive as first-class fields
-// (server, tool_name) rather than the mcp__server__tool encoding the pre-tool
-// classifier parses, so they are read directly. When the invocation carries a
-// url it is a network egress and classifies as a network.indicator (carrying the
-// url and the mcp split); otherwise it is a generic tool.call. The MCP command
-// text, when present, is not stored: tool.call/network.indicator do not admit a
-// command field, and the server/tool split already identifies the invocation.
+// mapMCPCall handles direct MCP hooks. Cursor's envelope URL identifies the
+// HTTP/SSE server; only the canonical fetch adapter treats input.url as an
+// action target. Post hooks remain results even when they repeat the endpoint.
 func mapMCPCall(ev *model.Event, r *resolver) {
 	server := r.str("server", "server_name", "mcp_server_name", "mcpServerName")
 	tool := r.str("tool_name", "toolName", "tool", "name", "mcp_tool_name", "mcpToolName")
-	if url := r.str("url", "endpoint"); url != "" {
-		ev.EventType = model.EventNetworkIndicator
-		ev.URL = hookNetworkTargetURL(url)
-		ev.ContentPreview = preview(url)
-		ev.Tags = append(ev.Tags, model.TagNetwork)
-		ev.MCPServer, ev.MCPTool = server, tool
-		return
-	}
+	ev.ToolName = tool
+	ev.MCPServer, ev.MCPTool = server, tool
 	eventName := strings.ToLower(r.hookEventName())
 	if eventName == "" {
 		eventName = strings.ToLower(r.envStr("agent_action_name"))
 	}
 	if strings.HasPrefix(eventName, "post") || strings.HasPrefix(eventName, "after") {
 		ev.EventType = model.EventToolResult
-	} else {
-		ev.EventType = model.EventToolCall
+		return
 	}
-	ev.ToolName = tool
-	ev.MCPServer, ev.MCPTool = server, tool
+	ev.EventType = model.EventToolCall
+	ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(r.toolInputValue())
+	rawURL := r.str("url", "mcp_server_url", "endpoint")
+	if server == "fetch" && tool == "fetch" {
+		if target := firstString(r.toolInput(), "url"); target != "" {
+			rawURL = target
+		}
+	}
+	if rawURL != "" {
+		ev.EventType = model.EventNetworkIndicator
+		ev.URL = hookNetworkTargetURL(rawURL)
+		if ev.ContentPreview == "" {
+			ev.ContentPreview = preview(rawURL)
+		}
+		ev.Tags = append(ev.Tags, model.TagNetwork)
+	}
 }
 
 // copilotToolFamily classifies a GitHub Copilot CLI tool name into one of the
@@ -1643,19 +1658,9 @@ func classifyCursorTool(ev *model.Event, r *resolver, post, failed bool) {
 		ev.ContentPreview = preview(firstString(input, "query"))
 		ev.Tags = append(ev.Tags, model.TagNetwork)
 	default:
-		tool, isMCP := splitCursorMCPName(name)
-		if isMCP {
-			if url := firstString(input, "url", "uri", "endpoint"); url != "" {
-				ev.EventType = model.EventNetworkIndicator
-				ev.URL = hookNetworkTargetURL(url)
-				ev.ContentPreview = preview(url)
-				ev.Tags = append(ev.Tags, model.TagNetwork)
-			} else {
-				ev.EventType = model.EventToolCall
-			}
+		ev.EventType = model.EventToolCall
+		if tool, ok := splitCursorMCPName(name); ok {
 			ev.MCPTool = tool
-		} else {
-			ev.EventType = model.EventToolCall
 		}
 	}
 }
@@ -1683,6 +1688,9 @@ func splitCursorMCPName(name string) (string, bool) {
 // vocabulary (and the MCP split when the name looks like an MCP tool) — the same
 // narrow, no-generic-aliases approach as Copilot.
 func codexToolFamily(name string) string {
+	if name == mcpFetchToolName {
+		return "web"
+	}
 	switch strings.ToLower(name) {
 	case "shell", "shell_command", "exec_command", "bash", "powershell":
 		return "shell"
@@ -1755,6 +1763,9 @@ func classifyCodexTool(ev *model.Event, r *resolver, post bool) {
 		}
 	case "web":
 		url := firstString(input, "url")
+		if name == mcpFetchToolName {
+			ev.MCPServer, ev.MCPTool = "fetch", "fetch"
+		}
 		ev.EventType = model.EventNetworkIndicator
 		ev.URL = hookNetworkTargetURL(url)
 		if url != "" {
@@ -2009,9 +2020,13 @@ func classifyOpenCodeHookTool(ev *model.Event, r *resolver, post bool) {
 	// but a non-zero exit alone is not a tool error.
 }
 
-// classifyAntigravityTool maps the documented toolCall object. PostToolUse only
-// reports stepIdx and error, so result events intentionally carry no tool name.
+// classifyAntigravityTool maps the documented toolCall object when supplied.
 func classifyAntigravityTool(ev *model.Event, r *resolver, post bool) {
+	name := r.toolName()
+	ev.ToolName = name
+	if server, tool, ok := splitMCPName(name); ok {
+		ev.MCPServer, ev.MCPTool = server, tool
+	}
 	if post {
 		ev.EventType = model.EventToolResult
 		if r.envStr("error") != "" {
@@ -2020,9 +2035,7 @@ func classifyAntigravityTool(ev *model.Event, r *resolver, post bool) {
 		return
 	}
 
-	name := r.toolName()
 	input := r.toolInput()
-	ev.ToolName = name
 	switch name {
 	case "run_command":
 		ev.EventType = model.EventCommandExec
@@ -2064,9 +2077,6 @@ func classifyAntigravityTool(ev *model.Event, r *resolver, post bool) {
 		ev.SubAgent = firstString(input, "name")
 	default:
 		ev.EventType = model.EventToolCall
-	}
-	if server, tool, ok := splitMCPName(name); ok {
-		ev.MCPServer, ev.MCPTool = server, tool
 	}
 }
 
@@ -2365,7 +2375,9 @@ func portableToolFamily(agent, name string) string {
 			return "read"
 		case "write_to_file", "replace_in_file", "apply_diff", "edit_file":
 			return "write"
-		case "browser_action", "web_fetch", "web_search":
+		case "browser_action":
+			return "browser"
+		case "web_fetch", "web_search":
 			return "web"
 		}
 	case AgentAmp:
@@ -2427,7 +2439,9 @@ func portableToolFamily(agent, name string) string {
 			return "read"
 		case "write", "edit", "apply_patch":
 			return "write"
-		case "web_fetch", "web_search", "browser":
+		case "browser":
+			return "browser"
+		case "web_fetch", "web_search":
 			return "web"
 		}
 	case AgentOpenHands:
@@ -2547,13 +2561,25 @@ func classifyPortableTool(ev *model.Event, r *resolver, post bool) {
 		if r.agent == AgentAuggie && strings.EqualFold(name, "remove-files") {
 			ev.EventType = model.EventFileDelete
 		}
+	case "browser":
+		ev.EventType = model.EventToolCall
+		ev.Tags = append(ev.Tags, "browser")
+		action := firstString(input, "action")
+		navigate := r.agent == AgentCline && action == "launch" ||
+			r.agent == AgentOpenClaw && (action == "open" || action == "navigate")
+		rawURL := firstString(input, "url")
+		if r.agent == AgentOpenClaw {
+			rawURL = firstString(input, "targetUrl", "url")
+		}
+		if navigate && hookNetworkTargetURL(rawURL) != "" {
+			ev.EventType = model.EventNetworkIndicator
+			ev.URL = hookNetworkTargetURL(rawURL)
+			ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
+			ev.Tags = append(ev.Tags, model.TagNetwork)
+		}
 	case "web":
 		rawURL := firstString(input, "url", "uri", "targetUrl", "target_url")
 		query := firstString(input, "query")
-		if r.agent == AgentOpenClaw && strings.EqualFold(name, "browser") && rawURL == "" && query == "" {
-			ev.EventType = model.EventToolCall
-			return
-		}
 		ev.EventType = model.EventNetworkIndicator
 		ev.URL = hookNetworkTargetURL(rawURL)
 		if rawURL != "" {
