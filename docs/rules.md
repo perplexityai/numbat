@@ -140,13 +140,66 @@ Common CEL operations include:
 | Boolean logic | `a && b`, `a || b`, `!a` |
 | Membership | `value in ["a", "b"]` |
 | String tests | `contains`, `startsWith`, `endsWith`, `matches` |
+| String position/slicing | `indexOf`, `substring(start)`, `substring(start, end)` |
 | List predicates | `exists`, `all`, `exists_one` |
 | List range | `items.slice(start, end)` |
 | Integer indexes | `lists.range(n).exists(i, ...)` |
+| Path normalization | `canonical_path(event.file_path)` |
 | Missing nullable value | `event.exit_code == null` |
 
 `matches` uses RE2 regular expressions. CEL string literals require their own
 escaping; for example, a literal dot is written as `"\\.env"`.
+
+`canonical_path(p)` normalizes path separators, `.`, `..`, and duplicate `/`
+segments. It treats each leading `/proc/<self|thread-self|PID>/root` or
+`/proc/<self|PID>/task/<TID>/root` as `/`. Relative paths remain relative. It
+keeps Windows drive and UNC roots intact. It does not access the filesystem or
+resolve other symbolic links.
+
+For parsed commands, use `canonical_path(argument, command)` with an
+element of `command.arguments`, or `canonical_path(redirect, command)`.
+These overloads retain source quoting and expansion evidence. They normalize
+concrete absolute paths and proven leading home roots, but keep an opaque home
+root's parent traversals unresolved. An unrelated expansion cannot make a
+quoted home prefix active. Additional unresolved expansions are not canceled by
+dot-segment cleaning.
+
+The `posix` dialect treats only `/` as a separator, collapses leading `//`, and
+gives drive-looking prefixes no special meaning. The `powershell` and `cmd`
+dialects retain Windows separator and root handling. PowerShell's leading tilde
+is recognized for shell-owned redirects and explicit file cmdlets (`Add-Content`,
+`Clear-Content`, `Copy-Item`, `Move-Item`, `New-Item`, `Out-File`, `Remove-Item`,
+`Set-Content`), including their module-qualified names. Native executables and
+mutable aliases conservatively receive no provider-path assumption. Other
+relative operands retain an explicit `./` prefix, so cleaning cannot manufacture
+a home or Windows root. Literal
+backslashes in POSIX, quotes, and whitespace remain filename data.
+
+`canonical_path(p, command.dialect)` also accepts a string, but without source
+metadata it cannot prove a symbolic home root or distinguish literal
+metacharacters from expansion. It conservatively leaves those paths unresolved.
+An empty or unknown dialect leaves the operand unchanged. These overloads use
+source syntax, not the scanner's operating system; they do not inspect a
+PowerShell provider's backing filesystem. A POSIX projection alone cannot prove
+Windows filesystem semantics: drive-letter operands under Git Bash/MSYS2 can
+therefore be missed rather than guessed to be absolute. This is a deliberate
+coverage limit; [MSYS2 path handling](https://www.msys2.org/docs/filesystem-paths/)
+can give those operands Windows semantics. PowerShell/CMD projections retain
+drive-root normalization.
+
+Provider-aware tilde handling follows
+PowerShell's [home-path resolution](https://github.com/PowerShell/PowerShell/blob/v7.5.3/src/System.Management.Automation/namespaces/LocationGlobber.cs)
+and [file redirection](https://github.com/PowerShell/PowerShell/blob/v7.5.3/src/System.Management.Automation/engine/runtime/Operations/MiscOps.cs).
+It describes path intent, not proof of a particular provider, runtime expansion,
+or filesystem mutation. The one-argument generic helper is unchanged.
+
+`visudo_edit_path(command.argv)` returns the requested edit file, or `/etc/sudoers`
+for the conventional default. It returns `""` for check, export, help, version,
+or unsupported/invalid arguments. It recognizes exact `visudo` option spellings,
+short clusters, attached/separate file values, and `--`; the last file option
+wins, and one positional file is used only without a file option. Options after
+a positional operand are unsupported because getopt permutation depends on the
+source environment. This helper does not read sudo configuration or include files.
 
 Action types are alternatives, not layers. A recognized shell action is a
 `command.exec`, not both a `tool.call` and a `command.exec`; file and network
