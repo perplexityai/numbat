@@ -60,6 +60,8 @@ const (
 	AgentOpenHands   = "openhands"
 	AgentCrush       = "crush"
 	AgentJunie       = "junie"
+	// AgentMuse is Meta's Muse Code CLI hook source.
+	AgentMuse = "muse"
 )
 
 var agentModelByCLI = map[string]string{
@@ -89,6 +91,7 @@ var agentModelByCLI = map[string]string{
 	AgentOpenHands:   model.AgentOpenHands,
 	AgentCrush:       model.AgentCrush,
 	AgentJunie:       model.AgentJunie,
+	AgentMuse:        model.AgentMuseCode,
 }
 
 var agentList = []string{
@@ -118,6 +121,7 @@ var agentList = []string{
 	AgentOpenHands,
 	AgentCrush,
 	AgentJunie,
+	AgentMuse,
 }
 
 const (
@@ -305,7 +309,7 @@ func ResolveLifecycle(agent, raw string) (Lifecycle, error) {
 			return lc, nil
 		}
 		return "", fmt.Errorf("unknown pi hook event %q", raw)
-	case AgentKimi, AgentQwen, AgentAuggie, AgentGoose, AgentOpenHands:
+	case AgentKimi, AgentQwen, AgentAuggie, AgentGoose, AgentOpenHands, AgentMuse:
 		if lc, ok := resolveClaudeEvent(raw); ok {
 			return lc, nil
 		}
@@ -862,7 +866,7 @@ func CodexDenyResponse(reason string) map[string]any {
 // support numbat enforcement.
 func DenyResponse(agent, reason string) (map[string]any, bool) {
 	switch agent {
-	case AgentClaude, AgentCodex:
+	case AgentClaude, AgentCodex, AgentMuse:
 		return ClaudeDenyResponse(reason), true
 	case AgentCursor:
 		return map[string]any{
@@ -952,7 +956,7 @@ func EnforceEligible(agent, event string, lc Lifecycle) bool {
 		case "pre_read_code", "pre_write_code", "pre_run_command", "pre_mcp_tool_use":
 			return true
 		}
-	case AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie:
+	case AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie, AgentMuse:
 		return lc == LifecyclePreTool
 	}
 	return false
@@ -1141,7 +1145,7 @@ func mapEvent(lc Lifecycle, agent, sourceAgent, eventID string, payload map[stri
 	case LifecycleAssistant, LifecycleStop:
 		ev.EventType = model.EventMessageAssistant
 		switch agent {
-		case AgentClaude, AgentCodex:
+		case AgentClaude, AgentCodex, AgentMuse:
 			ev.SetContent(r.envStr("last_assistant_message", "lastAssistantMessage"), true)
 		case AgentGemini:
 			ev.SetContent(r.envStr("prompt_response", "promptResponse"), true)
@@ -2455,6 +2459,20 @@ func portableToolFamily(agent, name string) string {
 		case "fetch", "web_fetch", "web_search", "sourcegraph", "download":
 			return "web"
 		}
+	case AgentMuse:
+		// Only tool names actually captured in Phase 0 are mapped. Muse also
+		// exposes edit_file, web_fetch, web_search, subagent_*, and internal
+		// bookkeeping tools (submit_reminder_decision) whose input shapes were
+		// never observed live; they stay generic tool.call rather than being
+		// guessed at, per numbat's no-fabrication contract.
+		switch lower {
+		case "bash":
+			return "shell"
+		case "read_file":
+			return "read"
+		case "write_file":
+			return "write"
+		}
 	}
 	return ""
 }
@@ -2462,7 +2480,7 @@ func portableToolFamily(agent, name string) string {
 func classifyPortableTool(ev *model.Event, r *resolver, post bool) {
 	name := r.toolName()
 	switch r.agent {
-	case AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush:
+	case AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentMuse:
 		// Continue with the agent-scoped portable vocabulary below.
 	default:
 		if post {

@@ -609,6 +609,8 @@ func settingsPathFor(agent, home string) string {
 		return hook.CrushConfigPath(home)
 	case hook.AgentJunie:
 		return hook.JunieConfigPath(home)
+	case hook.AgentMuse:
+		return hook.MuseUserSettingsPath(home)
 	default:
 		return ""
 	}

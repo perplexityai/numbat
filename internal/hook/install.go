@@ -192,7 +192,7 @@ func AgentSupportsHooks(agent string) bool {
 	case AgentClaude, AgentCursor, AgentWindsurf, AgentCopilot, AgentCodex,
 		AgentVSCode, AgentGemini, AgentOpenCode, AgentOpenClaw, AgentAntigravity, AgentFactory, AgentGrok,
 		AgentDevin, AgentHermes, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro,
-		AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie:
+		AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie, AgentMuse:
 		return true
 	default:
 		return false
@@ -205,7 +205,7 @@ func AgentSupportsEnforcement(agent string) bool {
 	switch agent {
 	case AgentClaude, AgentCodex, AgentCursor, AgentCopilot, AgentVSCode, AgentGemini,
 		AgentWindsurf, AgentAntigravity, AgentFactory, AgentGrok, AgentDevin, AgentHermes,
-		AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie:
+		AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie, AgentMuse:
 		return true
 	default:
 		return false
@@ -214,7 +214,7 @@ func AgentSupportsEnforcement(agent string) bool {
 
 // EnforceAgentUsage is the stable CLI list of enforce-capable install targets.
 func EnforceAgentUsage() string {
-	return "claude|codex|cursor|copilot|vscode|gemini|windsurf|antigravity|factory|grok|devin|hermes|openclaw|pi|kimi|qwen|cline|amp|auggie|kiro|goose|kilo|openhands|crush|junie"
+	return "claude|codex|cursor|copilot|vscode|gemini|windsurf|antigravity|factory|grok|devin|hermes|openclaw|pi|kimi|qwen|cline|amp|auggie|kiro|goose|kilo|openhands|crush|junie|muse"
 }
 
 // InstallAgentNames returns the distinct hook configurations targeted by
@@ -851,6 +851,9 @@ func InstallWithOptions(agent, path, binary string, opts InstallOptions) (Instal
 	if agent == AgentJunie {
 		return installJunieWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
 	}
+	if agent == AgentMuse {
+		return installMuseWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
+	}
 	sf, err := readSettings(path)
 	if err != nil {
 		return rep, err
@@ -991,6 +994,9 @@ func Uninstall(agent, path string) (InstallReport, error) {
 	if agent == AgentJunie {
 		return uninstallJunie(path)
 	}
+	if agent == AgentMuse {
+		return uninstallMuse(path)
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		rep.Message = "no settings file; nothing to remove"
 		return rep, nil
@@ -1129,6 +1135,9 @@ func Status(agent, path string) InstallReport {
 	if agent == AgentJunie {
 		return statusJunie(path)
 	}
+	if agent == AgentMuse {
+		return statusMuse(path)
+	}
 	sf, err := readSettings(path)
 	if err != nil {
 		rep.Message = err.Error()
@@ -1188,7 +1197,7 @@ func StatusManagedErr(agent, path string) (InstallReport, error) {
 // configReadable parses each agent's config format. Missing files are valid.
 func configReadable(agent, path string) error {
 	switch agent {
-	case AgentClaude, AgentCodex:
+	case AgentClaude, AgentCodex, AgentMuse:
 		_, err := readSettings(path)
 		return err
 	case AgentFactory:

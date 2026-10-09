@@ -46,7 +46,7 @@ func TestGenericHookInputPreviews(t *testing.T) {
 				{"pi", AgentPi, LifecyclePreTool, map[string]any{"toolName": "plugin", "input": args}},
 				{"kilo", AgentKilo, LifecyclePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}},
 			}
-			for _, agent := range []string{AgentOpenClaw, AgentKimi, AgentQwen, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentOpenHands, AgentCrush, AgentJunie} {
+			for _, agent := range []string{AgentOpenClaw, AgentKimi, AgentQwen, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentOpenHands, AgentCrush, AgentJunie, AgentMuse} {
 				cases = append(cases, testCase{agent, agent, LifecyclePreTool, map[string]any{"tool_name": "plugin", "tool_input": args}})
 			}
 			covered := make(map[string]bool)
