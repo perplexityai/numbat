@@ -1,12 +1,6 @@
 package main
 
-// Behavioral checks for the machine-readable `rules test --json` result
-// contract. The contract binds each observed input line to one of five
-// distinct classes so a downstream consumer (e.g. Guardian) never has to
-// parse human CLI text. These tests were authored before the feature
-// implementation as RED-first checks: they must fail on the current main
-// (no --json flag) and pass after the smallest supported implementation
-// lands. Every class is exercised end-to-end through runCLI.
+// Behavioral checks for the machine-readable `rules test --json` contract.
 
 import (
 	"encoding/json"
@@ -24,15 +18,16 @@ import (
 // is set. Reading it back through this struct is the machine-readable
 // contract downstream consumers rely on.
 type jsonRulesTestEvent struct {
-	Type            string                    `json:"type"`
-	SchemaVersion   string                    `json:"schema_version"`
-	FixtureLine     int                       `json:"fixture_line"`
-	EventID         string                    `json:"event_id,omitempty"`
-	Status          string                    `json:"status"`
-	Findings        []jsonRulesTestFinding    `json:"findings,omitempty"`
-	EvaluatorErrors []jsonRulesTestEvalError  `json:"evaluator_errors,omitempty"`
-	Coverage        *jsonRulesTestCoverage    `json:"coverage,omitempty"`
-	Error           *jsonRulesTestErrorDetail `json:"error,omitempty"`
+	Type             string                    `json:"type"`
+	SchemaVersion    string                    `json:"schema_version"`
+	FixtureLine      int                       `json:"fixture_line"`
+	EventID          string                    `json:"event_id,omitempty"`
+	Status           string                    `json:"status"`
+	Findings         []jsonRulesTestFinding    `json:"findings,omitempty"`
+	EnforcementRules []jsonRulesTestFinding    `json:"enforcement_rules,omitempty"`
+	EvaluatorErrors  []jsonRulesTestEvalError  `json:"evaluator_errors,omitempty"`
+	Coverage         *jsonRulesTestCoverage    `json:"coverage,omitempty"`
+	Error            *jsonRulesTestErrorDetail `json:"error,omitempty"`
 }
 
 type jsonRulesTestFinding struct {
@@ -89,6 +84,9 @@ func parseJSONStream(t *testing.T, out string) ([]jsonRulesTestEvent, jsonRulesT
 		if line == "" {
 			continue
 		}
+		if sawSummary {
+			t.Fatalf("line %d follows terminal summary", i+1)
+		}
 		var probe struct {
 			Type string `json:"type"`
 		}
@@ -101,10 +99,16 @@ func parseJSONStream(t *testing.T, out string) ([]jsonRulesTestEvent, jsonRulesT
 			if err := json.Unmarshal([]byte(line), &ev); err != nil {
 				t.Fatalf("line %d event_result decode: %v", i+1, err)
 			}
+			if ev.SchemaVersion != rulesTestResultSchemaVersion {
+				t.Fatalf("line %d schema_version=%q", i+1, ev.SchemaVersion)
+			}
 			events = append(events, ev)
 		case "summary":
 			if err := json.Unmarshal([]byte(line), &summary); err != nil {
 				t.Fatalf("line %d summary decode: %v", i+1, err)
+			}
+			if summary.SchemaVersion != rulesTestResultSchemaVersion {
+				t.Fatalf("line %d schema_version=%q", i+1, summary.SchemaVersion)
 			}
 			sawSummary = true
 		default:
@@ -215,9 +219,9 @@ func TestRulesTestJSONMalformedInputClass(t *testing.T) {
 	// Line 1 is a valid benign event; line 2 is not valid JSON. Line 3 would
 	// be valid but must never be reported: the stream stops at the malformed
 	// input.
-	body := `{"schema_version":"0.3.0","event_id":"ok1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/main.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"0.4.0","event_id":"ok1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/main.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 {not valid json
-{"schema_version":"0.3.0","event_id":"ok2","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/other.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":3}}
+{"schema_version":"0.4.0","event_id":"ok2","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/other.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":3}}
 `
 	fixture := writeTempFile(t, "malformed.ndjson", body)
 	out, _, code := runCLI("rules", "test", "--json", "--fixture", fixture)
@@ -263,7 +267,7 @@ func TestRulesTestJSONEvaluatorFailureClass(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ruleDir, "boom.yaml"), []byte(ruleYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"schema_version":"0.3.0","event_id":"boom1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"hi","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"0.4.0","event_id":"boom1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"hi","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `
 	fixture := writeTempFile(t, "eval_fail.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", ruleDir, "--fixture", fixture)
@@ -304,8 +308,7 @@ func TestRulesTestJSONEvaluatorFailureClass(t *testing.T) {
 // TestRulesTestJSONCoverageHealthClass: an event whose command exceeds the
 // shell parser's bounded coverage (>64 statements) reports coverage.shell_parse
 // = "unusable" and completes without a match, distinct from a clean no-match.
-// This is the coverage/evaluation-health signal Guardian needs to avoid
-// inferring "clean" from a bounded-analysis skip.
+// Consumers must not infer "clean" from a bounded-analysis skip.
 func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 	// Build a command with 100 chained statements to exceed maxShellCommands=64.
 	var parts []string
@@ -313,7 +316,7 @@ func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 		parts = append(parts, "true")
 	}
 	command := strings.Join(parts, "; ")
-	body := `{"schema_version":"0.3.0","event_id":"cov1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":` + mustJSONString(command) + `,"confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"0.4.0","event_id":"cov1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":` + mustJSONString(command) + `,"confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `
 	fixture := writeTempFile(t, "coverage.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--fixture", fixture)
@@ -360,7 +363,7 @@ func TestRulesTestJSONEnforcementEligibleFlag(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ruleDir, "enf.yaml"), []byte(ruleYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"schema_version":"0.3.0","event_id":"enf1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/tmp/target","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"0.4.0","event_id":"enf1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/tmp/target","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `
 	fixture := writeTempFile(t, "enf.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", ruleDir, "--fixture", fixture)
@@ -385,8 +388,7 @@ func TestRulesTestJSONEnforcementEligibleFlag(t *testing.T) {
 // TestRulesTestJSONAssertionOutcome: --expect-none against a positive fixture
 // with --json completes evaluation (summary.status=completed) but reports
 // assertion_outcome=failed and returns exit 1. This is the "completed
-// evaluation with failed assertion" case S02a called out — distinct from
-// fixture-processing failure.
+// evaluation with failed assertion", distinct from fixture-processing failure.
 func TestRulesTestJSONAssertionOutcome(t *testing.T) {
 	out, errb, code := runCLI("rules", "test", "--json", "--fixture", "testdata/secrets_fixture.ndjson", "--expect-none")
 	if code != 1 {
@@ -453,7 +455,7 @@ func TestRulesTestJSONMalformedInputValidateKind(t *testing.T) {
 	tmp := t.TempDir()
 	fx := filepath.Join(tmp, "validate.ndjson")
 	// Structurally valid JSON, but event_type is unknown so Validate() rejects.
-	body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"v1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"WRONG_TYPE\",\"file_path\":\"/x\",\"confidence\":\"high\",\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"v1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"WRONG_TYPE\",\"file_path\":\"/x\",\"confidence\":\"high\",\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -489,7 +491,7 @@ func TestRulesTestJSONScanErrorEmitsSummary(t *testing.T) {
 	// bump the implementation might apply. Any well-formed but oversized
 	// event exercises the same failure path.
 	huge := strings.Repeat("A", 9*1024*1024)
-	body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"huge\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"file.read\",\"file_path\":\"/x\",\"confidence\":\"high\",\"tags\":[" + mustJSONString(huge) + "],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"huge\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"file.read\",\"file_path\":\"/x\",\"confidence\":\"high\",\"tags\":[" + mustJSONString(huge) + "],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -564,7 +566,7 @@ sequence:
 		t.Fatalf("write seq.yaml: %v", err)
 	}
 	fx := filepath.Join(tmp, "both.ndjson")
-	body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"b1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"echo hi\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"b1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"echo hi\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -623,7 +625,7 @@ func TestRulesTestJSONCountIdentities(t *testing.T) {
 			}
 		}
 		fx := filepath.Join(tmp, "one.ndjson")
-		body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+		body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 		if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 			t.Fatalf("write: %v", err)
 		}
@@ -668,7 +670,7 @@ expr: 'event.event_type == "file.read" && event.tags[10] == "x"'
 			t.Fatalf("write: %v", err)
 		}
 		fx := filepath.Join(tmp, "pair.ndjson")
-		body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"p1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"file.read\",\"file_path\":\"/x\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+		body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"p1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"file.read\",\"file_path\":\"/x\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 		if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 			t.Fatalf("write fixture: %v", err)
 		}
@@ -709,8 +711,8 @@ sequence:
 			t.Fatalf("write: %v", err)
 		}
 		fx := filepath.Join(tmp, "chain.ndjson")
-		body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n" +
-			"{\"schema_version\":\"0.3.0\",\"event_id\":\"e2\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"pwd\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":2}}\n"
+		body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n" +
+			"{\"schema_version\":\"0.4.0\",\"event_id\":\"e2\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"pwd\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":2}}\n"
 		if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 			t.Fatalf("write fixture: %v", err)
 		}
@@ -773,8 +775,7 @@ func runRulesTestJSONForTest(t *testing.T, rulesDir, fixturePath string, stdout,
 // TestRulesTestJSONDeliveryFailureOnEventResult asserts that a stdout write
 // failure while emitting the FIRST event_result returns a non-zero exit code
 // (rulesTestJSONDeliveryExitCode), reports the error on stderr, and does not
-// silently succeed. This closes the class where a Guardian-side reader sees
-// zero events and mis-infers a clean no-match.
+// silently succeed.
 func TestRulesTestJSONDeliveryFailureOnEventResult(t *testing.T) {
 	tmp := t.TempDir()
 	rulesDir := filepath.Join(tmp, "rules")
@@ -791,7 +792,7 @@ expr: 'event.event_type == "command.exec"'
 		t.Fatalf("write: %v", err)
 	}
 	fx := filepath.Join(tmp, "one.ndjson")
-	body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -826,7 +827,7 @@ expr: 'event.event_type == "command.exec"'
 		t.Fatalf("write: %v", err)
 	}
 	fx := filepath.Join(tmp, "one.ndjson")
-	body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -874,7 +875,7 @@ func TestRulesTestJSONCompiledCLIDevFull(t *testing.T) {
 		t.Fatalf("build numbat: %v\n%s", err, out)
 	}
 	fx := filepath.Join(t.TempDir(), "fx.ndjson")
-	body := "{\"schema_version\":\"0.3.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"0.4.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}

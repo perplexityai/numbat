@@ -228,6 +228,7 @@ record stream; ship it with the fleet's existing log forwarder, EDR, or OS
 retention tooling. Where the host has no such shipper, `numbat ship` is an
 optional native forwarder that tails that file and
 delivers eligible retained records at-least-once to an HTTP endpoint while their
-input segments remain available; records larger than 8 MiB are skipped. See
-[cli.md](cli.md#ship) for the complete limits. Use file-only hook output with
+input segments remain available. Records larger than 8 MiB or individually
+rejected with HTTP `413` are logged and skipped. See [cli.md](cli.md#ship) for
+the complete limits. Use file-only hook output with
 `ship` so the same record is not also sent through direct HTTP.

@@ -163,6 +163,199 @@ func TestShipZeroLossAcrossOutage(t *testing.T) {
 	}
 }
 
+func TestShipSplitsRejectedBatchAtRecordBoundaries(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := inputPath + ".ship-state"
+	size := writeSpool(t, inputPath, "split", 5)
+	want, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.SplitAfter(want, []byte{'\n'})
+	maxRequestBytes := len(lines[0]) + len(lines[1])
+
+	var mu sync.Mutex
+	var attempts [][]byte
+	var accepted bytes.Buffer
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		mu.Lock()
+		attempts = append(attempts, bytes.Clone(body))
+		if len(body) <= maxRequestBytes {
+			_, _ = accepted.Write(body)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	defer srv.Close()
+
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(srv.URL), io.Discard)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if cursor.checkpoint.Offset != size {
+		t.Fatalf("offset=%d, want %d", cursor.checkpoint.Offset, size)
+	}
+	restored, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.checkpoint.Offset != size {
+		t.Fatalf("persisted offset=%d, want %d", restored.checkpoint.Offset, size)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attempts) < 3 {
+		t.Fatalf("requests=%d, want an initial rejection and smaller retries", len(attempts))
+	}
+	if !bytes.Equal(attempts[0], want) {
+		t.Fatalf("initial request changed bytes:\n got %q\nwant %q", attempts[0], want)
+	}
+	for _, body := range attempts {
+		if len(body) == 0 || body[len(body)-1] != '\n' {
+			t.Fatalf("request does not end at an NDJSON boundary: %q", body)
+		}
+		for _, line := range bytes.Split(bytes.TrimSuffix(body, []byte{'\n'}), []byte{'\n'}) {
+			if !json.Valid(line) {
+				t.Fatalf("request contains a partial record: %q", body)
+			}
+		}
+	}
+	if !bytes.Equal(accepted.Bytes(), want) {
+		t.Fatalf("accepted records changed order or bytes:\n got %q\nwant %q", accepted.Bytes(), want)
+	}
+}
+
+func TestShipSkipsSingleRejectedRecord(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := inputPath + ".ship-state"
+	prefix := []byte(`{"event_id":"before"}` + "\n")
+	rejected := []byte(fmt.Sprintf(`{"event_id":"large","pad":"%s"}`+"\n", strings.Repeat("x", 256)))
+	suffix := []byte(`{"event_id":"after"}` + "\n")
+	input := bytes.Join([][]byte{prefix, rejected, suffix}, nil)
+	appendRaw(t, inputPath, input)
+
+	var attempts atomic.Int64
+	var mu sync.Mutex
+	var accepted bytes.Buffer
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		attempts.Add(1)
+		if len(body) > len(prefix) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		mu.Lock()
+		_, _ = accepted.Write(body)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	cursor, err := drainAvailable(context.Background(), inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(srv.URL), &logs)
+	if err != nil || cursor.checkpoint.Offset != int64(len(input)) {
+		t.Fatalf("drain: offset=%d want=%d err=%v", cursor.checkpoint.Offset, len(input), err)
+	}
+	restored, err := readShipCursor(statePath, testShipDestination)
+	if err != nil || restored.checkpoint.Offset != int64(len(input)) {
+		t.Fatalf("persisted offset=%d want=%d err=%v", restored.checkpoint.Offset, len(input), err)
+	}
+	for _, detail := range []string{inputPath, "HTTP 413", fmt.Sprintf("%d-byte", len(rejected)), fmt.Sprintf("offset %d", len(prefix)), "skipped"} {
+		if !strings.Contains(logs.String(), detail) {
+			t.Fatalf("skip diagnostic lacks %q: %s", detail, &logs)
+		}
+	}
+	attempted := attempts.Load()
+	if _, err := drainAvailable(context.Background(), inputPath, statePath, restored, maxShipBatchBytes, newSinkFactory(srv.URL), &logs); err != nil || attempts.Load() != attempted {
+		t.Fatalf("restart retried checkpointed records: requests=%d want=%d err=%v", attempts.Load(), attempted, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := bytes.Join([][]byte{prefix, suffix}, nil); !bytes.Equal(accepted.Bytes(), want) {
+		t.Fatalf("accepted=%q, want prefix and suffix %q", accepted.Bytes(), want)
+	}
+}
+
+func TestReadShipBatchRespectsByteLimit(t *testing.T) {
+	inputPath := filepath.Join(t.TempDir(), "records.ndjson")
+	lines := [][]byte{
+		[]byte(`{"event_id":"before"}` + "\n"),
+		[]byte(`{"event_id":"larger-than-batch-limit"}` + "\n"),
+		[]byte(`{"event_id":"after"}` + "\n"),
+	}
+	appendRaw(t, inputPath, bytes.Join(lines, nil))
+	checkpoint := newTestShipCursor().checkpoint
+	for _, want := range lines {
+		batch, err := readShipBatch(inputPath, checkpoint, int64(len(lines[0])+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(batch.blob, want) || batch.n != int64(len(want)) {
+			t.Fatalf("batch=%q bytes=%d, want single intact record %q", batch.blob, batch.n, want)
+		}
+		checkpoint = newShipCheckpoint(testShipDestination, batch.fileID, checkpoint.Offset+batch.n, batch.blob)
+	}
+}
+
+func TestShipStopsBetweenSplitRequests(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := inputPath + ".ship-state"
+	size := writeSpool(t, inputPath, "cancel", 4)
+
+	var attempts atomic.Int64
+	var acceptedBytes atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, err := io.Copy(io.Discard, r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		attempts.Add(1)
+		if n == size {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		acceptedBytes.Add(n)
+		cancel()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(srv.URL), io.Discard)
+	if !errors.Is(err, context.Canceled) || attempts.Load() != 2 {
+		t.Fatalf("requests=%d err=%v, want cancellation after the first split request", attempts.Load(), err)
+	}
+	if cursor.checkpoint.Offset != acceptedBytes.Load() || cursor.checkpoint.Offset <= 0 || cursor.checkpoint.Offset >= size {
+		t.Fatalf("offset=%d accepted=%d, want acknowledged proper prefix of %d", cursor.checkpoint.Offset, acceptedBytes.Load(), size)
+	}
+	restored, err := readShipCursor(statePath, testShipDestination)
+	if err != nil || restored.checkpoint.Offset != cursor.checkpoint.Offset {
+		t.Fatalf("in-flight success not persisted: offset=%d want=%d err=%v", restored.checkpoint.Offset, cursor.checkpoint.Offset, err)
+	}
+}
+
 func TestShipDetectsRotation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -623,7 +816,7 @@ func TestShipDrainsImmediatelyOnStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
 	go func() {
-		done <- runShipLoop(ctx, inputPath, statePath, testShipDestination, time.Hour, newSinkFactory(sink.srv.URL), io.Discard)
+		done <- runShipLoop(ctx, inputPath, statePath, testShipDestination, time.Hour, maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for sink.uniqueDelivered() != 5 {

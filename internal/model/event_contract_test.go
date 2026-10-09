@@ -203,7 +203,7 @@ func TestValidateAcceptsToolResultToolName(t *testing.T) {
 // The additive fields are registered on the CEL event view so a rule can
 // reference them at load time without an unknown-field error.
 func TestAdditiveFieldsAreInCELFieldSet(t *testing.T) {
-	for _, f := range []string{"duration_ms", "approval_required", "approval_decision", "approval_reason", "diff_sha256", "diff_bytes", "sub_agent", "content", "content_bytes", "content_truncated", "content_preview_truncated"} {
+	for _, f := range []string{"duration_ms", "approval_required", "approval_decision", "approval_reason", "diff_sha256", "diff_bytes", "session_tree_id", "parent_session_id", "sub_agent", "sub_agent_id", "content", "content_bytes", "content_truncated", "content_preview_truncated"} {
 		if !IsCELField(f) {
 			t.Errorf("event field %q not registered for CEL", f)
 		}

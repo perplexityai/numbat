@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactKimiWire is Kimi Code's persisted per-agent journal. The first line
@@ -292,6 +293,7 @@ func classifyKimiTool(ev *model.Event, name string, raw json.RawMessage) {
 		ev.Tags = []string{model.TagNetwork}
 	default:
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(raw)
 	}
 }
 

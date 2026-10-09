@@ -110,13 +110,81 @@ type codexLine struct {
 // codexSessionMeta is the first-line metadata: thread identity, fork lineage,
 // working directory, and runtime details. Only fields numbat uses are decoded.
 type codexSessionMeta struct {
-	ID            string `json:"id"`
-	ForkedFromID  string `json:"forked_from_id"`
-	Timestamp     string `json:"timestamp"`
-	Cwd           string `json:"cwd"`
-	Originator    string `json:"originator"`
-	CliVersion    string `json:"cli_version"`
-	ModelProvider string `json:"model_provider"`
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	ForkedFromID      string          `json:"forked_from_id"`
+	ParentThreadID    string          `json:"parent_thread_id"`
+	Timestamp         string          `json:"timestamp"`
+	Cwd               string          `json:"cwd"`
+	Originator        string          `json:"originator"`
+	CliVersion        string          `json:"cli_version"`
+	ModelProvider     string          `json:"model_provider"`
+	ThreadSource      string          `json:"thread_source"`
+	AgentPath         string          `json:"agent_path"`
+	AgentNickname     string          `json:"agent_nickname"`
+	AgentRole         string          `json:"agent_role"`
+	AgentType         string          `json:"agent_type"`
+	MultiAgentVersion string          `json:"multi_agent_version"`
+	Source            json.RawMessage `json:"source"`
+}
+
+type codexThreadSpawnSource struct {
+	ParentThreadID string `json:"parent_thread_id"`
+	Depth          *int   `json:"depth"`
+	AgentPath      string `json:"agent_path"`
+	AgentNickname  string `json:"agent_nickname"`
+	AgentRole      string `json:"agent_role"`
+	AgentType      string `json:"agent_type"`
+}
+
+// subagentContext reads the tagged SessionSource union without requiring its
+// shape. Ordinary sessions encode source as a string; thread-spawned children
+// use source.subagent.thread_spawn. Unknown variants remain valid metadata.
+func (m codexSessionMeta) subagentContext() (bool, string, codexThreadSpawnSource) {
+	fallback := strings.EqualFold(m.ThreadSource, "subagent") || m.ParentThreadID != ""
+	var source struct {
+		Subagent json.RawMessage `json:"subagent"`
+	}
+	if len(m.Source) == 0 || json.Unmarshal(m.Source, &source) != nil {
+		return fallback, "", codexThreadSpawnSource{}
+	}
+	raw := bytes.TrimSpace(source.Subagent)
+	isSubagent := len(raw) > 0 && !bytes.Equal(raw, []byte("null"))
+	if !isSubagent {
+		return fallback, "", codexThreadSpawnSource{}
+	}
+	var kind string
+	if json.Unmarshal(raw, &kind) == nil {
+		return true, kind, codexThreadSpawnSource{}
+	}
+	var tagged struct {
+		ThreadSpawn *codexThreadSpawnSource `json:"thread_spawn"`
+		Other       string                  `json:"other"`
+	}
+	if json.Unmarshal(raw, &tagged) != nil {
+		return true, "", codexThreadSpawnSource{}
+	}
+	if tagged.ThreadSpawn == nil {
+		return true, tagged.Other, codexThreadSpawnSource{}
+	}
+	return true, "", *tagged.ThreadSpawn
+}
+
+func (m codexSessionMeta) relationshipContext() (treeID, parentID, subAgentID, subAgent string) {
+	if m.SessionID != "" && m.SessionID != m.ID {
+		treeID = m.SessionID
+	}
+	isSubagent, kind, spawn := m.subagentContext()
+	if !isSubagent {
+		return treeID, "", "", ""
+	}
+	parentID = firstNonEmpty(m.ParentThreadID, spawn.ParentThreadID)
+	subAgentID = m.ID
+	subAgent = firstNonEmpty(
+		m.AgentRole, m.AgentType, spawn.AgentRole, spawn.AgentType,
+		m.AgentPath, spawn.AgentPath, kind, m.AgentNickname, spawn.AgentNickname,
+	)
+	return treeID, parentID, subAgentID, subAgent
 }
 
 func codexUUID(id string) ([16]byte, bool) {

@@ -7,7 +7,9 @@ record wire schema (`model.SchemaVersion`) because it describes a CLI-adjacent
 direct-evaluator surface, not a record shape emitted by the pipeline.
 
 - Every line is one JSON object.
-- One `event_result` object per fixture line that reached evaluation.
+- One `event_result` object per processed nonblank fixture line, including a
+  line that fails decoding or validation. A scanner failure also emits a
+  result attributed to the next unread line.
 - Exactly one terminal `summary` object.
 - Stdout carries only these objects; logs, human-facing messages, and errors
   go to stderr.
@@ -19,7 +21,9 @@ Exit codes:
   `summary` object.
 - `1`: `summary.status == "partial"` OR a failed assertion, delivered as a
   well-formed NDJSON stream terminated by exactly one `summary` object.
-  This is a successfully delivered result, not a delivery failure.
+  This is a successfully delivered result, not a delivery failure. Fixture-open
+  and rule-loading failures also retain the existing CLI exit code 1, but
+  occur before the stream starts: stdout is empty and stderr has a diagnostic.
 - `2`: one of two cases that share this exit code and are distinguished
   by looking at stdout and stderr:
   - Handled JSON delivery failure. A stdout write for an `event_result`
@@ -28,12 +32,12 @@ Exit codes:
     `write rules-test-result:` diagnostic to stderr, and short-circuited
     the remainder of the stream. Any partial stream on stdout is not
     terminated by a `summary`.
-  - Usage or setup failure raised before any stream is produced. For
+  - Usage failure raised before any stream is produced. For
     example, `rules test --json` without `--fixture` prints a usage
     diagnostic to stderr and exits 2 with empty stdout.
 
 Exit code alone is not sufficient to identify delivery failure. A
-usage/setup failure exits 2 before any stream, and abnormal process
+usage failure exits 2 before any stream, setup failures can exit 1, and abnormal process
 termination (SIGPIPE on a real broken pipe, SIGKILL, panic, host death)
 may end the process before the handled exit-2 path runs and before a
 terminal `summary` is written - the observed exit status in that case is
@@ -68,6 +72,15 @@ from the exit code alone.
       "via": "engine"
     }
   ],
+  "enforcement_rules": [
+    {
+      "rule_id": "secrets.agent_read_env",
+      "rule_version": "1.0",
+      "severity": "high",
+      "enforcement_eligible": true,
+      "via": "engine"
+    }
+  ],
   "coverage": {"shell_parse": "ok", "sequence_tracker_active": false}
 }
 ```
@@ -83,10 +96,11 @@ failure or sequence-tracker error promotes the event to
 - `event_id` (string, optional): copied from the decoded event; absent when
   decoding failed before an id was known.
 - `status` (string enum, required): one of
-  - `completed`: the event was evaluated and any matches appear in
-    `findings`. `findings: []` (or the field omitted) is the only legitimate
-    representation of a clean no-match. A downstream consumer must not
-    infer "no match" from a missing `event_result`.
+  - `completed`: the event was evaluated. `findings: []` (or the field omitted) means no detection
+    finding was emitted, not necessarily no rule matched: sequence finding
+    quotas can suppress findings. Use `enforcement_rules` for uncapped
+    enforcement matches. A missing result or incomplete coverage must never
+    be interpreted as a clean no-match.
   - `malformed_input`: the fixture line failed JSON decode or event
     validation, or the input stream itself could not be scanned (line too
     long, IO error). `error.kind` is `decode`, `validate`, or `scan`.
@@ -101,7 +115,9 @@ failure or sequence-tracker error promotes the event to
     `error.kind` names the failure that stopped the fixture (`sequence`
     when the tracker failed, otherwise `evaluation`). Fixture processing
     stops.
-- `findings` (array, optional): one entry per matching rule.
+- `findings` (array, optional): emitted detection findings, subject to each
+  sequence rule's `max_matches` quota (default 1 per rule and partition).
+  Omitted or empty means no emitted finding, not proof of a clean no-match.
   - `rule_id` (string, required)
   - `rule_version` (string, required)
   - `severity` (string, optional): the compiled rule's declared severity.
@@ -112,19 +128,42 @@ failure or sequence-tracker error promotes the event to
   - `via` (string enum, required): `engine` for a single-event evaluation,
     `sequence` for a completed sequence chain. Sequence findings cite the
     event that terminated the chain.
+- `enforcement_rules` (array, optional): independently proven enforce-eligible
+  matches for this event, not limited by sequence finding quotas. Entries have
+  the same fields as `findings`, with `enforcement_eligible` always true. A rule
+  may appear in both arrays; this is not an additional detection finding.
+  Only the event completing a sequence receives its enforcement match.
+  These entries survive unrelated rule/step errors, just as clean matches
+  do in the live evaluator. Omitted or empty means no eligible match was
+  proven; it does not prove complete coverage, a clean run, or a host decision.
+  This offline command does not apply host lifecycle/mode/output gates and
+  never requests or proves host blocking. Consumers must also inspect status,
+  errors, coverage and the terminal summary; they must not treat a partial run
+  as completed simply because an independent eligible rule matched.
 - `evaluator_errors` (array, optional): named rule failures for the event.
   - `rule_id` (string, optional): missing when the failure was not
     attributable to one rule (for example, a sequence tracker error).
-  - `message` (string, required): raw error text; treat as diagnostic only.
+  - `message` (string, required): safe rule-failure diagnostic, not raw CEL
+    error text or input content; treat as diagnostic only.
 - `coverage` (object, optional):
   - `shell_parse` (string enum, required): `ok`, `degraded`, or `unusable`.
-    `unusable` means rules that read `shell_commands` were skipped for the
-    event; a consumer must not infer a clean no-match in that case.
+    This describes the stateless engine's shell analysis, not aggregate
+    sequence-analysis health. `ok` also covers cases where no stateless rule
+    needed shell analysis. `unusable` means stateless rules that read
+    `shell_commands` were skipped; a consumer must not infer a clean no-match.
+    Sequence-analysis failures are reported in `evaluator_errors` and `error`
+    and can coexist with `shell_parse: "ok"`.
+    Unlike the legacy tab-separated mode, a stateless shell-analysis error
+    alone does not make the JSON event fail or change its exit status.
+    Assertions count emitted findings, not coverage: `--expect-none` can pass
+    with unusable stateless shell analysis. Consumers must inspect coverage
+    independently of assertion success.
   - `sequence_tracker_active` (bool, required): true when the compiled
     catalog contains at least one sequence rule (i.e. a window tracker
-    exists for this run). The tracker is only asked to observe events that
-    carry a `session_id`; a `true` value does not by itself imply this
-    event was folded into a window.
+    exists for this run). Live events require a `session_id` for correlation.
+    Artifact events require `evidence.local_path` and can correlate without
+    a `session_id`, within the same artifact and other partition boundaries.
+    A `true` value does not by itself imply this event was folded into a window.
 
 - `error` (object, optional): populated when `status` is not `completed`.
   - `kind` (string enum, required): `decode`, `validate`, `scan`,
@@ -143,10 +182,8 @@ failure or sequence-tracker error promotes the event to
   "rules_loaded": 51,
   "enforce_eligible_rules": 24,
   "assertion_outcome": "unchecked",
-  "assertion_missing": null,
-  "stopped_at": null,
   "numbat_version": "dev+abc123",
-  "record_schema": "0.3.0"
+  "record_schema": "0.4.0"
 }
 ```
 
@@ -163,6 +200,8 @@ failure or sequence-tracker error promotes the event to
   each sequence finding adds to `matches` without adding to
   `events_evaluated`. Consumers must not assert `matches <=
   events_evaluated`.
+  Entries in `enforcement_rules` do not increment this counter or satisfy
+  assertions independently of detection findings.
 - `rules_loaded` (int, required): count of compiled rules in the effective
   catalog.
 - `enforce_eligible_rules` (int, required): count of compiled rules that

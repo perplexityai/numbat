@@ -1519,7 +1519,7 @@ func TestOpenClawStableNativeToolVocabulary(t *testing.T) {
 		`{"type":"toolCall","id":"e","name":"edit","arguments":{"path":"/tmp/edit","oldText":"a","newText":"b"}},` +
 		`{"type":"toolCall","id":"f","name":"web_fetch","arguments":{"url":"https://fetch.example/x"}},` +
 		`{"type":"toolCall","id":"s","name":"web_search","arguments":{"query":"numbat"}},` +
-		`{"type":"toolCall","id":"b","name":"browser","arguments":{"targetUrl":"https://browser.example/x"}},` +
+		`{"type":"toolCall","id":"b","name":"browser","arguments":{"action":"navigate","targetUrl":"https://browser.example/x"}},` +
 		`{"type":"toolCall","id":"bt","name":"browser","arguments":{"action":"tabs"}},` +
 		`{"type":"toolCall","id":"p","name":"plugin_widget","arguments":{}}` +
 		`]}}`
@@ -1539,9 +1539,9 @@ func TestOpenClawStableNativeToolVocabulary(t *testing.T) {
 		{model.EventFileWrite, "/tmp/edit", "", ""},
 		{model.EventNetworkIndicator, "", "https://fetch.example/x", "https://fetch.example/x"},
 		{model.EventNetworkIndicator, "", "", "numbat"},
-		{model.EventNetworkIndicator, "", "https://browser.example/x", "https://browser.example/x"},
-		{model.EventToolCall, "", "", ""},
-		{model.EventToolCall, "", "", ""},
+		{model.EventNetworkIndicator, "", "https://browser.example/x", `{"action":"navigate","targetUrl":"https://browser.example/x"}`},
+		{model.EventToolCall, "", "", `{"action":"tabs"}`},
+		{model.EventToolCall, "", "", `{}`},
 	}
 	for i, expected := range want {
 		ev := res.Events[i]

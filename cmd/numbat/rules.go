@@ -308,8 +308,8 @@ func runRulesList(args []string, stdout, stderr io.Writer) int {
 // events (one model.Event per line) and prints each match as "rule_id\tevent_id".
 // It is the deterministic, offline check that rules fire as intended. With
 // --json the same evaluation emits a machine-readable NDJSON result contract
-// on stdout instead: one event_result per successfully evaluated fixture
-// line plus a terminal summary. See docs/schema/rules-test-result.v1.md.
+// on stdout instead, including input failures and a terminal summary.
+// See docs/schema/rules-test-result.v1.md.
 func runRulesTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
