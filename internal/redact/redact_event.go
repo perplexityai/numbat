@@ -6,8 +6,9 @@ import "github.com/perplexityai/numbat/internal/model"
 // through String and full message content is omitted. It is the shared output
 // guard for event and timeline records.
 //
-// Redaction runs on OUTPUT only: callers evaluate rules against the UNREDACTED
-// event first, then redact for emission, so detection is never affected. String
+// Callers evaluate rules before applying this output guard. Generic argument
+// previews are already sanitized by ToolInputPreview before truncation; typed
+// detection fields remain unredacted until emission. String
 // is nil/empty-safe (empty in, empty out), so an empty field stays empty and
 // omitempty still drops it.
 //

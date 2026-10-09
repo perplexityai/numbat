@@ -3,8 +3,112 @@ package rule
 import (
 	"testing"
 
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
 	"github.com/perplexityai/numbat/internal/model"
 )
+
+func TestCanonicalCommandRootProvenance(t *testing.T) {
+	env, err := newEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := env.CELTypeAdapter()
+	for _, tc := range []struct {
+		name, dialect, value, source, want string
+		expands                            bool
+	}{
+		{"absolute literal", "posix", "/home/dev/x/../.ssh/authorized_keys", "'/home/dev/x/../.ssh/authorized_keys'", "/home/dev/.ssh/authorized_keys", false},
+		{"absolute expanding", "posix", "/home/$OTHER/../dev/.ssh/authorized_keys", `"/home/$OTHER/../dev/.ssh/authorized_keys"`, "/home/$OTHER/../dev/.ssh/authorized_keys", true},
+		{"literal HOME", "posix", "$HOME/x/../.ssh/authorized_keys", "'$HOME/x/../.ssh/authorized_keys'", "./$HOME/x/../.ssh/authorized_keys", false},
+		{"active HOME", "posix", "$HOME/x/../.ssh/authorized_keys", `"$HOME/x/../.ssh/authorized_keys"`, "$HOME/.ssh/authorized_keys", true},
+		{"active braced HOME", "posix", "${HOME}/x/../.ssh/authorized_keys", `${HOME}/x/../.ssh/authorized_keys`, "${HOME}/.ssh/authorized_keys", true},
+		{"HOME parent retained", "posix", "$HOME/../$HOME/.ssh/authorized_keys", "$HOME/../$HOME/.ssh/authorized_keys", "$HOME/../$HOME/.ssh/authorized_keys", true},
+		{"HOME other expansion", "posix", "$HOME/$OTHER/../.ssh/authorized_keys", "$HOME/$OTHER/../.ssh/authorized_keys", "$HOME/$OTHER/../.ssh/authorized_keys", true},
+		{"active tilde", "posix", "~/x/../.ssh/authorized_keys", "~/x/../.ssh/authorized_keys", "~/.ssh/authorized_keys", true},
+		{"tilde parent retained", "posix", "~/../~/.ssh/authorized_keys", "~/../~/.ssh/authorized_keys", "~/../~/.ssh/authorized_keys", true},
+		{"quoted tilde despite expansion", "posix", "~/$OTHER/../.ssh/authorized_keys", `"~/$OTHER/../.ssh/authorized_keys"`, "./~/$OTHER/../.ssh/authorized_keys", true},
+		{"relative root manufacture", "posix", "x/../~/.ssh/authorized_keys", "x/../~/.ssh/authorized_keys", "./x/../~/.ssh/authorized_keys", false},
+		{"POSIX drive recreation", "posix", "C:/../C:/Users/dev/.ssh/authorized_keys", "'C:/../C:/Users/dev/.ssh/authorized_keys'", "./C:/../C:/Users/dev/.ssh/authorized_keys", false},
+		{"PowerShell provider tilde", "powershell", "~/x/../.ssh/authorized_keys", "'~/x/../.ssh/authorized_keys'", "~/.ssh/authorized_keys", false},
+		{"PowerShell active variable", "powershell", `$env:USERPROFILE\x\..\.ssh\authorized_keys`, `"$env:USERPROFILE\x\..\.ssh\authorized_keys"`, "$env:USERPROFILE/.ssh/authorized_keys", true},
+		{"PowerShell escaped variable", "powershell", `$env:USERPROFILE\x\..\.ssh\authorized_keys`, "\"`$env:USERPROFILE\\x\\..\\.ssh\\authorized_keys\"", "./$env:USERPROFILE/x/../.ssh/authorized_keys", false},
+		{"CMD active variable", "cmd", `%USERPROFILE%\x\..\.ssh\authorized_keys`, `"%USERPROFILE%\x\..\.ssh\authorized_keys"`, "%USERPROFILE%/.ssh/authorized_keys", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argument := adapter.NativeToValue(ShellArgument{Value: tc.value, Source: tc.source, Expands: tc.expands})
+			redirect := adapter.NativeToValue(ShellRedirect{Target: tc.value, TargetSource: tc.source, TargetExpands: tc.expands})
+			command := adapter.NativeToValue(ShellCommand{Dialect: tc.dialect, Executable: "Set-Content"})
+			for kind, got := range map[string]ref.Val{
+				"argument": canonicalPathArgumentBinding(argument, command),
+				"redirect": canonicalPathRedirectBinding(redirect, command),
+			} {
+				if got != types.String(tc.want) {
+					t.Errorf("%s = %v, want %q", kind, got, tc.want)
+				}
+			}
+		})
+	}
+	for _, executable := range []string{"tee", "unknown", "cp", `C:\tools\Set-Content`, `Microsoft.PowerShell.Management\Out-File`, `Microsoft.PowerShell.Utility\Set-Content`} {
+		arg := adapter.NativeToValue(ShellArgument{Value: "~/x/../.ssh/authorized_keys", Source: "'~/x/../.ssh/authorized_keys'"})
+		command := adapter.NativeToValue(ShellCommand{Dialect: "powershell", Executable: executable})
+		if got := canonicalPathArgumentBinding(arg, command); got != types.String("./~/x/../.ssh/authorized_keys") {
+			t.Errorf("%s tilde = %v, want unresolved relative path", executable, got)
+		}
+	}
+	for _, executable := range []string{"Set-Content", "Out-File", `Microsoft.PowerShell.Management\Set-Content`, `Microsoft.PowerShell.Utility\Out-File`} {
+		if !powerShellFileCmdlet(executable) {
+			t.Errorf("%s: want recognized file cmdlet", executable)
+		}
+	}
+	for _, binding := range []func(ref.Val, ref.Val) ref.Val{canonicalPathArgumentBinding, canonicalPathRedirectBinding} {
+		if got := binding(types.String("not an operand"), adapter.NativeToValue(ShellCommand{Dialect: "posix"})); !types.IsError(got) {
+			t.Errorf("non-object input = %v, want error", got)
+		}
+		if got := binding(types.String("not an operand"), types.Int(1)); !types.IsError(got) {
+			t.Errorf("non-object command = %v, want error", got)
+		}
+	}
+}
+
+func TestCanonicalPathSourceDialect(t *testing.T) {
+	for _, tc := range []struct {
+		dialect, path, want string
+	}{
+		{"posix", `\etc\sudoers`, `./\etc\sudoers`},
+		{"posix", `/etc/./sudoers`, `/etc/sudoers`},
+		{"posix", `/etc/sudoers `, `/etc/sudoers `},
+		{"posix", `'/etc/sudoers'`, `./'/etc/sudoers'`},
+		{"posix", `//etc/sudoers`, `/etc/sudoers`},
+		{"posix", `C:/../etc/sudoers`, `./C:/../etc/sudoers`},
+		{"posix", `\\?\C:\etc\sudoers`, `./\\?\C:\etc\sudoers`},
+		{"posix", `/proc/self/root/etc/sudoers`, `/etc/sudoers`},
+		{"posix", "", ""},
+		{"powershell", `C:\..\ProgramData\ssh\administrators_authorized_keys`, `C:/ProgramData/ssh/administrators_authorized_keys`},
+		{"cmd", `\\?\C:\Users\dev\.ssh\authorized_keys`, `C:/Users/dev/.ssh/authorized_keys`},
+		{"powershell", `\\server\share\..\keys`, `//server/share/keys`},
+		{"cmd", `\\server\share\..\keys`, `//server/share/keys`},
+		{"posix", `x/../~/.ssh/authorized_keys`, `./x/../~/.ssh/authorized_keys`},
+		{"posix", `$HOME/x/../.ssh/authorized_keys`, `./$HOME/x/../.ssh/authorized_keys`},
+		{"posix", `/home/$OTHER/../dev/.ssh/authorized_keys`, `/home/$OTHER/../dev/.ssh/authorized_keys`},
+		{"", `\etc\sudoers`, `\etc\sudoers`},
+		{"unknown", `/etc/./sudoers`, `/etc/./sudoers`},
+		{"POSIX", `C:/../etc/sudoers`, `C:/../etc/sudoers`},
+	} {
+		t.Run(tc.dialect+"/"+tc.path, func(t *testing.T) {
+			got := canonicalPathDialectBinding(types.String(tc.path), types.String(tc.dialect))
+			if got != types.String(tc.want) {
+				t.Fatalf("canonical_path(%q, %q) = %v, want %q", tc.path, tc.dialect, got, tc.want)
+			}
+		})
+	}
+	if got := canonicalPathDialectBinding(types.Int(1), types.String("posix")); !types.IsError(got) {
+		t.Fatalf("non-string path = %v, want error", got)
+	}
+	if got := canonicalPathDialectBinding(types.String("/etc/sudoers"), types.Int(1)); !types.IsError(got) {
+		t.Fatalf("non-string dialect = %v, want error", got)
+	}
+}
 
 func TestCanonicalPathCollapsesTraversalForFileEvents(t *testing.T) {
 	eng := mustEngine(t, Rule{

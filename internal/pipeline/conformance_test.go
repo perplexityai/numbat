@@ -24,9 +24,12 @@ type canonical struct {
 	SourceType             string
 	ProjectPathHash        string
 	SessionID              string
+	SessionTreeID          string
+	ParentSessionID        string
 	Model                  string
 	ModelProvider          string
 	SubAgent               string
+	SubAgentID             string
 	Title                  string
 	ObservedEventType      string
 	ObservedActor          string
@@ -53,9 +56,12 @@ func project(rec map[string]any) canonical {
 		SourceType:             str(rec["source_type"]),
 		ProjectPathHash:        str(rec["project_path_hash"]),
 		SessionID:              str(rec["session_id"]),
+		SessionTreeID:          str(rec["session_tree_id"]),
+		ParentSessionID:        str(rec["parent_session_id"]),
 		Model:                  str(rec["model"]),
 		ModelProvider:          str(rec["model_provider"]),
 		SubAgent:               str(rec["sub_agent"]),
+		SubAgentID:             str(rec["sub_agent_id"]),
 		Title:                  str(rec["title"]),
 		ObservedEventType:      str(rec["observed_event_type"]),
 		ObservedActor:          str(rec["observed_actor"]),

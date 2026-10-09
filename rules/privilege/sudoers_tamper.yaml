@@ -1,5 +1,5 @@
 id: privilege.sudoers_tamper
-version: "1.4"
+version: "1.6"
 enabled: true
 title: Agent targeted sudoers policy for modification
 description: |-
@@ -16,55 +16,15 @@ expr: |-
     shell_commands.exists(command,
       (
         command.name.matches("(?i)^visudo$") &&
-        !command.argv.exists(arg,
-          arg in ["--check", "--help", "--version", "-h", "-V"] ||
-          arg == "--export" ||
-          arg.startsWith("--export=") ||
-          arg.matches("^-[IOPqs]*c") ||
-          arg.matches("^-[IOPqs]*x")
-        ) &&
-        (
-          (
-            command.argv.slice(1, command.argv.size()).all(arg,
-              arg.matches("^-[IOPqs]+$") ||
-              arg in ["--no-includes", "--owner", "--perms", "--quiet", "--strict"]
-            )
-          ) ||
-          lists.range(command.argv.size()).exists(i,
-            i > 0 &&
-            (
-              (
-                command.argv[i].startsWith("--file=") &&
-                canonical_path(command.argv[i].substring(7)).matches("^/etc/sudoers(\\.d/[^/]+)?$")
-              ) ||
-              (
-                command.argv[i].matches("^-[IOPqs]*f.+$") &&
-                canonical_path(command.argv[i].substring(command.argv[i].indexOf("f") + 1)).matches("^/etc/sudoers(\\.d/[^/]+)?$")
-              ) ||
-              (
-                (command.argv[i] == "--file" || command.argv[i].matches("^-[IOPqs]*f$")) &&
-                i + 1 < command.argv.size() &&
-                canonical_path(command.argv[i + 1]).matches("^/etc/sudoers(\\.d/[^/]+)?$")
-              )
-            )
-          ) ||
-          (
-            command.argv.size() > 1 &&
-            canonical_path(command.argv[command.argv.size() - 1]).matches("^/etc/sudoers(\\.d/[^/]+)?$") &&
-            command.argv.slice(1, command.argv.size() - 1).all(arg,
-              arg.matches("^-[IOPqs]+$") ||
-              arg in ["--no-includes", "--owner", "--perms", "--quiet", "--strict"]
-            )
-          )
-        )
+        canonical_path(visudo_edit_path(command.argv), command.dialect).matches("^/etc/sudoers(\\.d/[^/]+)?$")
       ) ||
       command.redirects.exists(redirect,
         redirect.op in ["write", "append"] &&
-        canonical_path(redirect.target).matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$")
+        canonical_path(redirect.target, command.dialect).matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$")
       ) ||
       lists.range(command.argv.size()).exists(i,
         i > 0 &&
-        canonical_path(command.argv[i]).matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$") &&
+        canonical_path(command.argv[i], command.dialect).matches("(?i)^/etc/sudoers(\\.d/[^/]+)?$") &&
         (
           command.name.matches("(?i)^(rm|truncate|tee)$") ||
           (

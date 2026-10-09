@@ -156,6 +156,51 @@ segments. It treats each leading `/proc/<self|thread-self|PID>/root` or
 keeps Windows drive and UNC roots intact. It does not access the filesystem or
 resolve other symbolic links.
 
+For parsed commands, use `canonical_path(argument, command)` with an
+element of `command.arguments`, or `canonical_path(redirect, command)`.
+These overloads retain source quoting and expansion evidence. They normalize
+concrete absolute paths and proven leading home roots, but keep an opaque home
+root's parent traversals unresolved. An unrelated expansion cannot make a
+quoted home prefix active. Additional unresolved expansions are not canceled by
+dot-segment cleaning.
+
+The `posix` dialect treats only `/` as a separator, collapses leading `//`, and
+gives drive-looking prefixes no special meaning. The `powershell` and `cmd`
+dialects retain Windows separator and root handling. PowerShell's leading tilde
+is recognized for shell-owned redirects and explicit file cmdlets (`Add-Content`,
+`Clear-Content`, `Copy-Item`, `Move-Item`, `New-Item`, `Out-File`, `Remove-Item`,
+`Set-Content`), including their module-qualified names. Native executables and
+mutable aliases conservatively receive no provider-path assumption. Other
+relative operands retain an explicit `./` prefix, so cleaning cannot manufacture
+a home or Windows root. Literal
+backslashes in POSIX, quotes, and whitespace remain filename data.
+
+`canonical_path(p, command.dialect)` also accepts a string, but without source
+metadata it cannot prove a symbolic home root or distinguish literal
+metacharacters from expansion. It conservatively leaves those paths unresolved.
+An empty or unknown dialect leaves the operand unchanged. These overloads use
+source syntax, not the scanner's operating system; they do not inspect a
+PowerShell provider's backing filesystem. A POSIX projection alone cannot prove
+Windows filesystem semantics: drive-letter operands under Git Bash/MSYS2 can
+therefore be missed rather than guessed to be absolute. This is a deliberate
+coverage limit; [MSYS2 path handling](https://www.msys2.org/docs/filesystem-paths/)
+can give those operands Windows semantics. PowerShell/CMD projections retain
+drive-root normalization.
+
+Provider-aware tilde handling follows
+PowerShell's [home-path resolution](https://github.com/PowerShell/PowerShell/blob/v7.5.3/src/System.Management.Automation/namespaces/LocationGlobber.cs)
+and [file redirection](https://github.com/PowerShell/PowerShell/blob/v7.5.3/src/System.Management.Automation/engine/runtime/Operations/MiscOps.cs).
+It describes path intent, not proof of a particular provider, runtime expansion,
+or filesystem mutation. The one-argument generic helper is unchanged.
+
+`visudo_edit_path(command.argv)` returns the requested edit file, or `/etc/sudoers`
+for the conventional default. It returns `""` for check, export, help, version,
+or unsupported/invalid arguments. It recognizes exact `visudo` option spellings,
+short clusters, attached/separate file values, and `--`; the last file option
+wins, and one positional file is used only without a file option. Options after
+a positional operand are unsupported because getopt permutation depends on the
+source environment. This helper does not read sudo configuration or include files.
+
 Action types are alternatives, not layers. A recognized shell action is a
 `command.exec`, not both a `tool.call` and a `command.exec`; file and network
 actions are specialized the same way. `tool.call` is the fallback when numbat
@@ -210,16 +255,23 @@ uses `0`, and `tags` uses an empty list.
 | `event.exit_code` | int|null | `event.file_path` | string |
 | `event.git_branch` | string | `event.mcp_server` | string |
 | `event.mcp_tool` | string | `event.model` | string |
-| `event.model_provider` | string | `event.project_path` | string |
-| `event.tags` | list(string) | `event.session_id` | string |
-| `event.source_agent` | string | `event.source_type` | string |
-| `event.sub_agent` | string | `event.timestamp` | string |
-| `event.tool_call_id` | string | `event.tool_name` | string |
-| `event.url` | string |  |  |
+| `event.model_provider` | string | `event.parent_session_id` | string |
+| `event.project_path` | string | `event.session_id` | string |
+| `event.session_tree_id` | string | `event.source_agent` | string |
+| `event.source_type` | string | `event.sub_agent` | string |
+| `event.sub_agent_id` | string | `event.tags` | list(string) |
+| `event.timestamp` | string | `event.tool_call_id` | string |
+| `event.tool_name` | string | `event.url` | string |
 
-The [event schema](schema/v0.3.0/event-record.schema.json) defines closed values
+The [event schema](schema/v0.4.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and
 `confidence`.
+
+For sub-agent rules, use `session_id` for the active thread and
+`sub_agent_id` for stable child identity. `sub_agent` is display context and
+may be shared by concurrent children. Tree and parent joins are available only
+when the source reports `session_tree_id` or `parent_session_id`; see the [event
+model](event-model.md#session-and-sub-agent-identity).
 
 Use `event.exit_code != null`, not `has(event.exit_code)`. The key is always
 present even when the value is null.
@@ -229,9 +281,10 @@ syntax such as `event.command`.
 
 ### Event-type fields
 
-Context fields such as source, timestamp, project, session, actor, model,
-branch, entrypoint, sub-agent, preview, tags, and confidence are valid on every
-event type. Full `content` fields are valid only on conversation events.
+Context fields such as source, timestamp, project, session, parent/tree,
+actor, model, branch, entrypoint, sub-agent, preview, tags, and confidence are
+valid on every event type. Full `content` fields are valid only on conversation
+events.
 Non-empty action fields follow this compatibility table:
 
 | Event type | Allowed action fields |
@@ -502,7 +555,7 @@ numbat rules test \
 
 Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
-See the [event schema](schema/v0.3.0/event-record.schema.json) for required
+See the [event schema](schema/v0.4.0/event-record.schema.json) for required
 fields.
 
 ## Sequence rules

@@ -41,14 +41,17 @@ type EnforcementDecision struct {
 	Mode     string `json:"mode"`
 	Reason   string `json:"reason"`
 
-	SourceAgent   string `json:"source_agent"`
-	SourceType    string `json:"source_type"`
-	SessionID     string `json:"session_id,omitempty"`
-	Model         string `json:"model,omitempty"`
-	ModelProvider string `json:"model_provider,omitempty"`
-	SubAgent      string `json:"sub_agent,omitempty"`
-	ToolName      string `json:"tool_name,omitempty"`
-	ToolCallID    string `json:"tool_call_id,omitempty"`
+	SourceAgent     string `json:"source_agent"`
+	SourceType      string `json:"source_type"`
+	SessionID       string `json:"session_id,omitempty"`
+	SessionTreeID   string `json:"session_tree_id,omitempty"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ModelProvider   string `json:"model_provider,omitempty"`
+	SubAgent        string `json:"sub_agent,omitempty"`
+	SubAgentID      string `json:"sub_agent_id,omitempty"`
+	ToolName        string `json:"tool_name,omitempty"`
+	ToolCallID      string `json:"tool_call_id,omitempty"`
 
 	ActionEventIDs []string `json:"action_event_ids"`
 	FindingIDs     []string `json:"finding_ids,omitempty"`

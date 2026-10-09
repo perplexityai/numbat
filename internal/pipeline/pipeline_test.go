@@ -215,7 +215,12 @@ func TestProcessEnforceRecordedOnCleanRun(t *testing.T) {
 	em := output.New(&buf, &diag, "run-x")
 	dec := &EnforceDecision{}
 	p := New(eng, em, Selection{Findings: true}, finding.Options{}, nil).WithEnforce(dec)
-	if err := p.Process(sampleEvent(), "src"); err != nil {
+	ev := sampleEvent()
+	ev.SessionTreeID = "tree-1"
+	ev.ParentSessionID = "parent-1"
+	ev.SubAgent = "reviewer"
+	ev.SubAgentID = "child-1"
+	if err := p.Process(ev, "src"); err != nil {
 		t.Fatal(err)
 	}
 	if !dec.Blocked {
@@ -226,6 +231,9 @@ func TestProcessEnforceRecordedOnCleanRun(t *testing.T) {
 	}
 	if dec.Reason != defaultDenyMessage {
 		t.Fatalf("reason = %q, want %q", dec.Reason, defaultDenyMessage)
+	}
+	if dec.SessionID != "s1" || dec.SessionTreeID != "tree-1" || dec.ParentSessionID != "parent-1" || dec.SubAgent != "reviewer" || dec.SubAgentID != "child-1" {
+		t.Fatalf("decision lost session or sub-agent context: %+v", dec)
 	}
 	findings := findingLines(t, &buf)
 	if len(findings) != 1 || findings[0]["rule_id"] != "test.enforce_block" || findings[0]["title"] != "explicitly enforceable" {

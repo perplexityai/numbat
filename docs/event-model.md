@@ -55,6 +55,21 @@ Some agents persist only one side, and long-running commands may emit more than
 one result update. An absent `exit_code` means the source did not provide one;
 it does not mean success.
 
+## Session and sub-agent identity
+
+`session_id` identifies the active session or thread represented by an event.
+Related context remains separate:
+
+- `session_tree_id` is a source-provided identifier shared by related threads.
+- `parent_session_id` is the explicitly reported immediate parent.
+- `sub_agent` is source-provided display context such as a role, profile, or
+  path. It is not a stable identity and is not necessarily unique.
+- `sub_agent_id` is the source-provided stable child identity. It may equal
+  `session_id` when the child thread is the active session.
+
+Absent relationships stay absent. numbat does not infer them from timestamps,
+names, paths, or neighboring events.
+
 ## Message content
 
 Prompt, assistant, and source-recorded reasoning events carry a normalized
@@ -124,4 +139,4 @@ the source can be reopened on the endpoint.
 
 See [Writing rules](rules.md) for the CEL field and event-type contracts,
 [Agent coverage](agent-coverage.md) for source-specific support, and the
-[record schemas](schema/v0.3.0/) for the emitted wire format.
+[record schemas](schema/v0.4.0/) for the emitted wire format.

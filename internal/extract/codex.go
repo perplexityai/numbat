@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactCodexRollout is the Evidence.ArtifactType for Codex CLI session
@@ -50,9 +51,13 @@ func (CodexExtractor) Agent() string { return model.AgentCodex }
 // seeds and each turn_context updates. Every emitted event is stamped with the
 // current values so a project path is attributed even when it changes mid-file.
 type codexState struct {
-	sessionID   string
-	projectPath string
-	metaSeen    bool
+	sessionID       string
+	sessionTreeID   string
+	parentSessionID string
+	subAgentID      string
+	subAgent        string
+	projectPath     string
+	metaSeen        bool
 	// forkReplay suppresses copied parent records until a task_started UUID
 	// ordered after the child thread UUID marks the first child turn.
 	forkReplay    bool
@@ -81,11 +86,7 @@ type codexState struct {
 	userPromptExpected    bool
 	responsePromptIDs     map[string]struct{}
 	pendingResponsePrompt *model.Event
-	// shellCallIDs is the set of call_ids that were a shell command.exec (a
-	// local_shell_call or a shell/shell_command/exec_command function_call), so
-	// the paired function_call_output is promoted from tool.result to
-	// command.result. A non-shell call's id never enters the set.
-	shellCallIDs map[string]struct{}
+	pendingTools          map[string]codexPendingTool
 	// codeMode correlates static exec cells through Codex's internal wait/poll
 	// calls so long-running commands keep one semantic identity.
 	codeMode codexCodeModeTracker
@@ -115,27 +116,25 @@ func (st *codexState) takeFailedMCPCall(id string) bool {
 	return ok
 }
 
-// noteShellCall records a shell call_id so its paired output correlates to a
-// command.result.
-func (st *codexState) noteShellCall(id string) {
-	if id == "" {
-		return
-	}
-	if st.shellCallIDs == nil {
-		st.shellCallIDs = map[string]struct{}{}
-	}
-	st.shellCallIDs[id] = struct{}{}
+type codexPendingTool struct {
+	eventType model.EventType
+	name      string
+	server    string
+	tool      string
 }
 
-// takeShellCall consumes the command owner for a function-call output.
-func (st *codexState) takeShellCall(id string) bool {
-	_, ok := st.shellCallIDs[id]
-	delete(st.shellCallIDs, id)
-	return ok
+func (st *codexState) noteToolCall(ev model.Event) {
+	if ev.ToolCallID == "" {
+		return
+	}
+	if st.pendingTools == nil {
+		st.pendingTools = make(map[string]codexPendingTool)
+	}
+	st.pendingTools[ev.ToolCallID] = codexPendingTool{ev.EventType, ev.ToolName, ev.MCPServer, ev.MCPTool}
 }
 
 func (st *codexState) resetCall(id string) {
-	delete(st.shellCallIDs, id)
+	delete(st.pendingTools, id)
 	delete(st.failedMCPCallIDs, id)
 	st.codeMode.forgetCall(id)
 }
@@ -314,8 +313,9 @@ func (e CodexExtractor) applySessionMeta(res *Result, src Source, sha string, st
 	}
 	firstMeta := !st.metaSeen
 	st.metaSeen = true
-	if st.sessionID == "" {
+	if firstMeta {
 		st.sessionID = meta.ID
+		st.sessionTreeID, st.parentSessionID, st.subAgentID, st.subAgent = meta.relationshipContext()
 	}
 	if st.projectPath == "" {
 		st.projectPath = meta.Cwd
@@ -407,6 +407,7 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		res.diag(src.Path, line, "malformed response_item payload")
 		return
 	}
+	start := len(res.Events)
 	switch ri.Type {
 	case codexRIMessage:
 		e.emitMessage(res, src, sha, st, line, ts, &ri)
@@ -426,14 +427,13 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		ev.EventType = model.EventCommandExec
 		ev.Command = decodeCodexShellAction(ri.Action)
 		ev.Evidence.JSONPointer = "/payload/action"
-		st.noteShellCall(ri.CallID)
 		res.Events = append(res.Events, ev)
 	case codexRICustomToolCall:
 		// A new call owns a reused id and its next output.
 		st.resetCall(ri.CallID)
 		if ri.Namespace == "" && ri.Name == codexToolApplyPatch {
 			e.emitApplyPatchCall(res, src, sha, st, line, ts, ri.Name, ri.CallID, string(ri.Input), "/payload/input")
-			return
+			break
 		}
 		if ri.Namespace == "" && ri.Name == codexToolCodeModeExec {
 			if call, ok := parseCodexCodeModeExec(string(ri.Input)); ok {
@@ -465,7 +465,7 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		ev.ToolName = ri.Name
 		ev.ToolCallID = ri.CallID
 		ev.EventType = model.EventToolCall
-		ev.ContentPreview = preview(string(ri.Input))
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(string(ri.Input))
 		ev.Evidence.JSONPointer = "/payload/input"
 		// An MCP-qualified name splits into typed server/tool fields; when the name
 		// is not itself flattened, Codex records the server as a separate namespace
@@ -510,7 +510,10 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		case codexRIFunctionCallOutput:
 			codeModeRef, codeModeResult = st.codeMode.takeWaitCall(ri.CallID)
 		}
-		shellResult := ri.Type == codexRIFunctionCallOutput && st.takeShellCall(ri.CallID)
+		pending := st.pendingTools[ri.CallID]
+		delete(st.pendingTools, ri.CallID)
+		ev.ToolName = pending.name
+		shellResult := ri.Type == codexRIFunctionCallOutput && pending.eventType == model.EventCommandExec
 		if codeModeResult || shellResult {
 			ev.EventType = model.EventCommandResult
 			if codeModeResult {
@@ -532,6 +535,7 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 			}
 		} else {
 			ev.EventType = model.EventToolResult
+			ev.MCPServer, ev.MCPTool = pending.server, pending.tool
 			if st.takeFailedMCPCall(ri.CallID) {
 				ev.Tags = append(ev.Tags, model.TagToolError)
 			}
@@ -549,6 +553,9 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		ev.Confidence = model.ConfidenceHigh
 		ev.EventType = model.EventToolResult
 		ev.ToolCallID = ri.CallID
+		pending := st.pendingTools[ri.CallID]
+		delete(st.pendingTools, ri.CallID)
+		ev.ToolName = pending.name
 		ev.ContentPreview = preview(decodeCodexToolSearchTools(ri.Tools))
 		ev.Evidence.JSONPointer = "/payload/tools"
 		res.Events = append(res.Events, ev)
@@ -623,6 +630,12 @@ func (e CodexExtractor) mapResponseItem(res *Result, src Source, sha string, st 
 		// Unknown response_item variant: skip rather than diagnose so a format
 		// addition is not flagged as corruption.
 	}
+	if len(res.Events) > start {
+		switch ri.Type {
+		case codexRIFunctionCall, codexRICustomToolCall, codexRILocalShellCall, codexRIToolSearchCall:
+			st.noteToolCall(res.Events[start])
+		}
+	}
 }
 
 // emitMessage emits a prompt.user or message.assistant from a response_item
@@ -684,7 +697,6 @@ func (e CodexExtractor) emitFunctionCall(res *Result, src Source, sha string, st
 		ev.EventType = model.EventCommandExec
 		ev.Command = codexShellCommand(string(ri.Arguments))
 		ev.Evidence.JSONPointer = "/payload/arguments"
-		st.noteShellCall(ri.CallID)
 		res.Events = append(res.Events, ev)
 	case ri.Namespace == "" && ri.Name == codexToolApplyPatch:
 		e.emitApplyPatchCall(res, src, sha, st, line, ts, ri.Name, ri.CallID, string(ri.Arguments), "/payload/arguments")
@@ -744,6 +756,7 @@ func (e CodexExtractor) emitFunctionCall(res *Result, src Source, sha string, st
 		// the server separately as a namespace; when the name is not itself
 		// flattened, fall back to that namespace.
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(string(ri.Arguments))
 		if server, tool, ok := splitMCPName(ri.Name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
 		} else if server, ok := codexMCPNamespaceServer(ri.Namespace); ok {
@@ -955,14 +968,18 @@ func markToolResultError(res *Result, callID string) bool {
 // emits several events (an apply_patch touching multiple files).
 func (e CodexExtractor) base(src Source, sha string, st *codexState, line int, ts string, idx int) model.Event {
 	return model.Event{
-		SchemaVersion: model.SchemaVersion,
-		CaseID:        src.CaseID,
-		EventID:       codexEventID(src.Path, line, idx),
-		SourceAgent:   model.AgentCodex,
-		SourceType:    model.SourceArtifact,
-		Timestamp:     ts,
-		ProjectPath:   st.projectPath,
-		SessionID:     st.sessionID,
+		SchemaVersion:   model.SchemaVersion,
+		CaseID:          src.CaseID,
+		EventID:         codexEventID(src.Path, line, idx),
+		SourceAgent:     model.AgentCodex,
+		SourceType:      model.SourceArtifact,
+		Timestamp:       ts,
+		ProjectPath:     st.projectPath,
+		SessionID:       st.sessionID,
+		SessionTreeID:   st.sessionTreeID,
+		ParentSessionID: st.parentSessionID,
+		SubAgent:        st.subAgent,
+		SubAgentID:      st.subAgentID,
 		Evidence: model.Evidence{
 			ArtifactType: artifactCodexRollout,
 			LocalPath:    src.Path,

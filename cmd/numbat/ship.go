@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -88,6 +89,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	inputPath := fs.String("input-file", "", "append-only NDJSON file to ship (required)")
 	statePath := fs.String("state-file", "", "delivery checkpoint (default <input-file>.ship-state)")
 	poll := fs.Duration("poll", defaultShipPoll, "interval between input-file polls")
+	maxBatchBytes := fs.Int64("max-batch-bytes", maxShipBatchBytes, "maximum uncompressed bytes per batch (1..4194304; larger single records are attempted alone)")
 	httpURL := fs.String("http-url", "", "ingest URL (required)")
 	httpTimeout := fs.Duration("http-timeout", 30*time.Second, "HTTP request timeout")
 	httpAuth := fs.String("http-auth", output.AuthNone, "HTTP delivery auth: none|bearer|hmac-sha256")
@@ -100,7 +102,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "\nTails an append-only numbat NDJSON file to an HTTP endpoint with a durable")
 		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
-		fmt.Fprintln(stderr, "Records larger than 8 MiB remain in the input file but are skipped.")
+		fmt.Fprintln(stderr, "Records larger than 8 MiB or individually rejected with HTTP 413 are logged,\nretained in the input file, and skipped from HTTP delivery.")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -128,6 +130,11 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	if *poll <= 0 {
 		fmt.Fprintf(stderr, "ship: --poll must be a positive duration, got %s\n", *poll)
 		fs.Usage()
+		return 2
+	}
+	// Keep batch reads within the existing HTTP buffer and checkpoint guard bounds.
+	if *maxBatchBytes <= 0 || *maxBatchBytes > maxShipBatchBytes {
+		fmt.Fprintf(stderr, "ship: --max-batch-bytes must be between 1 and %d, got %d\n", maxShipBatchBytes, *maxBatchBytes)
 		return 2
 	}
 	if *statePath == "" {
@@ -185,10 +192,10 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintf(stderr, "numbat ship: shipping %s to the configured HTTP endpoint (Ctrl-C to stop)\n", *inputPath)
-	return runShipLoop(ctx, *inputPath, *statePath, shipDestinationID(*httpURL), *poll, factory, stderr)
+	return runShipLoop(ctx, *inputPath, *statePath, shipDestinationID(*httpURL), *poll, *maxBatchBytes, factory, stderr)
 }
 
-func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, factory shipSinkFactory, stderr io.Writer) int {
+func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, maxBatchBytes int64, factory shipSinkFactory, stderr io.Writer) int {
 	cursor, err := readShipCursor(statePath, destination)
 	if err != nil {
 		fmt.Fprintf(stderr, "ship: read state %s: %v\n", statePath, err)
@@ -201,7 +208,7 @@ func runShipLoop(ctx context.Context, inputPath, statePath, destination string, 
 	stalled := false
 	failures := 0
 	for {
-		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, stderr)
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxBatchBytes, factory, stderr)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -361,22 +368,28 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		}
 		cursor.rotationEOFID = ""
 		cursor.rotationEOFOffset = 0
-		if err := shipBatch(factory, batch.blob); err != nil {
+		acknowledge := func(delivered []byte, skipped bool) error {
+			if skipped {
+				fmt.Fprintf(stderr, "ship: %s: HTTP 413 rejected %d-byte record at offset %d; skipped from HTTP delivery and retained in the input file\n", inputPath, len(delivered), cursor.checkpoint.Offset)
+			}
+			drained := cursor.checkpoint.DrainedFileIDs
+			cursor.checkpoint = newShipCheckpoint(
+				cursor.checkpoint.DestinationSHA256,
+				batch.fileID,
+				cursor.checkpoint.Offset+int64(len(delivered)),
+				delivered,
+			)
+			cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
+			cursor.pending = true
+			if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+				return fmt.Errorf("persist state %s: %w", statePath, err)
+			}
+			cursor.pending = false
+			return nil
+		}
+		if err := shipBatchAdaptive(ctx, factory, batch.blob, acknowledge); err != nil {
 			return cursor, err
 		}
-		drained := cursor.checkpoint.DrainedFileIDs
-		cursor.checkpoint = newShipCheckpoint(
-			cursor.checkpoint.DestinationSHA256,
-			batch.fileID,
-			cursor.checkpoint.Offset+batch.n,
-			batch.blob,
-		)
-		cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
-		cursor.pending = true
-		if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
-			return cursor, fmt.Errorf("persist state %s: %w", statePath, err)
-		}
-		cursor.pending = false
 	}
 }
 
@@ -423,6 +436,9 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 			break
 		}
 		if line.complete {
+			if buf.Len() > 0 && int64(buf.Len())+line.consumed > maxBytes {
+				break
+			}
 			_, _ = buf.Write(line.bytes)
 			consumed += line.consumed
 		}
@@ -643,6 +659,45 @@ func shipBatch(factory shipSinkFactory, blob []byte) error {
 		return fmt.Errorf("deliver: %w", err)
 	}
 	return nil
+}
+
+func shipBatchAdaptive(ctx context.Context, factory shipSinkFactory, blob []byte, acknowledge func([]byte, bool) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := shipBatch(factory, blob)
+	if err == nil {
+		return acknowledge(blob, false)
+	}
+	status, hasStatus := output.HTTPStatusCode(err)
+	if !hasStatus || status != http.StatusRequestEntityTooLarge {
+		return err
+	}
+	left, right, ok := splitShipBatch(blob)
+	if !ok {
+		return acknowledge(blob, true)
+	}
+	if err := shipBatchAdaptive(ctx, factory, left, acknowledge); err != nil {
+		return err
+	}
+	return shipBatchAdaptive(ctx, factory, right, acknowledge)
+}
+
+func splitShipBatch(blob []byte) ([]byte, []byte, bool) {
+	midpoint := len(blob) / 2
+	if next := bytes.IndexByte(blob[midpoint:], '\n'); next >= 0 {
+		split := midpoint + next + 1
+		if split < len(blob) {
+			return blob[:split], blob[split:], true
+		}
+	}
+	if previous := bytes.LastIndexByte(blob[:midpoint], '\n'); previous >= 0 {
+		split := previous + 1
+		if split < len(blob) {
+			return blob[:split], blob[split:], true
+		}
+	}
+	return nil, nil, false
 }
 
 func newShipCheckpoint(destination, fileID string, offset int64, delivered []byte) shipCheckpoint {

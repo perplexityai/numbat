@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactWindsurfTranscript is the Evidence.ArtifactType for Windsurf (Cascade)
@@ -418,6 +419,7 @@ func classifyWindsurfTool(ev *model.Event, name string, input map[string]json.Ra
 		ev.MCPServer, ev.MCPTool = "fetch", "fetch"
 	default:
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
 		if server, tool, ok := splitMCPName(name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
 		}

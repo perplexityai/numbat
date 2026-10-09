@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactPiSession is Pi's versioned JSONL session tree. A session starts with
@@ -310,6 +311,7 @@ func classifyPiTool(ev *model.Event, name string, args map[string]json.RawMessag
 		ev.FilePath = piArgString(args, "path")
 	default:
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(args)
 	}
 }
 
