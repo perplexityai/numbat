@@ -108,7 +108,7 @@ func retainCodexToolContent(events []model.Event, kind string, raw, native json.
 	var field string
 	var result bool
 	switch kind {
-	case codexRIFunctionCall:
+	case codexRIFunctionCall, codexRIToolSearchCall:
 		field = "arguments"
 	case codexRICustomToolCall:
 		field = "input"
@@ -118,6 +118,8 @@ func retainCodexToolContent(events []model.Event, kind string, raw, native json.
 		field, result = "output", true
 	case codexRIToolSearchOutput:
 		field, result = "tools", true
+	case codexRIImageGenerationCall:
+		field, result = "result", true
 	default:
 		return
 	}
@@ -127,7 +129,13 @@ func retainCodexToolContent(events []model.Event, kind string, raw, native json.
 	}
 	var captured model.Event
 	if result {
-		captured.SetToolResult(source[field])
+		if kind == codexRIImageGenerationCall && len(source[field]) > 0 {
+			// This item contains the result and revised prompt together; retain
+			// their source envelope without treating the revised prompt as input.
+			captured.SetToolResult(raw)
+		} else {
+			captured.SetToolResult(source[field])
+		}
 		if len(native) > 0 {
 			mergeMCPResult(&captured, native)
 		}

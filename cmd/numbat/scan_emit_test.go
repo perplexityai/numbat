@@ -494,6 +494,61 @@ expr: event.tool_input.contains("PRIVATE_CANARY")
 	}
 }
 
+func TestScanMalformedArgumentsAndToolSearch(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	rulesDir := writeEnforceRuleFile(t, `id: test.tool_input_capture
+version: "1.0"
+enabled: true
+title: Synthetic input capture
+severity: high
+expr: event.tool_input.contains("PRIVATE_CANARY") || event.tool_input.contains("QUERY_CANARY")
+`)
+	dir := filepath.Join(t.TempDir(), ".codex", "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-synthetic.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"response_item","payload":{"type":"function_call","name":"mcp__notes__save","call_id":"c","arguments":"{\"cookie\":\"PRIVATE_CANARY\""}}
+{"type":"response_item","payload":{"type":"tool_search_call","call_id":"x","status":"completed","execution":"client","arguments":{"query":"QUERY_CANARY","limit":8}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"preview", "full", "raw"} {
+		t.Run(mode, func(t *testing.T) {
+			out, errb, code := runCLI("scan", "--path", path, "--emit", "all", "--content", mode,
+				"--rules-dir", rulesDir, "--no-builtin-rules")
+			if code != 0 || countType(recordTypes(t, out), "finding") != 2 {
+				t.Fatalf("rules lost source input: exit=%d stderr=%s", code, errb)
+			}
+			if strings.Contains(out, "PRIVATE_CANARY") != (mode == "raw") {
+				t.Fatal("wrong serialized-input redaction policy")
+			}
+			calls := 0
+			for _, ev := range decodeEventRecords(t, out) {
+				if ev.EventType != model.EventToolCall {
+					continue
+				}
+				calls++
+				if ev.ToolInputBytes == 0 {
+					t.Fatal("missing original input size")
+				}
+				if ev.ToolCallID == "c" && mode == "full" {
+					if !ev.ToolInputTruncated || !strings.Contains(ev.ToolInput, "payload omitted") {
+						t.Fatal("malformed argument omission not explicit")
+					}
+				} else if ev.ToolInputTruncated {
+					t.Fatal("output omission contaminated original input completeness")
+				}
+				if ev.ToolCallID == "x" && mode != "preview" && ev.ToolInput != `{"query":"QUERY_CANARY","limit":8}` && ev.ToolInput != `{"limit":8,"query":"QUERY_CANARY"}` {
+					t.Fatal("tool-search input lost or changed")
+				}
+			}
+			if calls != 2 {
+				t.Fatalf("tool calls=%d", calls)
+			}
+		})
+	}
+}
+
 func TestScanReasoningCanEmitFullContent(t *testing.T) {
 	p := writeTranscript(t, emitTranscript)
 	out, _, code := runCLI("scan", "--path", p, "--emit", "events", "--include-reasoning", "--content", "full")

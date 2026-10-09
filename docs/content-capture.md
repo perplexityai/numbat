@@ -43,9 +43,12 @@ evaluation error, preserving the existing fail-open enforcement contract.
 Keep the original artifacts when analysis needs content beyond these bounds.
 
 Full mode also masks recognized credential keys inside JSON-serialized strings,
-preserving their string representation. Decoding is limited to eight nested
-serialization layers; exceeding that bound omits the exported payload and sets
-its truncation flag. Raw output and the originals used by rules are unchanged.
+preserving their string representation. Strings beginning with `{`, `[` or `"`
+after whitespace must decode as JSON, matching the tool-input preview policy.
+Malformed JSON-shaped strings, including nested result text, cause the exported
+payload to be omitted with its truncation flag set. The same applies beyond
+eight nested serialization layers. Raw output and the originals used by rules
+are unchanged; use raw mode when downstream analysis needs the supplied text.
 
 ## What is preserved
 
@@ -58,7 +61,7 @@ content, or retrieve files that an agent chose to offload.
 | Source | Captured representation |
 | --- | --- |
 | Claude artifacts | Tool-use input and result blocks; source-native `toolUseResult` is retained alongside a single attributable result. |
-| Codex artifacts | Function/custom arguments or input and output; correlated native MCP results are retained alongside model-facing output. |
+| Codex artifacts | Function/custom arguments or input and output, tool-search arguments/definitions, and shell/web actions. Correlated native MCP results are retained alongside model-facing output. Image-generation records with a result retain their source envelope, including the revised prompt, as `tool_result` on the existing event. |
 | Other mapped artifacts | Source arguments and recorded result objects at their evidence locations, including OpenCode read output. |
 | Hooks | Arguments and the supported completion hook's response, including empty, scalar and structured values. |
 | Generated integrations | OpenCode output, Pi content/details/error, Amp output and OpenClaw result/error are forwarded. Reinstall hooks to update generated integrations. |

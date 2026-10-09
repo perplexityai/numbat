@@ -115,7 +115,9 @@ func redactJSONValue(value any, depth int) (any, error) {
 		return value, nil
 	case string:
 		raw := bytes.TrimSpace([]byte(value))
-		if len(raw) != 0 && (raw[0] == '{' || raw[0] == '[' || raw[0] == '"') && json.Valid(raw) {
+		// Match ToolInputPreview's damaged-JSON policy: JSON-shaped strings
+		// must decode safely, never fall back to regex-only redaction.
+		if len(raw) != 0 && (raw[0] == '{' || raw[0] == '[' || raw[0] == '"') {
 			if depth >= maxSerializedJSONDepth {
 				return nil, fmt.Errorf("serialized JSON nesting exceeds redaction limit")
 			}

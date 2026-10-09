@@ -85,3 +85,52 @@ func TestNestedObjectSerializedContent(t *testing.T) {
 		t.Fatal("nested content or benign sibling redacted incorrectly")
 	}
 }
+
+func TestMalformedSerializedToolContent(t *testing.T) {
+	for _, body := range []string{
+		`{"cookie":"PRIVATE_CANARY"`,
+		`{"auth":"PRIVATE_CANARY"} trailing`,
+		`{"pass\u0077ord":"PRIVATE_CANARY"`,
+		`{"password":"prefix\"PRIVATE_CANARY"`,
+		` [{"credentials":"PRIVATE_CANARY"}`,
+		`"PRIVATE_CANARY`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			if preview, truncated := ToolInputPreview(body); preview != "" || !truncated {
+				t.Fatal("damaged JSON preview must be omitted")
+			}
+			for _, value := range []any{body, map[string]any{"content": []any{map[string]string{"text": body}}}} {
+				var ev model.Event
+				ev.SetToolInput(value)
+				ev.SetToolResult(value)
+				original := ev.ToolInputForAnalysis()
+				full := EventWithContent(ev)
+				if strings.Contains(full.ToolInput+full.ToolResult, "PRIVATE_CANARY") ||
+					!strings.Contains(full.ToolInput, "payload omitted") || !strings.Contains(full.ToolResult, "payload omitted") ||
+					!full.ToolInputTruncated || !full.ToolResultTruncated {
+					t.Error("unsafe serialized content must be explicitly omitted")
+				}
+				if full.ToolInputBytes != len(original) || full.ToolResultBytes != len(original) {
+					t.Fatal("omission changed original byte counts")
+				}
+				raw := EventWithRawContent(ev)
+				if raw.ToolInput != original || raw.ToolResult != original || raw.ToolInputTruncated || raw.ToolResultTruncated ||
+					ev.ToolInputForAnalysis() != original || ev.ToolResultForAnalysis() != original {
+					t.Fatal("output omission changed raw content or analysis originals")
+				}
+			}
+		})
+	}
+}
+
+func TestSerializedToolContentOrdinaryText(t *testing.T) {
+	for _, body := range []string{"", "ordinary text", "echo hello", "text with { braces }", "123", "true", "null"} {
+		var ev model.Event
+		ev.SetToolResult(body)
+		full := EventWithContent(ev)
+		var decoded string
+		if full.ToolResultTruncated || json.Unmarshal([]byte(full.ToolResult), &decoded) != nil || decoded != body {
+			t.Fatalf("ordinary text changed: %q", body)
+		}
+	}
+}
