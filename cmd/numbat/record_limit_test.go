@@ -165,6 +165,9 @@ func TestMaxRecordBytesHookFailureDoesNotDeny(t *testing.T) {
 }
 
 func TestMaxRecordBytesInstalledIntegrations(t *testing.T) {
+	for _, key := range []string{"XDG_CONFIG_HOME", "OPENCODE_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"} {
+		t.Setenv(key, "")
+	}
 	for _, agent := range []string{"claude", "codex", "cursor", "windsurf", "gemini", "copilot", "opencode", "pi", "amp", "openclaw", "kilo"} {
 		for _, value := range []string{"", "0", "2048", "1073741824"} {
 			t.Run(agent+"/"+value, func(t *testing.T) {
@@ -188,9 +191,10 @@ func TestMaxRecordBytesInstalledIntegrations(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					if strings.Contains(string(data), "--max-record-bytes") {
+					text := testHookCommandText(string(data))
+					if strings.Contains(text, "--max-record-bytes") {
 						found = true
-						if value != "" && !match.Match(data) {
+						if value != "" && !match.MatchString(text) {
 							t.Errorf("wrong cap in %s: %s", path, data)
 						}
 					}
