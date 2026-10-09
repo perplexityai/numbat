@@ -383,6 +383,41 @@ here-doc supplied to an interpreter such as `sh` is executable input and is
 parsed. Supported static wrappers, inline scripts, substitutions, redirects,
 and shell functions are projected when their meaning can be established.
 
+The one exception to variable expansion is the first word of a simple command
+when the same input assigns that variable exactly once, by a plain top-level
+`NAME=value` statement with a static one-word value, before the use. That
+command is projected with the assigned value as its executable. Resolution
+covers the whole input and is withdrawn when the input writes variables in any
+way the scan cannot follow:
+
+- arithmetic: `(( ))`, `$(( ))`, `let`, `for (( ))`, `[[ -eq ]]`,
+  `[[ -v a[...] ]]`, computed indexes and slices, `${!x}`, `@` operators, and
+  zsh parameter flags;
+- `coproc`, a `{name}>` redirect, a zsh glob qualifier, `nameref` or a
+  declaration with `-n`, `-i`, `-E`, `-F`, or a non-option operand, and any
+  write to `IFS`, `PS4`, `SHELLOPTS`, `BASH_ENV`, `ENV`, `ZDOTDIR`, or `HOME`;
+- `printf -v`, `print -v`, `set -A`, `set -k`, `set -o keyword`, `shopt -o
+  keyword`, and `wait -p`, judged by the option words before the first operand;
+- `test -v` on an array element, including any test word that can expand to
+  several words;
+- builtins that read or evaluate into variables (`eval`, `source`, `read`,
+  `unset`, `trap`, `alias`, `enable`, and zsh equivalents),
+  also behind `command`, `builtin`, `noglob`, `nocorrect`, or `-`;
+- a command whose first word is not static and does not resolve, or a command,
+  option, or builtin word the shell rewrites before lookup (`$'...'`,
+  `$"..."`, an unquoted backslash, brace, or wildcard).
+
+A variable in any other position, such as `sudo $GH ...`, is not analyzed.
+Names the shell manages (`_`, `PWD`, `RANDOM`, `UID`, `BASH_*`, and similar)
+and values with whitespace, wildcards, parentheses, `~`, `=`, or `$'...'`
+quoting never resolve. A script passed to an interpreter resolves only when
+the outer input resolves, the call sets no environment word, its option words,
+script, and redirects are readable as written, and no option selects keyword
+mode. Text passed to `eval`, PowerShell, or `cmd.exe` never resolves. zsh
+evaluates bare `$name[expr]` subscripts and the integer arguments of `printf
+%d`, `return`, `shift`, and similar builtins, and ksh evaluates `test -eq`
+operands; neither is modeled.
+
 Known `tool_name` values select POSIX shell, PowerShell, or `cmd.exe` parsing;
 otherwise numbat infers the dialect from command syntax. Set `tool_name` in a
 fixture when a Windows command depends on a specific dialect.
@@ -397,16 +432,11 @@ visible `$WhatIfPreference = $true` for known cmdlet names and exact
 module-qualified forms. Ambient preference and command-resolution state are not
 inferred.
 
-For a shell-derived match, blocking has a narrower eligibility boundary than
-detection: the complete shell program must be one static simple command or one
-static POSIX pipeline. Supported transparent launchers are allowed only when
-their final child command is also in that subset. Multiple statements, control
-flow, same-script functions, inline child interpreters, `eval` or
-`Invoke-Expression`, substitutions, runtime-dependent values, PowerShell or CMD
-pipelines, previews, parser diagnostics, and truncated projections remain
-detection-only. A rule may still use `shell_commands` alongside structured
-fields such as `event.file_path`; a matching commandless structured event does
-not require a shell projection. See [Enforcement](enforcement.md).
+For shell-derived blocking, `numbat` evaluates the rule against eligible
+parser-derived candidates. Both sides of `&&` and `||` are checked. A rule can
+still use `shell_commands` with fields such as `event.file_path`. A matching
+commandless structured event does not need a shell projection. See
+[Enforcement](enforcement.md) for candidate eligibility.
 
 ## Enforcement rules
 
@@ -418,9 +448,8 @@ Enforcement uses the same CEL expressions as detection; there is no separate
 rule language or required predicate shape. Raw `event.command` remains
 available, but it matches literal input and can therefore match text that the
 shell would not execute. Use `shell_commands` when blocking depends on parsed
-command semantics. A shell-derived match can detect broad shell syntax, but a
-deny requires the complete shell program to be inside the static subset
-described above.
+command semantics. A shell-derived deny requires one eligible parser-derived
+candidate as described above.
 
 All built-ins ship monitor-only. To enforce one, copy its complete YAML into an
 operator directory, keep the same ID, set `enforce: true`, and bump the rule

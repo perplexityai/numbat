@@ -3,6 +3,9 @@ package rule
 import (
 	"errors"
 	"fmt"
+	"path"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/google/cel-go/common/types"
@@ -13,11 +16,12 @@ import (
 )
 
 const (
-	shellCommandsVariable    = "shell_commands"
-	maxShellCommandBytes     = 256 << 10
-	maxShellCommands         = 64
-	maxShellListItems        = 512
-	maxCommandExpansionDepth = 4
+	shellCommandsVariable          = "shell_commands"
+	shellCommandCandidatesVariable = "__numbat_shell_command_candidates"
+	maxShellCommandBytes           = 256 << 10
+	maxShellCommands               = 64
+	maxShellListItems              = 512
+	maxCommandExpansionDepth       = 4
 )
 
 type commandDialect uint8
@@ -51,6 +55,7 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 	}
 	analysis := analyzeEventShellCommandsDetailed(ev)
 	detection[shellCommandsVariable] = shellCommandList(adapter, analysis.commands)
+	detection[shellCommandCandidatesVariable] = shellCommandCandidateList(adapter, analysis.enforcementCandidates)
 	return sequenceActivations{
 		detection:            detection,
 		shellUsable:          analysis.usable,
@@ -91,18 +96,21 @@ func shellCommandList(adapter types.Adapter, commands []ShellCommand) ref.Val {
 	return types.NewRefValList(adapter, values)
 }
 
-// SequenceActivations contains the CEL activation and command-analysis status
-// shared by every sequence step for one event.
+func shellCommandCandidateList(adapter types.Adapter, candidates [][]ShellCommand) ref.Val {
+	values := make([]ref.Val, len(candidates))
+	for i, commands := range candidates {
+		values[i] = shellCommandList(adapter, commands)
+	}
+	return types.NewRefValList(adapter, values)
+}
+
 type SequenceActivations struct {
-	Detection            map[string]any
-	ShellUsable          bool
-	ShellEnforcementSafe bool
-	Err                  error
+	prepared sequenceActivations
 }
 
 // PrepareSequenceActivations builds the command view shared by every sequence
 // step for an event.
-func PrepareSequenceActivations(ev model.Event, rules []*SequenceRule) SequenceActivations {
+func PrepareSequenceActivations(ev model.Event, rules []*SequenceRule) (SequenceActivations, error) {
 	var adapter types.Adapter = types.DefaultTypeAdapter
 	if len(rules) > 0 {
 		adapter = rules[0].adapter
@@ -110,21 +118,11 @@ func PrepareSequenceActivations(ev model.Event, rules []*SequenceRule) SequenceA
 	for _, r := range rules {
 		if r.usesShellCommands {
 			prepared := prepareActivations(adapter, ev, true)
-			return SequenceActivations{
-				Detection:            prepared.detection,
-				ShellUsable:          prepared.shellUsable,
-				ShellEnforcementSafe: prepared.shellEnforcementSafe,
-				Err:                  prepared.err,
-			}
+			return SequenceActivations{prepared: prepared}, prepared.err
 		}
 	}
 	prepared := prepareActivations(adapter, ev, false)
-	return SequenceActivations{
-		Detection:            prepared.detection,
-		ShellUsable:          prepared.shellUsable,
-		ShellEnforcementSafe: prepared.shellEnforcementSafe,
-		Err:                  prepared.err,
-	}
+	return SequenceActivations{prepared: prepared}, prepared.err
 }
 
 type fatalShellAnalysisError struct {
@@ -149,14 +147,19 @@ type shellAnalyzer struct {
 	enforcementUnsafe         bool
 	statementCounter          int64
 	pipelineCounter           int64
+	unsafePipelines           map[int64]bool
+	unsafeStatements          map[int64]bool
+	statementParents          map[int64]int64
 	halt                      bool
+	resolved                  resolvedExecutables
 }
 
 type shellAnalysis struct {
-	commands        []ShellCommand
-	usable          bool
-	enforcementSafe bool
-	err             error
+	commands              []ShellCommand
+	enforcementCandidates [][]ShellCommand
+	usable                bool
+	enforcementSafe       bool
+	err                   error
 }
 
 func analyzeShellCommands(source string) ([]ShellCommand, bool, error) {
@@ -169,7 +172,7 @@ func analyzeEventShellCommands(ev model.Event) ([]ShellCommand, bool, error) {
 }
 
 func analyzeEventShellCommandsDetailed(ev model.Event) shellAnalysis {
-	return analyzeShellCommandsDetailed(ev.Command, commandDialectHint(ev.ToolName))
+	return analyzeShellCommandsDetailed(ev.Command, commandDialectHint(ev))
 }
 
 func analyzeShellCommandsAs(source string, dialect commandDialect) ([]ShellCommand, bool, error) {
@@ -181,8 +184,12 @@ func analyzeShellCommandsDetailed(source string, dialect commandDialect) shellAn
 	if strings.TrimSpace(source) == "" {
 		return shellAnalysis{usable: true, enforcementSafe: true}
 	}
-	a := shellAnalyzer{}
-	a.parseDialect(source, dialect, 0, nil)
+	a := shellAnalyzer{
+		unsafePipelines:  make(map[int64]bool),
+		unsafeStatements: make(map[int64]bool),
+		statementParents: make(map[int64]int64),
+	}
+	a.parseDialectUnderRedirects(source, dialect, 0, nil, 0, nil, true)
 	err := errors.Join(a.issues...)
 	enforcementSafe := !a.enforcementUnsafe && len(a.commands) > 0
 	if enforcementSafe {
@@ -193,28 +200,43 @@ func analyzeShellCommandsDetailed(source string, dialect commandDialect) shellAn
 			}
 		}
 	}
+	var candidates [][]ShellCommand
+	if !a.halt {
+		candidates = posixEnforcementCandidates(a.commands, a.unsafePipelines, a.unsafeStatements, a.statementParents)
+	}
 	return shellAnalysis{
-		commands:        a.commands,
-		usable:          err == nil || len(a.commands) > 0,
-		enforcementSafe: enforcementSafe,
-		err:             err,
+		commands:              a.commands,
+		enforcementCandidates: candidates,
+		usable:                err == nil || len(a.commands) > 0,
+		enforcementSafe:       enforcementSafe,
+		err:                   err,
 	}
 }
 
-func commandDialectHint(toolName string) commandDialect {
-	switch commandProgram(strings.TrimSpace(toolName)) {
+func commandDialectHint(ev model.Event) commandDialect {
+	switch commandProgram(strings.TrimSpace(ev.ToolName)) {
 	case "bash", "sh", "zsh", "dash", "ksh", "mksh":
 		return dialectPOSIX
 	case "powershell", "pwsh":
 		return dialectPowerShell
 	case "cmd":
 		return dialectCMD
-	default:
-		return dialectAuto
+	case "exec_command":
+		if ev.SourceAgent == model.AgentCodex && runtime.GOOS != "windows" {
+			return dialectPOSIX
+		}
 	}
+	return dialectAuto
 }
 
 func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, depth int, wrappers []ShellWrapper) {
+	a.parseDialectUnderRedirects(source, dialect, depth, wrappers, 0, nil, false)
+}
+
+// resolvable is true for the original input and for a nested script whose
+// interpreter call passed resolvableScript; text that another shell expanded
+// first never resolves.
+func (a *shellAnalyzer) parseDialectUnderRedirects(source string, dialect commandDialect, depth int, wrappers []ShellWrapper, parent int64, inheritedRedirects []*syntax.Redirect, resolvable bool) {
 	if a.halt {
 		return
 	}
@@ -260,11 +282,24 @@ func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, dept
 	if !posixEnforcementShapeSafe(file) {
 		a.enforcementUnsafe = true
 	}
-	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers)
+
+	saved := a.resolved
+	a.resolved = nil
+	if resolvable {
+		a.resolved = resolveTopLevelAssignments(file)
+	}
+	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers, parent, inheritedRedirects)
+	a.resolved = saved
 }
 
-func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functions map[string]*syntax.Stmt, activeFunctions map[string]bool, wrappers []ShellWrapper) {
-	relations := a.buildPOSIXRelations(root)
+func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functions map[string]*syntax.Stmt, activeFunctions map[string]bool, wrappers []ShellWrapper, parent int64, inheritedRedirects []*syntax.Redirect) {
+	relations := a.buildPOSIXRelations(root, inheritedRedirects)
+	for statement, id := range relations.statements {
+		if relations.parents[statement] == 0 {
+			relations.parents[statement] = parent
+		}
+		a.statementParents[id] = relations.parents[statement]
+	}
 	syntax.Walk(root, func(node syntax.Node) bool {
 		if a.halt {
 			return false
@@ -280,7 +315,17 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			return false
 		case *syntax.Stmt:
 			ctx := relations.context(node)
+			statementStart := len(a.commands)
+			for _, redirect := range node.Redirs {
+				if redirect.Hdoc != nil {
+					a.markPipelineUnsafe(ctx)
+				}
+			}
 			if declaration, ok := node.Cmd.(*syntax.DeclClause); ok {
+				if ctx.pipelineID != 0 {
+					a.markStatementsUnsafe(node, ctx.statementIDs)
+					a.markPipelineUnsafe(ctx)
+				}
 				command, add, err := projectPOSIXDeclaration(source, declaration, node.Redirs, wrappers, ctx)
 				if err != nil {
 					a.report(err)
@@ -293,27 +338,47 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			}
 			call, ok := node.Cmd.(*syntax.CallExpr)
 			if !ok {
-				if node.Cmd == nil && len(node.Redirs) > 0 {
-					command, add, err := projectPOSIXCommand(source, nil, nil, node.Redirs, wrappers, ctx)
+				if len(node.Redirs) > 0 {
+					redirectCommand, add, err := projectPOSIXCommand(source, nil, nil, node.Redirs, wrappers, ctx)
 					if err != nil {
 						a.report(err)
+						if ctx.pipelineID != 0 {
+							a.markStatementsUnsafe(node, ctx.statementIDs)
+						}
+						a.markPipelineUnsafe(ctx)
 						return true
 					}
-					if add {
-						return a.add(command)
+					if node.Cmd == nil && add {
+						return a.add(redirectCommand)
 					}
+				}
+				if node.Cmd != nil {
+					if ctx.pipelineID != 0 {
+						a.markStatementsUnsafe(node, ctx.statementIDs)
+					}
+					a.markPipelineUnsafe(ctx)
 				}
 				return true
 			}
+
+			call = resolvedCall(call, a.resolved)
 			command, add, err := projectPOSIXCommand(source, call.Args, call.Assigns, node.Redirs, wrappers, ctx)
 			if err != nil {
 				a.report(err)
-				return true
+				if ctx.pipelineID != 0 {
+					a.unsafeStatements[ctx.statementID] = true
+				}
+				a.markPipelineUnsafe(ctx)
+				if command.Executable == "" {
+					return true
+				}
 			}
 			if name, ok := commandName(call.Args); ok && functions[name] != nil {
 				command.FunctionCall = true
 				command.Recursive = activeFunctions[name]
 			}
+			invocation := inspectShellInvocation(call.Args)
+			command.enforcementUnsafe = invocation.noExec || invocation.inputEnforcementUnsafe
 			if add && !a.add(command) {
 				return false
 			}
@@ -321,6 +386,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			args := call.Args
 			commandWrappers := cloneWrappers(wrappers)
 			allowShellBuiltins := !command.FunctionCall
+			wrapperSafe := true
 			for !command.FunctionCall {
 				wrapperName, _ := commandName(args)
 				inner, enforcementSafe := unwrapCommand(args)
@@ -328,16 +394,16 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					break
 				}
 				if !enforcementSafe {
-					a.enforcementUnsafe = true
+					wrapperSafe = false
 				}
 				wrapperProgram := commandProgram(wrapperName)
 				if !allowShellBuiltins && (wrapperProgram == "command" || wrapperProgram == "exec") {
-					a.enforcementUnsafe = true
+					wrapperSafe = false
 				}
 				// Basename projection aids detection but cannot prove that a
 				// path-qualified program implements the wrapper's semantics.
 				if wrapperName != commandProgram(wrapperName) {
-					a.enforcementUnsafe = true
+					wrapperSafe = false
 				}
 				wrapper, err := wrapperProjection(source, args, inner)
 				if err != nil {
@@ -348,7 +414,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					childName, _ := commandName(inner)
 					switch commandProgram(childName) {
 					case "command", "exec":
-						a.enforcementUnsafe = true
+						wrapperSafe = false
 					}
 				}
 				commandWrappers = append(commandWrappers, wrapper)
@@ -357,42 +423,54 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				innerCommand, add, err := projectPOSIXCommand(source, args, call.Assigns, node.Redirs, commandWrappers, ctx)
 				if err != nil {
 					a.report(err)
+					invocation = inspectShellInvocation(args)
 					break
 				}
+				invocation = inspectShellInvocation(args)
+				innerCommand.enforcementUnsafe = !wrapperSafe || invocation.noExec || invocation.inputEnforcementUnsafe
 				if add && !a.add(innerCommand) {
 					return false
 				}
 			}
 
+			redirects := append(relations.inheritedRedirects[node], node.Redirs...)
+			resolvable := a.resolved != nil && resolvableScript(call, args, redirects)
 			if !command.FunctionCall {
 				if script, dialect, wrapper, ok, err := wrapperScript(source, args); err != nil {
 					a.report(err)
 				} else if ok {
-					a.enforcementUnsafe = true
 					innerWrappers := append(cloneWrappers(commandWrappers), wrapper)
-					a.parseDialect(script, dialect, depth+1, innerWrappers)
+					a.parseDialectUnderRedirects(script, dialect, depth+1, innerWrappers, ctx.statementID, redirects, resolvable)
+					a.markCommandsUnsafe(statementStart)
 				}
-				if script, ok := interpreterHeredoc(args, node.Redirs); ok {
+				if scripts := interpreterHeredocs(invocation.inputFDs, redirects); len(scripts) > 0 {
 					wrapper, err := projectInterpreterWrapper(source, args)
 					if err != nil {
 						a.report(err)
 					} else {
 						innerWrappers := append(cloneWrappers(commandWrappers), wrapper)
-						a.parseDialect(script, dialectPOSIX, depth+1, innerWrappers)
+						a.markCommandsUnsafe(statementStart)
+						for _, script := range scripts {
+							innerStart := len(a.commands)
+							a.parseDialectUnderRedirects(script, dialectPOSIX, depth+1, innerWrappers, ctx.statementID, nil, resolvable)
+							if ctx.pipelineID != 0 || !wrapperSafe || invocation.inputEnforcementUnsafe {
+								a.markCommandsUnsafe(innerStart)
+							}
+						}
 					}
 				}
 			}
 			if allowShellBuiltins {
 				if script, ok := evalScript(source, args); ok {
-					a.enforcementUnsafe = true
-					a.parseDialect(script, dialectPOSIX, depth+1, commandWrappers)
+					a.parseDialectUnderRedirects(script, dialectPOSIX, depth+1, commandWrappers, ctx.statementID, redirects, false)
+					a.markCommandsUnsafe(statementStart)
 				}
 			}
 			if command.FunctionCall {
 				if name, ok := commandName(call.Args); ok {
 					if body := functions[name]; body != nil && depth < maxCommandExpansionDepth && !activeFunctions[name] {
 						activeFunctions[name] = true
-						a.walk(source, body, depth+1, functions, activeFunctions, commandWrappers)
+						a.walk(source, body, depth+1, functions, activeFunctions, commandWrappers, ctx.statementID, redirects)
 						delete(activeFunctions, name)
 					}
 				}
@@ -772,10 +850,10 @@ func wrapperScript(source string, args []*syntax.Word) (string, commandDialect, 
 			if !ok {
 				return "", dialectAuto, ShellWrapper{}, false, errors.New("shell command analysis: dynamic interpreter option")
 			}
-			if flag == "--" || flag == "-" || !strings.HasPrefix(flag, "-") {
+			if flag == "--" || len(flag) < 2 || flag[0] != '-' && flag[0] != '+' {
 				return "", dialectAuto, ShellWrapper{}, false, nil
 			}
-			if flag == "-o" || flag == "-O" || flag == "--rcfile" || flag == "--init-file" {
+			if flag == "-o" || flag == "+o" || flag == "-O" || flag == "+O" || flag == "--rcfile" || flag == "--init-file" {
 				i++
 				continue
 			}
@@ -838,10 +916,10 @@ func projectedInterpreterScript(command ShellCommand) (string, commandDialect, i
 			if flag.Expands {
 				return "", dialectAuto, 0, false, errors.New("shell command analysis: dynamic interpreter option")
 			}
-			if flag.Value == "--" || flag.Value == "-" || !strings.HasPrefix(flag.Value, "-") {
+			if flag.Value == "--" || len(flag.Value) < 2 || flag.Value[0] != '-' && flag.Value[0] != '+' {
 				return "", dialectAuto, 0, false, nil
 			}
-			if flag.Value == "-o" || flag.Value == "-O" || flag.Value == "--rcfile" || flag.Value == "--init-file" {
+			if flag.Value == "-o" || flag.Value == "+o" || flag.Value == "-O" || flag.Value == "+O" || flag.Value == "--rcfile" || flag.Value == "--init-file" {
 				i++
 				continue
 			}
@@ -964,65 +1042,308 @@ func joinProjectedScript(args []ShellArgument) (string, bool) {
 	return strings.Join(values, " "), true
 }
 
-func interpreterHeredoc(args []*syntax.Word, redirects []*syntax.Redirect) (string, bool) {
-	if !shellReadsStdin(args) {
-		return "", false
+func interpreterHeredocs(fds []int64, redirects []*syntax.Redirect) []string {
+	var scripts []string
+	var seen *syntax.Redirect
+	for _, fd := range fds {
+		if script, redirect, ok := heredocForFD(redirects, fd); ok && redirect != seen {
+			scripts = append(scripts, script)
+			seen = redirect
+		}
 	}
-	for i := len(redirects) - 1; i >= 0; i-- {
-		redirect := redirects[i]
-		fd := defaultRedirectFD(redirect.Op)
-		if redirect.N != nil {
-			if redirect.N.Value != "0" {
-				continue
-			}
-			fd = 0
-		}
-		if fd != 0 {
-			continue
-		}
-		if (redirect.Op == syntax.Hdoc || redirect.Op == syntax.DashHdoc || redirect.Op == syntax.WordHdoc) &&
-			redirect.Hdoc != nil {
-			return staticWord(redirect.Hdoc)
-		}
-		return "", false
-	}
-	return "", false
+	return scripts
 }
 
-func shellReadsStdin(args []*syntax.Word) bool {
-	name, ok := commandName(args)
-	if !ok || !isShellInterpreter(commandProgram(name)) {
-		return false
+func heredocForFD(redirects []*syntax.Redirect, fd int64) (string, *syntax.Redirect, bool) {
+	for i := len(redirects) - 1; i >= 0; i-- {
+		redirect := redirects[i]
+		redirectFD, valid := posixRedirectFD(redirect)
+		if !valid {
+			continue
+		}
+		if redirect.Op == syntax.DplIn || redirect.Op == syntax.DplOut {
+			target, static := staticWord(redirect.Word)
+			if !static {
+				return "", nil, false
+			}
+			if target == "-" {
+				if redirectFD == fd {
+					return "", nil, false
+				}
+				continue
+			}
+			moved := strings.HasSuffix(target, "-")
+			sourceFD, valid := parseShellFD(strings.TrimSuffix(target, "-"))
+			if !valid {
+				return "", nil, false
+			}
+			if moved && sourceFD == fd && redirectFD != fd {
+				return "", nil, false
+			}
+			if redirectFD == fd {
+				fd = sourceFD
+			}
+			continue
+		}
+		if redirectFD != fd {
+			continue
+		}
+		if (redirect.Op == syntax.Hdoc || redirect.Op == syntax.DashHdoc) && redirect.Hdoc != nil {
+			script, ok := staticWord(redirect.Hdoc)
+			return script, redirect, ok
+		}
+		if redirect.Op == syntax.WordHdoc {
+			script, ok := staticWord(redirect.Word)
+			return script, redirect, ok
+		}
+		return "", nil, false
 	}
-	stdin := false
+	return "", nil, false
+}
+
+type shellInvocation struct {
+	inputFDs               []int64
+	inputEnforcementUnsafe bool
+	noExec                 bool
+}
+
+func inspectShellInvocation(args []*syntax.Word) shellInvocation {
+	name, ok := commandName(args)
+	if !ok {
+		return shellInvocation{}
+	}
+	program := commandProgram(name)
+	if !isShellInterpreter(program) {
+		return shellInvocation{}
+	}
+	var (
+		noExec, terminalNoExec        bool
+		interactive, stdin            bool
+		startupFD                     int64
+		startupFound, startupDisabled bool
+		inputFD                       int64
+		inputFound                    = true
+		inputEnforcementUnsafe        bool
+		bashShortOption               bool
+		shOptionLetters               bool
+	)
 	for i := 1; i < len(args); i++ {
-		flag, ok := staticWord(args[i])
-		if !ok {
-			return false
+		flag, static := staticWord(args[i])
+		if !static {
+			inputFound = false
+			break
 		}
-		if flag == "--" {
-			return stdin || i+1 == len(args)
+		if flag == "--" || flag == "-" || program == "zsh" && (flag == "+" || flag == "+-" || !shOptionLetters && (flag == "-b" || flag == "+b")) {
+			if !stdin && i+1 < len(args) {
+				script, static := staticWord(args[i+1])
+				inputFD, inputFound = shellInputPathFD(script)
+				if !static {
+					inputFound = false
+				}
+			}
+			break
 		}
-		if flag == "-o" || flag == "-O" || flag == "--rcfile" || flag == "--init-file" {
+		if len(flag) < 2 || flag[0] != '-' && flag[0] != '+' {
+			if !stdin {
+				inputFD, inputFound = shellInputPathFD(flag)
+			}
+			break
+		}
+		if program == "bash" && strings.HasPrefix(flag, "--") && bashShortOption {
+			terminalNoExec = true
+			inputFound = false
+			break
+		}
+		if flag == "--help" || flag == "--version" || program == "bash" && (flag == "--dump-strings" || flag == "--dump-po-strings") {
+			terminalNoExec = true
+			continue
+		}
+		if program == "bash" && flag == "--pretty-print" {
+			terminalNoExec = true
+			continue
+		}
+		if program == "zsh" && strings.HasPrefix(flag, "+-") && applyZshOption(flag[2:], false, &noExec, &stdin, &shOptionLetters) {
+			continue
+		}
+		longOption := strings.TrimPrefix(flag, "--")
+		if program == "zsh" {
+			longOption = normalizedZshOption(longOption)
+			if applyZshOption(longOption, true, &noExec, &stdin, &shOptionLetters) {
+				continue
+			}
+		}
+		if longOption == "noexec" {
+			noExec = true
+			continue
+		}
+		if program == "zsh" && len(flag) > 2 && (flag[:2] == "-o" || flag[:2] == "+o") {
+			applyZshOption(flag[2:], flag[0] == '-', &noExec, &stdin, &shOptionLetters)
+			continue
+		}
+		if program == "bash" && !strings.HasPrefix(flag, "--") {
+			bashShortOption = true
+		}
+		if flag == "-o" || flag == "+o" {
 			i++
+			if i >= len(args) {
+				inputFound = false
+				break
+			}
+			option, static := staticWord(args[i])
+			if !static {
+				inputFound = false
+				break
+			}
+			known := option == "noexec"
+			if program == "zsh" {
+				known = applyZshOption(option, flag[0] == '-', &noExec, &stdin, &shOptionLetters)
+			} else if known {
+				noExec = flag[0] == '-'
+			}
+			if !known {
+				inputEnforcementUnsafe = true
+			}
 			continue
 		}
-		if isShellCommandFlag(flag) {
+		if flag == "-O" || flag == "+O" {
+			i++
+			if i >= len(args) {
+				inputFound = false
+				break
+			}
+			if _, static := staticWord(args[i]); !static {
+				inputFound = false
+				break
+			}
+			inputEnforcementUnsafe = true
+			continue
+		}
+		if program == "bash" && flag == "--norc" {
+			startupDisabled = true
+			startupFound = false
+			continue
+		}
+		if flag == "--rcfile" || flag == "--init-file" {
+			i++
+			if program == "bash" && !startupDisabled && i < len(args) {
+				startupPath, static := staticWord(args[i])
+				startupFD, startupFound = shellInputPathFD(startupPath)
+				if !static {
+					startupFound = false
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(flag, "--") {
+			if program == "bash" {
+				switch flag {
+				case "--debugger", "--login", "--noediting", "--noprofile", "--posix", "--restricted", "--verbose":
+					continue
+				}
+			}
+			inputFound = false
+			break
+		}
+		if !validInterpreterOptionLetters(program, flag) {
+			inputFound = false
+			break
+		}
+		if strings.ContainsRune(flag[1:], 'i') {
+			interactive = flag[0] == '-'
+		}
+		if strings.ContainsRune(flag[1:], 'n') {
+			noExec = flag[0] == '-'
+		}
+		if program == "bash" && strings.ContainsRune(flag[1:], 'D') {
+			terminalNoExec = true
+		}
+		if flag[0] == '-' && strings.ContainsRune(flag[1:], 'c') {
+			inputFound = false
+			break
+		}
+		if strings.ContainsRune(flag[1:], 's') {
+			stdin = flag[0] == '-'
+		}
+	}
+	result := shellInvocation{
+		inputEnforcementUnsafe: inputEnforcementUnsafe,
+		noExec:                 noExec || terminalNoExec,
+	}
+	if result.noExec {
+		return result
+	}
+	if program == "bash" && interactive && startupFound {
+		result.inputFDs = append(result.inputFDs, startupFD)
+	}
+	if inputFound && (len(result.inputFDs) == 0 || result.inputFDs[0] != inputFD) {
+		result.inputFDs = append(result.inputFDs, inputFD)
+	}
+	return result
+}
+
+func validInterpreterOptionLetters(program, flag string) bool {
+	allowed := "abefhkmnptuvxCcis"
+	switch program {
+	case "bash":
+		allowed = "abefhkmnptuvxBCEHPTcdilrsD"
+	case "zsh":
+		allowed = "bcdfiklmnoprsuvxX"
+	}
+	for _, option := range flag[1:] {
+		if !strings.ContainsRune(allowed, option) {
 			return false
-		}
-		if flag == "-" {
-			stdin = true
-			continue
-		}
-		if !strings.HasPrefix(flag, "-") {
-			return stdin
-		}
-		if len(flag) > 1 && flag[0] == '-' && !strings.HasPrefix(flag, "--") &&
-			strings.ContainsRune(flag[1:], 's') {
-			stdin = true
 		}
 	}
 	return true
+}
+
+func normalizedZshOption(option string) string {
+	return strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(option))
+}
+
+func applyZshOption(option string, enabled bool, noExec, stdin, shOptionLetters *bool) bool {
+	switch normalizedZshOption(option) {
+	case "noexec":
+		*noExec = enabled
+	case "exec":
+		*noExec = !enabled
+	case "stdin", "shinstdin":
+		*stdin = enabled
+	case "nostdin", "noshinstdin":
+		*stdin = !enabled
+	case "shoptionletters":
+		*shOptionLetters = enabled
+	case "noshoptionletters":
+		*shOptionLetters = !enabled
+	default:
+		return false
+	}
+	return true
+}
+
+func shellInputPathFD(sourcePath string) (int64, bool) {
+	sourcePath = path.Clean(sourcePath)
+	if sourcePath == "/dev/stdin" {
+		return 0, true
+	}
+	for _, prefix := range []string{"/dev/fd/", "/proc/self/fd/"} {
+		if strings.HasPrefix(sourcePath, prefix) {
+			return parseShellFD(strings.TrimPrefix(sourcePath, prefix))
+		}
+	}
+	return 0, false
+}
+
+func parseShellFD(value string) (int64, bool) {
+	fd, err := strconv.ParseUint(value, 10, 63)
+	return int64(fd), err == nil
+}
+
+func posixRedirectFD(redirect *syntax.Redirect) (int64, bool) {
+	if redirect.N == nil {
+		return defaultRedirectFD(redirect.Op), true
+	}
+	return parseShellFD(redirect.N.Value)
 }
 
 func evalScript(source string, args []*syntax.Word) (string, bool) {

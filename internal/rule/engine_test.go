@@ -444,8 +444,8 @@ func TestEngineDoesNotEnforceRuntimeDependentCommands(t *testing.T) {
 		ToolName:  "bash",
 		Command:   `run(){ wipefs -a /dev/sda; }; run`,
 	})
-	if err != nil || len(staticBody) != 1 || staticBody[0].EnforcementMatch {
-		t.Fatalf("static function body = (%+v, %v), want detection-only match", staticBody, err)
+	if err != nil || len(staticBody) != 1 || !staticBody[0].EnforcementMatch {
+		t.Fatalf("static function body = (%+v, %v), want enforceable request match", staticBody, err)
 	}
 }
 
@@ -532,7 +532,7 @@ func TestEngineDoesNotInferPowerShellPreviewForNativeCommandsOrAmbientState(t *t
 	}
 }
 
-func TestEngineDoesNotEnforcePartialShellAnalysis(t *testing.T) {
+func TestEngineEnforcesCompleteCandidateWithDynamicSibling(t *testing.T) {
 	enforce := true
 	eng := mustEngine(t, Rule{
 		ID:       "t.remove",
@@ -550,8 +550,8 @@ func TestEngineDoesNotEnforcePartialShellAnalysis(t *testing.T) {
 	if err == nil {
 		t.Fatal("Eval succeeded, want dynamic-command diagnostic")
 	}
-	if len(matches) != 1 || matches[0].EnforcementMatch {
-		t.Fatalf("partial static match = %+v, want detection-only rm witness", matches)
+	if len(matches) != 1 || !matches[0].EnforcementMatch {
+		t.Fatalf("partial static match = %+v, want enforceable rm candidate", matches)
 	}
 
 	eng = mustEngine(t, Rule{
@@ -600,6 +600,14 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `command wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `exec wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `nohup wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `false && wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `true || wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `if false; then wipefs -a /dev/sda; fi`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `for x in one; do wipefs -a /dev/sda; done`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo ready; wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `! wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda &`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo "$(wipefs -a /dev/sda)"`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Stop-Process -Name target -Force`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Stop-Process -Name target -Force 2>&1`},
 		{EventType: model.EventCommandExec, ToolName: "cmd.exe", Command: `del C:\target`},
@@ -613,11 +621,7 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 	}
 
 	detectionOnly := []model.Event{
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `false && wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `true || wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `if false; then wipefs -a /dev/sda; fi`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `for x in one; do wipefs -a /dev/sda; done`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `run(){ wipefs -a /dev/sda; }; run`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs(){ echo safe; }; wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `eval 'wipefs -a /dev/sda'`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `command eval 'wipefs -a /dev/sda'`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `command exec wipefs -a /dev/sda`},
@@ -647,13 +651,8 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `env -u PATH wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `exec -a wipe wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `pwsh -Command 'Stop-Process -Name target -Force'`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo "$(wipefs -a /dev/sda)"`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda --no-*`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda --{no-act,other}`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `echo ready; wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `"$next"; wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `! wipefs -a /dev/sda`},
-		{EventType: model.EventCommandExec, ToolName: "bash", Command: `wipefs -a /dev/sda &`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Write-Output ready; Stop-Process -Name target -Force`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `if ($false) { Stop-Process -Name target -Force }`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Write-Output target | Stop-Process -Force`},

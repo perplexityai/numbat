@@ -327,28 +327,20 @@ func project(rules []*rule.SequenceRule, ev model.Event, seq uint64) (entry, []e
 	}
 	e.ts, e.tsOK = parseTimestamp(ev.Timestamp)
 	var errs []error
-	activations := rule.PrepareSequenceActivations(ev, rules)
-	if activations.Err != nil {
-		errs = append(errs, activations.Err)
+	activations, activationErr := rule.PrepareSequenceActivations(ev, rules)
+	if activationErr != nil {
+		errs = append(errs, activationErr)
 	}
 	for ri, r := range rules {
 		for si := 0; si < r.StepCount(); si++ {
-			if activations.Err != nil && r.StepUsesShellCommands(si) && !activations.ShellUsable {
-				continue
-			}
-			ok, evalErr := r.EvalStep(si, activations.Detection)
+			evaluation, evalErr := r.EvalStep(si, activations)
 			if evalErr != nil {
 				errs = append(errs, evalErr)
-				continue
 			}
-			if !ok {
-				continue
+			if evaluation.Match {
+				e.masks[ri] |= 1 << si
 			}
-			e.masks[ri] |= 1 << si
-			if !r.Rule().IsEnforceEligible() {
-				continue
-			}
-			if r.StepUsesShellCommands(si) && !activations.ShellEnforcementSafe {
+			if !evaluation.EnforcementMatch {
 				continue
 			}
 			e.enforcementMasks[ri] |= 1 << si

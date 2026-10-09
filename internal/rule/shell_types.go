@@ -133,7 +133,7 @@ func projectPOSIXCommand(source string, args []*syntax.Word, assignments []*synt
 		for _, redirect := range redirects {
 			projected, err := projectPOSIXRedirect(source, redirect, ctx.statementIDs)
 			if err != nil {
-				return ShellCommand{}, false, err
+				return command, false, err
 			}
 			command.Redirects = append(command.Redirects, projected)
 		}

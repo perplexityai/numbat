@@ -135,6 +135,34 @@ func TestSequenceStepUsesShellCommands(t *testing.T) {
 	}
 }
 
+func TestSequenceFinalStepCanMatchOneCompoundCandidate(t *testing.T) {
+	enforce := true
+	r := secretThenEgress(func(spec *rule.SequenceSpec) {
+		spec.Steps[0].Expr = `shell_commands.exists(command, command.name == "prep")`
+		spec.Steps[1].Expr = `shell_commands.filter(command, command.name == "cat").size() == 1 &&
+			shell_commands[0].argv[1] == ".env"`
+	})
+	r.Enforce = &enforce
+	tr := NewTracker(compile(t, r), DefaultConfig())
+
+	prep := ev("e1", "2026-06-01T10:00:00Z", model.EventCommandExec, func(e *model.Event) {
+		e.Command = "prep"
+	})
+	if observation, err := tr.Observe(prep); err != nil || len(observation.Findings) != 0 {
+		t.Fatalf("prep observation = %+v, %v", observation, err)
+	}
+	compound := ev("e2", "2026-06-01T10:01:00Z", model.EventCommandExec, func(e *model.Event) {
+		e.Command = "true; cat .env"
+	})
+	observation, err := tr.Observe(compound)
+	if err == nil {
+		t.Fatal("compound observation returned no aggregate evaluation error")
+	}
+	if len(observation.Findings) != 1 || len(observation.EnforcementRules) != 1 {
+		t.Fatalf("compound observation = %+v, want one finding and one enforcement rule", observation)
+	}
+}
+
 func TestSequenceShellAnalysisErrorIsReported(t *testing.T) {
 	r := secretThenEgress(func(spec *rule.SequenceSpec) {
 		spec.Steps[0].Expr = `shell_commands.size() == 0`

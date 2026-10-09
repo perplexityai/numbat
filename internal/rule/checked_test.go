@@ -36,6 +36,7 @@ func TestCheckedExpressionsPreserveEvaluation(t *testing.T) {
 	}
 	for _, event := range []model.Event{
 		{EventType: model.EventCommandExec, Command: "echo ready"},
+		{EventType: model.EventCommandExec, Command: "true; echo ready"},
 		{EventType: model.EventCommandExec, Command: "go test ./..."},
 		{EventType: model.EventFileRead, FilePath: "README.md"},
 	} {
