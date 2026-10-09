@@ -13,7 +13,7 @@ import (
 
 // SchemaVersion is the version of the emitted record schema. It is stamped
 // on every emitted record so receivers can route and migrate deterministically.
-const SchemaVersion = "0.4.0"
+const SchemaVersion = "0.5.0"
 
 // ToolName is the identifier emitted in records and reports.
 const ToolName = "numbat"
@@ -313,6 +313,22 @@ type Event struct {
 	ContentBytes     int    `json:"content_bytes,omitempty"`
 	ContentTruncated bool   `json:"content_truncated,omitempty"`
 
+	// ContentOmitted names bodies withheld to fit the record output size limit.
+	// Original byte counts and capture truncation flags remain unchanged.
+	ContentOmitted []string `json:"content_omitted,omitempty"`
+
+	// Tool payloads are JSON-encoded strings. Missing fields remain absent;
+	// an explicit null or empty string is retained as JSON null or "".
+	// Parsers retain originals privately until an output projection is selected.
+	ToolInput           string `json:"tool_input,omitempty"`
+	ToolInputBytes      int    `json:"tool_input_bytes,omitempty"`
+	ToolInputTruncated  bool   `json:"tool_input_truncated,omitempty"`
+	ToolResult          string `json:"tool_result,omitempty"`
+	ToolResultBytes     int    `json:"tool_result_bytes,omitempty"`
+	ToolResultTruncated bool   `json:"tool_result_truncated,omitempty"`
+	toolInput           toolPayload
+	toolResult          toolPayload
+
 	analysisContent          string
 	analysisContentBytes     int
 	analysisContentTruncated bool
@@ -376,9 +392,16 @@ func (e Event) celView() map[string]any {
 		"sub_agent_id":              e.SubAgentID,
 		"content_preview":           e.ContentPreview,
 		"content_preview_truncated": e.ContentPreviewTruncated,
+		"tool_input":                e.ToolInputForAnalysis(),
+		"tool_input_bytes":          e.ToolInputBytesForAnalysis(),
+		"tool_input_truncated":      e.ToolInputTruncatedForAnalysis(),
+		"tool_result":               e.ToolResultForAnalysis(),
+		"tool_result_bytes":         e.ToolResultBytesForAnalysis(),
+		"tool_result_truncated":     e.ToolResultTruncatedForAnalysis(),
 		"content":                   e.contentForAnalysis(),
 		"content_bytes":             e.contentBytesForAnalysis(),
 		"content_truncated":         e.contentTruncatedForAnalysis(),
+		"content_omitted":           toAnySlice(e.ContentOmitted),
 		"tags":                      toAnySlice(e.Tags),
 		"confidence":                e.Confidence,
 	}
@@ -416,6 +439,8 @@ func (e Event) ContentTruncatedForAnalysis() bool { return e.contentTruncatedFor
 // removed. Output projections call it after taking any explicitly requested
 // content so the returned event cannot expose the unredacted analysis copy.
 func (e Event) WithoutAnalysisContent() Event {
+	e.toolInput = toolPayload{}
+	e.toolResult = toolPayload{}
 	e.analysisContent = ""
 	e.analysisContentBytes = 0
 	e.analysisContentTruncated = false

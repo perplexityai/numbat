@@ -182,6 +182,26 @@ enables this analysis; `--content full` is needed only to emit it. Use
 `event.content_bytes` is the mapped body size before Numbat's bound. These
 fields never include file bodies, patches, or arbitrary tool output.
 
+Tool actions and results expose the original source payloads through
+`event.tool_input` and `event.tool_result`, independently of the output mode.
+These strings contain JSON values, preserving objects, arrays, scalars and
+explicit `null`; a missing payload is `""`, while a recorded empty string is
+`"\"\""`. Specialized command, file and network events retain their tool
+payloads too. File contents and patches can therefore occur in these fields.
+Each payload is bounded to 16 MiB. The corresponding `*_bytes` field counts
+serialized JSON bytes before that bound; `*_truncated` reports an incomplete
+payload. These flags describe Numbat's retention, not upstream completeness.
+
+Reading an incomplete tool payload produces a scoped evaluation error rather
+than allowing a negative check to treat its missing tail as clean. This also
+applies when replaying preview records with a byte count but no body. Rules
+can inspect the truncation flags without reading the body. Content rules use
+the bounded CEL evaluation budget. Output redaction never changes local rule
+input; redacted exports cannot reconstruct original values during replay.
+
+`event.content_omitted` lists bodies removed by the record output limit. Reading
+a listed body during replay also produces a scoped evaluation error.
+
 ### Event fields
 
 The CEL `event` map always contains every key below. `exit_code`, `duration_ms`,
@@ -208,9 +228,13 @@ uses `0`, and `tags` uses an empty list.
 | `event.source_type` | string | `event.sub_agent` | string |
 | `event.sub_agent_id` | string | `event.tags` | list(string) |
 | `event.timestamp` | string | `event.tool_call_id` | string |
+| `event.tool_input` | string | `event.tool_result` | string |
+| `event.tool_input_bytes` | int | `event.tool_result_bytes` | int |
+| `event.tool_input_truncated` | bool | `event.tool_result_truncated` | bool |
 | `event.tool_name` | string | `event.url` | string |
+| `event.content_omitted` | list(string) | | |
 
-The [event schema](schema/v0.4.0/event-record.schema.json) defines closed values
+The [event schema](schema/v0.5.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and
 `confidence`.
 
@@ -502,7 +526,7 @@ numbat rules test \
 
 Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
-See the [event schema](schema/v0.4.0/event-record.schema.json) for required
+See the [event schema](schema/v0.5.0/event-record.schema.json) for required
 fields.
 
 ## Sequence rules

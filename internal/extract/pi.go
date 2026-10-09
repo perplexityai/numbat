@@ -136,6 +136,8 @@ func (e PiExtractor) Extract(r io.Reader, src Source) (*Result, error) {
 }
 
 func (e PiExtractor) mapLine(res *Result, src Source, sha string, st *piState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var entry piEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		res.diag(src.Path, line, "malformed JSON line")
@@ -299,6 +301,7 @@ func (e PiExtractor) mapBashExecution(res *Result, src Source, sha string, st *p
 }
 
 func classifyPiTool(ev *model.Event, name string, args map[string]json.RawMessage) {
+	ev.SetToolInput(args)
 	switch name {
 	case "bash":
 		ev.EventType = model.EventCommandExec

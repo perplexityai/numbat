@@ -62,6 +62,8 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	var emitValues multiFlag
 	fs.Var(&emitValues, "emit", emitFlagHelp())
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
+	maxRecordBytes := fs.Int("max-record-bytes", 0, maxRecordBytesHelp)
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout))
 	outputFile := fs.String("output-file", "", "destination path (required when --output includes file)")
@@ -76,7 +78,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat collect [--addr 127.0.0.1:4318] [--emit KIND ...] [--content preview|full] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "usage: numbat collect [--addr 127.0.0.1:4318] [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		fmt.Fprintln(stderr, "\nReceives live OTLP/HTTP protobuf logs from supported AI agents and emits")
 		fmt.Fprintln(stderr, "selected records through the shared detection pipeline.")
 		fmt.Fprintln(stderr, "\nAt the default address, send logs to http://"+defaultOTLPAddr+otlpLogsPath+".")
@@ -106,6 +108,16 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "collect: %v\n", err)
 		fs.Usage()
+		return 2
+	}
+	scope, err := parseContentScope(*contentScopeFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "collect: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	if *maxRecordBytes < 0 {
+		fmt.Fprintln(stderr, "collect: --max-record-bytes must be non-negative")
 		return 2
 	}
 	if err := validateContentSelection(content, sel); err != nil {
@@ -149,7 +161,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rid := runID()
-	em := output.NewWithSink(sink, stderr, rid, contentEmitterOptions(content)...)
+	em := output.NewWithSink(sink, stderr, rid, contentEmitterOptions(content, scope, *maxRecordBytes)...)
 	rcv, err := newCollector(collectorConfig{
 		emit:      em,
 		runID:     rid,

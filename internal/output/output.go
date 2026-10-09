@@ -10,6 +10,7 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -161,8 +162,11 @@ type StatsReporter interface {
 type Emitter struct {
 	runID    string
 	endpoint Endpoint
-	// fullContent is fixed by a constructor option before concurrent use.
-	fullContent bool
+	// Output options are fixed before concurrent use.
+	fullContent        bool
+	rawContent         bool
+	messageContentOnly bool
+	maxRecordBytes     int
 
 	mu                sync.Mutex
 	sink              Sink
@@ -178,10 +182,25 @@ type Emitter struct {
 // EmitterOption configures an Emitter before it is used.
 type EmitterOption func(*Emitter)
 
-// WithFullContent includes redacted, bounded conversation content in event
+// WithFullContent includes redacted, bounded message and tool content in event
 // records. The default projection emits only content_preview.
 func WithFullContent() EmitterOption {
 	return func(e *Emitter) { e.fullContent = true }
+}
+
+// WithRawContent explicitly includes unredacted mapped content in event output.
+func WithRawContent() EmitterOption { return func(e *Emitter) { e.rawContent = true } }
+
+// WithMessageContentOnly limits full/raw output to conversation bodies. Tool
+// fields keep the normal preview policy; analysis content is unchanged.
+func WithMessageContentOnly() EmitterOption {
+	return func(e *Emitter) { e.messageContentOnly = true }
+}
+
+// WithMaxRecordBytes limits each encoded record, including its newline, before
+// it reaches any sink. Zero disables the limit; negative values fail emission.
+func WithMaxRecordBytes(limit int) EmitterOption {
+	return func(e *Emitter) { e.maxRecordBytes = limit }
 }
 
 // Stats is a point-in-time snapshot of emitter counters.
@@ -246,7 +265,7 @@ func (nopCloseSink) Close() error { return nil }
 // emitLocked marshals payload, injects the record_type/run_id envelope, and
 // writes the resulting object as one NDJSON line. The caller holds e.mu.
 func (e *Emitter) emitLocked(recordType string, payload any) error {
-	b, err := json.Marshal(payload)
+	b, err := marshalRecordJSON(payload)
 	if err != nil {
 		return err
 	}
@@ -260,11 +279,15 @@ func (e *Emitter) emitLocked(recordType string, payload any) error {
 		fields["schema_version"], _ = json.Marshal(model.SchemaVersion)
 	}
 	fields["endpoint"], _ = json.Marshal(e.endpoint)
-	line, err := json.Marshal(fields)
+	line, err := marshalRecordJSON(fields)
 	if err != nil {
 		return err
 	}
 	line = append(line, '\n')
+	line, err = limitRecord(fields, line, e.maxRecordBytes)
+	if err != nil {
+		return err
+	}
 	n, err := e.sink.Write(line)
 	if err != nil {
 		return err
@@ -290,13 +313,16 @@ func (e *Emitter) EmitFinding(f model.Finding) error {
 // EmitEvent writes one normalized event as an NDJSON line (record_type=event).
 // The event is redacted on the way out (redact.Event), masking secret-like
 // values while preserving useful evidence context.
-// Rules have already evaluated the unredacted event upstream, so this affects
-// output only, never detection.
+// This projection affects output only; rules evaluate the original event.
 func (e *Emitter) EmitEvent(ev model.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var projected model.Event
-	if e.fullContent {
+	if e.messageContentOnly && (e.fullContent || e.rawContent) {
+		projected = redact.EventWithMessageContent(ev, e.rawContent)
+	} else if e.rawContent {
+		projected = redact.EventWithRawContent(ev)
+	} else if e.fullContent {
 		projected = redact.EventWithContent(ev)
 	} else {
 		projected = redact.Event(ev)
@@ -440,4 +466,16 @@ func (e *Emitter) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.sink.Close()
+}
+
+// Records are JSON, not HTML. Avoid expanding source text such as patches and
+// markup sixfold before applying the transport's byte limit.
+func marshalRecordJSON(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }

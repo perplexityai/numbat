@@ -132,6 +132,11 @@ type claudeState struct {
 	// tool.result to a command.result. A file read or MCP call id never enters the
 	// set, so its result is never reclassified.
 	commandCallIDs map[string]struct{}
+	toolCalls      map[string]claudeToolIdentity
+}
+
+type claudeToolIdentity struct {
+	name, server, tool string
 }
 
 // noteCommandCall records a Bash tool_use id so its later result correlates to a
@@ -263,6 +268,28 @@ func readLine(br *bufio.Reader) (line []byte, tooLong bool, err error) {
 
 // mapLine decodes one record and dispatches by entry type.
 func (e ClaudeExtractor) mapLine(res *Result, src Source, sha string, st *claudeState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() {
+		events := res.Events[start:]
+		retainToolContent(events, raw)
+		var envelope map[string]json.RawMessage
+		if json.Unmarshal(raw, &envelope) != nil || len(envelope["toolUseResult"]) == 0 {
+			return
+		}
+		resultIndex, count := -1, 0
+		for i, ev := range events {
+			if ev.EventType == model.EventToolResult || ev.EventType == model.EventCommandResult {
+				resultIndex = i
+				count++
+			}
+		}
+		if count == 1 && events[resultIndex].Evidence.JSONPointer != "/toolUseResult" {
+			ev := &events[resultIndex]
+			if original := ev.ToolResultForAnalysis(); json.Valid([]byte(original)) {
+				ev.SetToolResult(map[string]json.RawMessage{"tool_result": json.RawMessage(original), "toolUseResult": envelope["toolUseResult"]})
+			}
+		}
+	}()
 	var entry claudeEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		res.diag(src.Path, line, "malformed JSON line")
@@ -324,7 +351,7 @@ func (e ClaudeExtractor) mapUser(res *Result, src Source, sha string, st *claude
 	commandBlocks := 0
 	for i := range entry.Message.Content {
 		c := &entry.Message.Content[i]
-		if c.Type == "tool_result" && st.isCommandCall(c.ToolUseID) {
+		if c.Type == "tool_result" && st.isCommandCall(entry.SessionID+"\x00"+c.ToolUseID) {
 			commandBlocks++
 		}
 	}
@@ -337,12 +364,14 @@ func (e ClaudeExtractor) mapUser(res *Result, src Source, sha string, st *claude
 		ev.Actor = model.ActorTool
 		ev.Confidence = model.ConfidenceHigh
 		ev.ToolCallID = c.ToolUseID
+		call := st.toolCalls[entry.SessionID+"\x00"+c.ToolUseID]
+		ev.ToolName, ev.MCPServer, ev.MCPTool = call.name, call.server, call.tool
 		ev.Evidence.JSONPointer = fmt.Sprintf("/message/content/%d", i)
 		// A result correlated by tool_use_id to a prior Bash command.exec is a
 		// command.result; only then is the exit code attributable to it. A result
 		// for a Read/MCP/web call keeps tool.result, so file/MCP output is never
 		// reclassified.
-		if st.isCommandCall(c.ToolUseID) {
+		if st.isCommandCall(entry.SessionID + "\x00" + c.ToolUseID) {
 			ev.EventType = model.EventCommandResult
 			if commandBlocks == 1 { // see the one-result rationale above
 				ev.ExitCode = exit
@@ -425,8 +454,15 @@ func (e ClaudeExtractor) mapAssistant(res *Result, src Source, sha string, st *c
 			ev.ToolCallID = c.ID
 			ev.Evidence.JSONPointer = fmt.Sprintf("/message/content/%d", i)
 			classifyTool(&ev, c.Name, c.Input)
-			if ev.EventType == model.EventCommandExec {
-				st.noteCommandCall(c.ID)
+			if st.toolCalls == nil {
+				st.toolCalls = make(map[string]claudeToolIdentity)
+			}
+			if c.ID != "" {
+				st.toolCalls[entry.SessionID+"\x00"+c.ID] = claudeToolIdentity{name: ev.ToolName, server: ev.MCPServer, tool: ev.MCPTool}
+			}
+			delete(st.commandCallIDs, entry.SessionID+"\x00"+c.ID)
+			if ev.EventType == model.EventCommandExec && c.ID != "" {
+				st.noteCommandCall(entry.SessionID + "\x00" + c.ID)
 			}
 			res.Events = append(res.Events, ev)
 		case "thinking":
@@ -662,6 +698,7 @@ func claudeSubAgent(agentID, path string) string {
 // Unknown tools fall back to a generic tool.call so coverage never silently
 // drops a call.
 func classifyTool(ev *model.Event, name string, input map[string]json.RawMessage) {
+	ev.SetToolInput(input)
 	ev.ToolName = name
 	switch name {
 	case "Bash":

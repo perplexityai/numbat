@@ -43,6 +43,9 @@ func TestJSONRejectsCredentialInObjectKey(t *testing.T) {
 }
 
 func FuzzJSONProducesValidJSON(f *testing.F) {
+	f.Add([]byte(`{"arguments":"{\"cookie\":\"PRIVATE_CANARY\""}`))
+	f.Add([]byte(`{"result":{"text":"[{\"auth\":\"PRIVATE_CANARY\"} trailing"}}`))
+	f.Add([]byte(`{"arguments":"{\"cookie\":\"PRIVATE_CANARY\",\"n\":9007199254740993}"}`))
 	f.Add([]byte(`{"api_key":"secret","input_tokens":42}`))
 	f.Add([]byte(`{"broken":`))
 	f.Fuzz(func(t *testing.T, raw []byte) {

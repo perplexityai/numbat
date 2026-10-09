@@ -155,6 +155,8 @@ func (e KimiCodeExtractor) Extract(r io.Reader, src Source) (*Result, error) {
 }
 
 func (e KimiCodeExtractor) mapLine(res *Result, src Source, sha string, st *kimiState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var record kimiWireRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
 		res.diag(src.Path, line, "malformed JSON line")
@@ -273,6 +275,7 @@ func (e KimiCodeExtractor) mapLoopEvent(res *Result, src Source, sha string, st 
 }
 
 func classifyKimiTool(ev *model.Event, name string, raw json.RawMessage) {
+	ev.SetToolInput(raw)
 	args := map[string]json.RawMessage{}
 	_ = json.Unmarshal(raw, &args)
 	switch name {

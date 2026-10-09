@@ -383,10 +383,10 @@ func (tc *cursorToolCall) name() string { return firstNonEmpty(tc.Name, tc.Tool)
 func (tc *cursorToolCall) callID() string { return firstNonEmpty(tc.CallID, tc.ToolID, tc.ID) }
 
 // input resolves the tool's argument object across spellings, returning the
-// first non-empty of input/args/parameters.
+// first present object of input/args/parameters.
 func (tc *cursorToolCall) input() map[string]json.RawMessage {
 	for _, m := range []map[string]json.RawMessage{tc.Input, tc.Args, tc.Params} {
-		if len(m) > 0 {
+		if m != nil {
 			return m
 		}
 	}

@@ -11,7 +11,26 @@ type contentMode uint8
 const (
 	contentPreview contentMode = iota
 	contentFull
+	contentRaw
 )
+
+type contentScope uint8
+
+const (
+	contentScopeAll contentScope = iota
+	contentScopeMessages
+)
+
+func parseContentScope(value string) (contentScope, error) {
+	switch value {
+	case "all":
+		return contentScopeAll, nil
+	case "messages":
+		return contentScopeMessages, nil
+	default:
+		return contentScopeAll, fmt.Errorf("invalid --content-scope %q: want all|messages", value)
+	}
+}
 
 func parseContentMode(value string) (contentMode, error) {
 	switch value {
@@ -19,8 +38,10 @@ func parseContentMode(value string) (contentMode, error) {
 		return contentPreview, nil
 	case "full":
 		return contentFull, nil
+	case "raw":
+		return contentRaw, nil
 	default:
-		return contentPreview, fmt.Errorf("invalid --content %q: want preview|full", value)
+		return contentPreview, fmt.Errorf("invalid --content %q: want preview|full|raw", value)
 	}
 }
 
@@ -36,19 +57,39 @@ func applyDeprecatedProfile(value string, includeReasoning bool) (bool, error) {
 }
 
 func validateContentSelection(mode contentMode, sel emitSelection) error {
-	if mode == contentFull && !sel.events {
-		return fmt.Errorf("--content full requires --emit events or --emit all")
+	if mode != contentPreview && !sel.events {
+		name := "full"
+		if mode == contentRaw {
+			name = "raw"
+		}
+		return fmt.Errorf("--content %s requires --emit events or --emit all", name)
 	}
 	return nil
 }
 
 func contentFlagHelp() string {
-	return "conversation content in event output: preview|full (full is redacted and bounded to 1 MiB)"
+	return "message and tool content in event output: preview|full|raw (full redacts; raw preserves selected content; messages: 1 MiB; tool payloads: 16 MiB)"
 }
 
-func contentEmitterOptions(mode contentMode) []output.EmitterOption {
-	if mode == contentFull {
-		return []output.EmitterOption{output.WithFullContent()}
+func contentScopeFlagHelp() string {
+	return "scope of full/raw content: all|messages (messages keeps tool previews and metadata; does not affect local detection)"
+}
+
+const maxRecordBytesHelp = "maximum bytes per output record including newline (0 disables; oversized content bodies are omitted)"
+
+func contentEmitterOptions(mode contentMode, scope contentScope, maxRecordBytes int) []output.EmitterOption {
+	var opts []output.EmitterOption
+	switch mode {
+	case contentRaw:
+		opts = append(opts, output.WithRawContent())
+	case contentFull:
+		opts = append(opts, output.WithFullContent())
 	}
-	return nil
+	if scope == contentScopeMessages {
+		opts = append(opts, output.WithMessageContentOnly())
+	}
+	if maxRecordBytes != 0 {
+		opts = append(opts, output.WithMaxRecordBytes(maxRecordBytes))
+	}
+	return opts
 }

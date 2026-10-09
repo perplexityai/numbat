@@ -41,6 +41,23 @@ type sequenceActivations struct {
 // command. The projection is never emitted.
 func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands bool) sequenceActivations {
 	detection := ev.CELActivation()
+	view := detection["event"].(map[string]any)
+	// CEL propagates these only if the expression needs the payload. A rule
+	// scoped to a different event remains evaluable, and metadata-only rules
+	// can explicitly detect incomplete capture.
+	if ev.ToolInputTruncatedForAnalysis() || ev.ToolInputForAnalysis() == "" && ev.ToolInputBytesForAnalysis() > 0 {
+		view["tool_input"] = types.NewErr("tool input is incomplete")
+	}
+	if ev.ToolResultTruncatedForAnalysis() || ev.ToolResultForAnalysis() == "" && ev.ToolResultBytesForAnalysis() > 0 {
+		view["tool_result"] = types.NewErr("tool result is incomplete")
+	}
+	for _, field := range ev.ContentOmitted {
+		switch field {
+		case "content", "tool_input", "tool_result":
+			view[field] = types.NewErr("%s was omitted from record output", field)
+		}
+	}
+
 	detection["event"] = adapter.NativeToValue(detection["event"])
 	if !needShellCommands {
 		return sequenceActivations{

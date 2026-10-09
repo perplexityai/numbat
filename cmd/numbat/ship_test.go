@@ -315,6 +315,19 @@ func TestReadShipBatchRespectsByteLimit(t *testing.T) {
 	}
 }
 
+func TestShipRetainsLargeToolRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.ndjson")
+	record := []byte(`{"tool_result":"` + strings.Repeat("x", 9<<20) + `TAIL"}` + "\n")
+	appendRaw(t, path, record)
+	batch, err := readShipBatch(path, newTestShipCursor().checkpoint, maxShipBatchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.skippedOversized || !bytes.Equal(batch.blob, record) {
+		t.Fatal("large tool record was skipped or changed")
+	}
+}
+
 func TestShipStopsBetweenSplitRequests(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

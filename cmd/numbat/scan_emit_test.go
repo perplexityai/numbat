@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -389,6 +390,162 @@ func TestScanFullContentRequiresEvents(t *testing.T) {
 	_, errb, code := runCLI("scan", "--path", p, "--content", "full")
 	if code != 2 || !strings.Contains(errb, "--content full requires --emit events or --emit all") {
 		t.Fatalf("exit=%d stderr=%q", code, errb)
+	}
+}
+
+func TestScanToolContentModes(t *testing.T) {
+	secret := "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	input := `{"unknown":"` + strings.Repeat("x", 70000) + `INPUT_TAIL","password":"` + secret + `","n":9007199254740993}`
+	body := `{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"c","name":"mcp__notes__save","input":` + input + `}]}}
+{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"c","content":"RESULT_TAIL"}]}}`
+	p := writeTranscript(t, body)
+	for _, mode := range []string{"preview", "full", "raw"} {
+		t.Run(mode, func(t *testing.T) {
+			out, errb, code := runCLI("scan", "--path", p, "--emit", "events", "--content", mode)
+			if code != 0 {
+				t.Fatalf("exit=%d stderr=%s", code, errb)
+			}
+			var call, result model.Event
+			for _, ev := range decodeEventRecords(t, out) {
+				if ev.EventType == model.EventToolCall {
+					call = ev
+				}
+				if ev.EventType == model.EventToolResult {
+					result = ev
+				}
+			}
+			if call.ToolInputBytes != len(input) || result.ToolResultBytes == 0 {
+				t.Fatal("missing payload size metadata")
+			}
+			if mode == "preview" {
+				if call.ToolInput != "" || result.ToolResult != "" || strings.Contains(out, secret) {
+					t.Fatal("preview exposed payloads")
+				}
+				return
+			}
+			if !strings.Contains(call.ToolInput, "INPUT_TAIL") || !strings.Contains(call.ToolInput, "9007199254740993") || !strings.Contains(result.ToolResult, "RESULT_TAIL") {
+				t.Fatal("lost tool content or numeric precision")
+			}
+			if strings.Contains(out, secret) != (mode == "raw") {
+				t.Fatal("wrong redaction policy")
+			}
+		})
+	}
+}
+
+func TestScanSerializedToolContentRulesAndOutput(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	rulesDir := writeEnforceRuleFile(t, `id: test.serialized_tool_content
+version: "1.0"
+enabled: true
+title: Synthetic serialized input
+severity: high
+expr: event.tool_input.contains("PRIVATE_CANARY")
+`)
+	artifact := writeTranscript(t, `{"type":"response_item","payload":{"type":"message","role":"user","content":"fallback one"}}
+{"type":"response_item","payload":{"type":"function_call","name":"mcp__notes__save","call_id":"c","arguments":"{\"cookie\":\"PRIVATE_CANARY\",\"keep\":\"VISIBLE\"}"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":"fallback two"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"explicit prompt"}}`)
+	rolloutDir := filepath.Join(t.TempDir(), ".codex", "sessions")
+	if err := os.MkdirAll(rolloutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(rolloutDir, "rollout-synthetic.jsonl")
+	if err := os.Rename(artifact, rollout); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"preview", "full", "raw"} {
+		t.Run(mode, func(t *testing.T) {
+			out, errb, code := runCLI("scan", "--path", rollout, "--emit", "all", "--content", mode,
+				"--rules-dir", rulesDir, "--no-builtin-rules")
+			if code != 0 {
+				t.Fatalf("exit=%d stderr=%s", code, errb)
+			}
+			if countType(recordTypes(t, out), "finding") != 1 {
+				t.Fatal("local rule lost original input or artifact was discarded")
+			}
+			if strings.Contains(out, "PRIVATE_CANARY") != (mode == "raw") {
+				t.Fatal("wrong output redaction policy")
+			}
+			calls := 0
+			for _, ev := range decodeEventRecords(t, out) {
+				if ev.EventType != model.EventToolCall {
+					continue
+				}
+				calls++
+				if ev.Evidence.Line != 2 || ev.ToolInputBytes == 0 {
+					t.Fatal("tool input metadata or provenance lost")
+				}
+				if mode == "preview" {
+					if ev.ToolInput != "" {
+						t.Fatal("preview exposed full input")
+					}
+				} else {
+					var input string
+					if json.Unmarshal([]byte(ev.ToolInput), &input) != nil || !json.Valid([]byte(input)) || !strings.Contains(input, "VISIBLE") {
+						t.Fatal("input representation or benign value lost")
+					}
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("tool calls=%d", calls)
+			}
+		})
+	}
+}
+
+func TestScanMalformedArgumentsAndToolSearch(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	rulesDir := writeEnforceRuleFile(t, `id: test.tool_input_capture
+version: "1.0"
+enabled: true
+title: Synthetic input capture
+severity: high
+expr: event.tool_input.contains("PRIVATE_CANARY") || event.tool_input.contains("QUERY_CANARY")
+`)
+	dir := filepath.Join(t.TempDir(), ".codex", "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-synthetic.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"response_item","payload":{"type":"function_call","name":"mcp__notes__save","call_id":"c","arguments":"{\"cookie\":\"PRIVATE_CANARY\""}}
+{"type":"response_item","payload":{"type":"tool_search_call","call_id":"x","status":"completed","execution":"client","arguments":{"query":"QUERY_CANARY","limit":8}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"preview", "full", "raw"} {
+		t.Run(mode, func(t *testing.T) {
+			out, errb, code := runCLI("scan", "--path", path, "--emit", "all", "--content", mode,
+				"--rules-dir", rulesDir, "--no-builtin-rules")
+			if code != 0 || countType(recordTypes(t, out), "finding") != 2 {
+				t.Fatalf("rules lost source input: exit=%d stderr=%s", code, errb)
+			}
+			if strings.Contains(out, "PRIVATE_CANARY") != (mode == "raw") {
+				t.Fatal("wrong serialized-input redaction policy")
+			}
+			calls := 0
+			for _, ev := range decodeEventRecords(t, out) {
+				if ev.EventType != model.EventToolCall {
+					continue
+				}
+				calls++
+				if ev.ToolInputBytes == 0 {
+					t.Fatal("missing original input size")
+				}
+				if ev.ToolCallID == "c" && mode == "full" {
+					if !ev.ToolInputTruncated || !strings.Contains(ev.ToolInput, "payload omitted") {
+						t.Fatal("malformed argument omission not explicit")
+					}
+				} else if ev.ToolInputTruncated {
+					t.Fatal("output omission contaminated original input completeness")
+				}
+				if ev.ToolCallID == "x" && mode != "preview" && ev.ToolInput != `{"query":"QUERY_CANARY","limit":8}` && ev.ToolInput != `{"limit":8,"query":"QUERY_CANARY"}` {
+					t.Fatal("tool-search input lost or changed")
+				}
+			}
+			if calls != 2 {
+				t.Fatalf("tool calls=%d", calls)
+			}
+		})
 	}
 }
 

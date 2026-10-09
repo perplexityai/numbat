@@ -184,6 +184,8 @@ func (st *windsurfState) emitSessionEnd(res *Result, sha string, src Source) {
 // command.result with the structured exit code) regardless of block order. A
 // per-record block index keeps every derived EventID unique.
 func (e WindsurfExtractor) mapLine(res *Result, src Source, sha string, st *windsurfState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var entry windsurfEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		res.diag(src.Path, line, "malformed JSON line")
@@ -383,6 +385,7 @@ func (e WindsurfExtractor) base(src Source, sha string, line int, entry *windsur
 // Claude classifiers. An unknown tool falls back to a generic tool.call so
 // coverage never silently drops a call.
 func classifyWindsurfTool(ev *model.Event, name string, input map[string]json.RawMessage) {
+	ev.SetToolInput(input)
 	ev.ToolName = name
 	switch strings.ToLower(name) {
 	case "run_command", "runcommand", "run_terminal_cmd", "shell", "terminal", "bash", "command":

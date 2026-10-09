@@ -78,6 +78,7 @@ extraction inspect mapped message text through `content`, bounded to 1 MiB per
 event.
 This analysis content is not emitted by default; `--content full` emits its
 redacted form with `content_bytes` and `content_truncated`.
+`--content raw` emits the retained content without redaction.
 Reasoning is emitted only when the source exposes it and
 `--include-reasoning` is selected.
 
@@ -86,6 +87,30 @@ kept as a rune-safe prefix rather than disappearing. `content_bytes` counts the
 mapped body before Numbat's bound and output redaction. Message content does not
 include file bodies, patch text, or arbitrary tool output. Findings carry the
 same signal as `observed_content_preview_truncated`.
+
+## Tool content
+
+Tool actions and results retain source arguments and output as JSON-encoded
+strings in `tool_input` and `tool_result`. This includes specialized command,
+file and network events, unknown object keys, structured results and non-text
+content blocks. Missing values remain absent; explicit `null`, empty objects,
+arrays and strings remain distinguishable. JSON numbers are preserved without
+conversion to floating point. Normalization may reorder object keys; this is
+not a byte-for-byte transcript archive.
+
+Rules inspect original payloads before export redaction. Each retained payload
+is bounded to 16 MiB, matching the artifact JSONL record bound. `tool_input_bytes`
+and `tool_result_bytes` count JSON bytes before retention and redaction;
+`tool_input_truncated` and `tool_result_truncated` report omitted content.
+Preview output keeps these metadata fields but omits the bodies. Full output
+redacts both bodies; raw output preserves them without redaction. An incomplete
+JSON payload is omitted with a marker in full mode because it cannot safely be
+redacted structurally. Raw mode can contain a flagged incomplete JSON prefix.
+`--content-scope messages` omits tool bodies even in full/raw mode, preserving
+their byte counts and actual truncation flags without changing local rule input.
+
+The conversation-only meaning of `content` is unchanged. See
+[content capture](content-capture.md) for output choices and source limitations.
 
 ## MCP
 
@@ -139,4 +164,4 @@ the source can be reopened on the endpoint.
 
 See [Writing rules](rules.md) for the CEL field and event-type contracts,
 [Agent coverage](agent-coverage.md) for source-specific support, and the
-[record schemas](schema/v0.4.0/) for the emitted wire format.
+[record schemas](schema/v0.5.0/) for the emitted wire format.

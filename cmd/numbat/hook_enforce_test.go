@@ -290,6 +290,66 @@ func decodeDecision(t *testing.T, out string) string {
 	return resp.HookSpecificOutput.PermissionDecision
 }
 
+func TestContentScopeDoesNotChangeEnforcement(t *testing.T) {
+	rulesDir := writeEnforceRuleFile(t, `id: test.scope_enforcement
+version: "1.0"
+enabled: true
+enforce: true
+title: Synthetic input policy
+severity: high
+expr: event.event_type == "tool.call" && event.tool_input.contains("MATCH_CANARY")
+`)
+	for _, mode := range []string{"preview", "full", "raw"} {
+		for _, scope := range []string{"all", "messages"} {
+			for _, enforce := range []bool{false, true} {
+				for _, match := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/enforce=%t/match=%t", mode, scope, enforce, match), func(t *testing.T) {
+						value := "safe"
+						wantFindings := 0
+						if match {
+							value, wantFindings = "MATCH_CANARY", 1
+						}
+						payload := `{"session_id":"s","tool_use_id":"c","tool_name":"mcp__notes__save","tool_input":{"password":"` + value + `"}}`
+						path := filepath.Join(t.TempDir(), "records.ndjson")
+						args := []string{
+							"hook", "PreToolUse", "--agent", "claude", "--emit", "all",
+							"--content", mode, "--content-scope", scope, "--rules-dir", rulesDir, "--no-builtin-rules",
+							"--state-db", filepath.Join(t.TempDir(), "state.db"), "--output", "file", "--output-file", path,
+						}
+						if enforce {
+							args = append(args, "--enforce")
+						}
+						out, diag, code := runCLIStdin(payload, args...)
+						if code != 0 || (decodeDecision(t, out) == "deny") != (enforce && match) {
+							t.Fatalf("scope changed host response: exit=%d stdout=%q stderr=%q", code, out, diag)
+						}
+						data, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(decodeFindings(t, string(data))) != wantFindings {
+							t.Fatal("scope changed local detection")
+						}
+						decisions := 0
+						for _, record := range readHookRecords(t, path) {
+							if record["record_type"] != output.RecordEnforcement {
+								continue
+							}
+							decisions++
+							if (record["decision"] == string(model.EnforcementDecisionDeny)) != (enforce && match) {
+								t.Fatalf("scope changed decision record: %+v", record)
+							}
+						}
+						if decisions != wantFindings {
+							t.Fatalf("decisions=%d, want %d", decisions, wantFindings)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func readHookRecords(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

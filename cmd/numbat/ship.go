@@ -29,7 +29,7 @@ const (
 	defaultShipPoll     = 2 * time.Second
 	maxShipRetryDelay   = time.Minute
 	maxShipBatchBytes   = 4 << 20
-	maxShipRecordBytes  = 8 << 20
+	maxShipRecordBytes  = 64 << 20
 	shipHTTPBufferBytes = maxShipBatchBytes + maxShipRecordBytes
 	shipStateVersion    = 1
 	shipGuardBytes      = 4 << 10
@@ -100,9 +100,9 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat ship --input-file PATH --http-url URL [--state-file PATH] [--poll DUR] [HTTP options]")
 		fmt.Fprintln(stderr, "\nTails an append-only numbat NDJSON file to an HTTP endpoint with a durable")
-		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
+		fmt.Fprintln(stderr, "checkpoint. Retained records up to 64 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
-		fmt.Fprintln(stderr, "Records larger than 8 MiB or individually rejected with HTTP 413 are logged,\nretained in the input file, and skipped from HTTP delivery.")
+		fmt.Fprintln(stderr, "Records larger than 64 MiB or individually rejected with HTTP 413 are logged,\nretained in the input file, and skipped from HTTP delivery.")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}

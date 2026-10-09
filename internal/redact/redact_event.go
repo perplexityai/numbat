@@ -1,6 +1,12 @@
 package redact
 
-import "github.com/perplexityai/numbat/internal/model"
+import (
+	"bytes"
+	"encoding/json"
+	"slices"
+
+	"github.com/perplexityai/numbat/internal/model"
+)
 
 // Event returns the default preview-only projection: observed fields are routed
 // through String and full message content is omitted. It is the shared output
@@ -17,6 +23,8 @@ import "github.com/perplexityai/numbat/internal/model"
 // event sink and the timeline renderer instead of duplicating the field list at
 // each call site.
 func Event(ev model.Event) model.Event {
+	ev.ToolInputBytes, ev.ToolInputTruncated = ev.ToolInputBytesForAnalysis(), ev.ToolInputTruncatedForAnalysis()
+	ev.ToolResultBytes, ev.ToolResultTruncated = ev.ToolResultBytesForAnalysis(), ev.ToolResultTruncatedForAnalysis()
 	ev = ev.WithoutAnalysisContent()
 	ev.Command = String(ev.Command)
 	ev.FilePath = String(ev.FilePath)
@@ -24,9 +32,12 @@ func Event(ev model.Event) model.Event {
 	var previewTruncated bool
 	ev.ContentPreview, previewTruncated = model.NormalizeContentPreviewWithTruncation(String(ev.ContentPreview))
 	ev.ContentPreviewTruncated = ev.ContentPreviewTruncated || previewTruncated
+	ev.ToolInput, ev.ToolResult = "", ""
 	ev.Content = ""
-	ev.ContentBytes = 0
-	ev.ContentTruncated = false
+	if !slices.Contains(ev.ContentOmitted, "content") {
+		ev.ContentBytes = 0
+		ev.ContentTruncated = false
+	}
 	ev.MCPServer = String(ev.MCPServer)
 	ev.MCPTool = String(ev.MCPTool)
 	ev.ProjectPath = String(ev.ProjectPath)
@@ -38,6 +49,20 @@ func Event(ev model.Event) model.Event {
 // body is still redacted, while its byte count describes the mapped text before
 // Numbat's content bound and output redaction were applied.
 func EventWithContent(ev model.Event) model.Event {
+	input, result := ev.ToolInputForAnalysis(), ev.ToolResultForAnalysis()
+	inputBytes, resultBytes := ev.ToolInputBytesForAnalysis(), ev.ToolResultBytesForAnalysis()
+	inputTruncated, resultTruncated := ev.ToolInputTruncatedForAnalysis(), ev.ToolResultTruncatedForAnalysis()
+	ev = EventWithMessageContent(ev, false)
+	ev.ToolInput, ev.ToolInputTruncated = payload(input, inputTruncated)
+	ev.ToolResult, ev.ToolResultTruncated = payload(result, resultTruncated)
+	ev.ToolInputBytes, ev.ToolResultBytes = inputBytes, resultBytes
+	return ev
+}
+
+// EventWithMessageContent includes only the retained conversation body. Raw
+// preserves that body without redaction; other fields use the preview policy.
+// Tool byte counts and truncation flags remain available even without bodies.
+func EventWithMessageContent(ev model.Event, raw bool) model.Event {
 	content := ev.ContentForAnalysis()
 	contentBytes := ev.ContentBytesForAnalysis()
 	contentTruncated := ev.ContentTruncatedForAnalysis()
@@ -45,10 +70,14 @@ func EventWithContent(ev model.Event) model.Event {
 	if content == "" {
 		return ev
 	}
-	var outputTruncated bool
-	ev.Content, outputTruncated = model.LimitContent(String(content))
+	ev.Content = content
 	ev.ContentBytes = contentBytes
-	ev.ContentTruncated = contentTruncated || outputTruncated
+	ev.ContentTruncated = contentTruncated
+	if !raw {
+		var outputTruncated bool
+		ev.Content, outputTruncated = model.LimitContent(String(content))
+		ev.ContentTruncated = contentTruncated || outputTruncated
+	}
 	return ev
 }
 
@@ -76,4 +105,35 @@ func EventsWithContent(evs []model.Event) []model.Event {
 		out[i] = EventWithContent(ev)
 	}
 	return out
+}
+
+// payload masks the whole JSON value before applying any output bound. A
+// truncated or malformed JSON fragment cannot be safely redacted by key.
+func payload(text string, truncated bool) (string, bool) {
+	if text == "" {
+		return "", truncated
+	}
+	if truncated {
+		return "[payload omitted: incomplete JSON]", true
+	}
+	masked, err := redactedJSONValue([]byte(text))
+	if err != nil {
+		return "[payload omitted: JSON redaction failed]", true
+	}
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(masked); err != nil {
+		return "[payload omitted: encoding error]", true
+	}
+	return model.LimitToolPayload(string(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))))
+}
+
+// EventWithRawContent is the explicit unredacted event projection. Raw here
+// means source-provided mapped content, not a byte-for-byte source transcript.
+func EventWithRawContent(ev model.Event) model.Event {
+	ev.Content, ev.ContentBytes, ev.ContentTruncated = ev.ContentForAnalysis(), ev.ContentBytesForAnalysis(), ev.ContentTruncatedForAnalysis()
+	ev.ToolInput, ev.ToolInputBytes, ev.ToolInputTruncated = ev.ToolInputForAnalysis(), ev.ToolInputBytesForAnalysis(), ev.ToolInputTruncatedForAnalysis()
+	ev.ToolResult, ev.ToolResultBytes, ev.ToolResultTruncated = ev.ToolResultForAnalysis(), ev.ToolResultBytesForAnalysis(), ev.ToolResultTruncatedForAnalysis()
+	return ev.WithoutAnalysisContent()
 }

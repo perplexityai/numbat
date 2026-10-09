@@ -40,7 +40,7 @@ func finding(t *testing.T, id, caseID, ts string, refs ...map[string]any) string
 
 func findingWithCitedEvents(t *testing.T, id, caseID, ts string, cited []string, refs ...map[string]any) string {
 	m := map[string]any{
-		"record_type": "finding", "schema_version": "0.4.0",
+		"record_type": "finding", "schema_version": "0.5.0",
 		"finding_id": id, "case_id": caseID, "timestamp": ts, "detected_at": "2026-06-10T12:00:00Z",
 		"rule_id": "r1", "rule_version": "1.0", "severity": "high", "source_agent": "claude-code", "source_type": sourceTypeForRefs(refs),
 		"title": "t", "evidence_refs": refs, "redacted": true, "confidence": "high",
@@ -71,7 +71,7 @@ func event(t *testing.T, id, ts string, ev map[string]any) string {
 
 func eventWithSourceType(t *testing.T, id, ts, sourceType string, ev map[string]any) string {
 	return jline(t, map[string]any{
-		"record_type": "event", "schema_version": "0.4.0",
+		"record_type": "event", "schema_version": "0.5.0",
 		"event_id": id, "timestamp": ts, "source_agent": "claude-code",
 		"source_type": sourceType, "event_type": "file.read",
 		"confidence": "high", "evidence": ev,
@@ -108,6 +108,23 @@ func buildOpts(src ...string) Options {
 		CaseID:  "case-1",
 		Sources: src,
 		Now:     time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestCasePreservesLargeToolRecord(t *testing.T) {
+	var record map[string]any
+	if err := json.Unmarshal([]byte(event(t, "ev-1", "2026-06-02T10:00:00Z", ref("/synthetic/artifact", 1))), &record); err != nil {
+		t.Fatal(err)
+	}
+	record["tool_result"] = strings.Repeat("x", 9<<20) + "TAIL"
+	want := jline(t, record)
+	f := findingWithCitedEvents(t, "f-1", "case-1", "2026-06-02T10:00:00Z", []string{"ev-1"}, ref("/synthetic/artifact", 1))
+	opts := buildOpts(writeStream(t, want, f))
+	opts.Out = filepath.Join(t.TempDir(), "bundle")
+	mustBuild(t, opts)
+	got := readLines(t, filepath.Join(opts.Out, "events.ndjson"))
+	if len(got) != 1 || got[0] != want {
+		t.Fatal("case bundle lost or changed large tool content")
 	}
 }
 
@@ -168,7 +185,7 @@ func TestBuildBundleShape(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.CaseID != "case-1" || m.SchemaVersion != "0.4.0" || m.Tool != "numbat" || m.ToolVersion == "" || m.EvidenceMode != "none" {
+	if m.CaseID != "case-1" || m.SchemaVersion != "0.5.0" || m.Tool != "numbat" || m.ToolVersion == "" || m.EvidenceMode != "none" {
 		t.Fatalf("manifest = %+v", m)
 	}
 	if m.CreatedAt != "2026-06-10T12:00:00Z" {
@@ -196,7 +213,7 @@ func TestBuildCarriesCaseEnforcementDecisions(t *testing.T) {
 	f := findingWithCitedEvents(t, "fnd-a", "case-1", "2026-06-02T10:00:01Z", []string{"ev-1"}, map[string]any{"artifact_type": "hook"})
 	e := eventWithSourceType(t, "ev-1", "2026-06-02T10:00:00Z", "hook", map[string]any{"artifact_type": "hook"})
 	o := jline(t, map[string]any{
-		"record_type": "enforcement", "schema_version": "0.4.0",
+		"record_type": "enforcement", "schema_version": "0.5.0",
 		"decision_id": "enf-0123456789abcdef01234567", "case_id": "case-1",
 		"timestamp": "2026-06-02T10:00:02Z", "decision": "deny",
 		"mode": "enforce", "reason": "enforce_rule_match", "source_agent": "claude-code",
@@ -682,7 +699,7 @@ func TestVerifyRejectsRecordIdentityEvenWithMatchingDigest(t *testing.T) {
 	opts.Out = filepath.Join(t.TempDir(), "case.numbat")
 	mustBuild(t, opts)
 
-	bad := []byte(`{"record_type":"finding","schema_version":"0.4.0","finding_id":"fnd-x","case_id":"other"}` + "\n")
+	bad := []byte(`{"record_type":"finding","schema_version":"0.5.0","finding_id":"fnd-x","case_id":"other"}` + "\n")
 	if err := os.WriteFile(filepath.Join(opts.Out, "findings.ndjson"), bad, 0o600); err != nil {
 		t.Fatal(err)
 	}

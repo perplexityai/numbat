@@ -93,7 +93,7 @@ export default function (amp: PluginAPI) {
   amp.on("tool.result", async (event) => {
     forward("post-tool", {
       session_id: event.thread.id, cwd, tool_call_id: event.toolUseID,
-      tool_name: event.tool, tool_input: event.input, tool_result: toolResultMetadata(event.output),
+      tool_name: event.tool, tool_input: event.input, tool_result: toolResultMetadata(event.output), tool_response: event.output,
       status: event.status, error: event.error,
     });
   });
