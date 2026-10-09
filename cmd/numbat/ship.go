@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -90,6 +91,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	spoolPath := fs.String("spool-file", "", "durable record queue to ship (use instead of --input-file)")
 	statePath := fs.String("state-file", "", "delivery checkpoint (default <input-file>.ship-state)")
 	poll := fs.Duration("poll", defaultShipPoll, "interval between source polls")
+	maxBatchBytes := fs.Int64("max-batch-bytes", maxShipBatchBytes, "maximum uncompressed bytes per batch (1..4194304; larger single records are attempted alone)")
 	httpURL := fs.String("http-url", "", "ingest URL (required)")
 	httpTimeout := fs.Duration("http-timeout", 30*time.Second, "HTTP request timeout")
 	httpAuth := fs.String("http-auth", output.AuthNone, "HTTP delivery auth: none|bearer|hmac-sha256")
@@ -104,7 +106,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Legacy file input uses a durable")
 		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
-		fmt.Fprintln(stderr, "Records larger than 8 MiB remain in the input file but are skipped.")
+		fmt.Fprintln(stderr, "Records larger than 8 MiB or individually rejected with HTTP 413 are logged,\nretained in the input file, and skipped from HTTP delivery.")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -134,6 +136,11 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	if *poll <= 0 {
 		fmt.Fprintf(stderr, "ship: --poll must be a positive duration, got %s\n", *poll)
 		fs.Usage()
+		return 2
+	}
+	// Keep batch reads within the existing HTTP buffer and checkpoint guard bounds.
+	if *maxBatchBytes <= 0 || *maxBatchBytes > maxShipBatchBytes {
+		fmt.Fprintf(stderr, "ship: --max-batch-bytes must be between 1 and %d, got %d\n", maxShipBatchBytes, *maxBatchBytes)
 		return 2
 	}
 	if spoolSet {
@@ -197,7 +204,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	if spoolSet {
 		store := spool.New(*spoolPath)
-		if _, err := store.Peek(maxShipBatchBytes); spoolOpenIsFatal(err) {
+		if _, err := store.Peek(int(*maxBatchBytes)); spoolOpenIsFatal(err) {
 			fmt.Fprintf(stderr, "ship: open spool: %v\n", err)
 			return 1
 		}
@@ -208,7 +215,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		}
 		defer lock.Close()
 		fmt.Fprintf(stderr, "numbat ship: shipping spool %s to the configured HTTP endpoint (Ctrl-C to stop)\n", *spoolPath)
-		return runSpoolShipLoop(ctx, store, *poll, factory, stderr)
+		return runSpoolShipLoop(ctx, store, *poll, int(*maxBatchBytes), factory, stderr)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(*statePath), 0o700); err != nil {
@@ -223,16 +230,16 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	defer lock.Close()
 
 	fmt.Fprintf(stderr, "numbat ship: shipping %s to the configured HTTP endpoint (Ctrl-C to stop)\n", *inputPath)
-	return runShipLoop(ctx, *inputPath, *statePath, shipDestinationID(*httpURL), *poll, factory, stderr)
+	return runShipLoop(ctx, *inputPath, *statePath, shipDestinationID(*httpURL), *poll, *maxBatchBytes, factory, stderr)
 }
 
 func spoolOpenIsFatal(err error) bool {
 	return err != nil && !errors.Is(err, spool.ErrBusy)
 }
 
-func runSpoolShipLoop(ctx context.Context, store spool.Store, poll time.Duration, factory shipSinkFactory, stderr io.Writer) int {
+func runSpoolShipLoop(ctx context.Context, store spool.Store, poll time.Duration, maxBytes int, factory shipSinkFactory, stderr io.Writer) int {
 	return runShipRetryLoop(ctx, poll, stderr, func() error {
-		return drainSpoolAvailable(ctx, store, maxShipBatchBytes, factory)
+		return drainSpoolAvailable(ctx, store, maxBytes, factory)
 	})
 }
 
@@ -271,7 +278,7 @@ func runShipRetryLoop(ctx context.Context, poll time.Duration, stderr io.Writer,
 
 func drainSpoolAvailable(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory) error {
 	for ctx.Err() == nil {
-		sent, err := shipSpoolBatch(store, maxBytes, factory)
+		sent, err := shipSpoolBatch(ctx, store, maxBytes, factory)
 		if err != nil || !sent {
 			return err
 		}
@@ -279,24 +286,39 @@ func drainSpoolAvailable(ctx context.Context, store spool.Store, maxBytes int, f
 	return nil
 }
 
-func shipSpoolBatch(store spool.Store, maxBytes int, factory shipSinkFactory) (bool, error) {
-	batch, err := store.Peek(maxBytes)
-	if err != nil {
-		return false, fmt.Errorf("read spool: %w", err)
+func shipSpoolBatch(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory) (bool, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		batch, err := store.Peek(maxBytes)
+		if err != nil {
+			return false, fmt.Errorf("read spool: %w", err)
+		}
+		if len(batch.Records) == 0 {
+			return false, nil
+		}
+		blob := bytes.Join(batch.Records, nil)
+		if err := shipBatch(factory, blob); err != nil {
+			if status, ok := output.HTTPStatusCode(err); !ok || status != http.StatusRequestEntityTooLarge {
+				return true, err
+			}
+			if len(batch.Records) == 1 {
+				return true, fmt.Errorf("HTTP 413 rejected %d-byte spool record; retained in queue: %w", len(blob), err)
+			}
+			// Obtain a fresh, smaller prefix with its own opaque Ack identity.
+			// Never acknowledge a rejected record just to advance the queue.
+			maxBytes = max(1, len(blob)/2)
+			continue
+		}
+		if err := store.Ack(batch); err != nil {
+			return true, fmt.Errorf("acknowledge spool batch: %w", err)
+		}
+		return true, nil
 	}
-	if len(batch.Records) == 0 {
-		return false, nil
-	}
-	if err := shipBatch(factory, bytes.Join(batch.Records, nil)); err != nil {
-		return true, err
-	}
-	if err := store.Ack(batch); err != nil {
-		return true, fmt.Errorf("acknowledge spool batch: %w", err)
-	}
-	return true, nil
 }
 
-func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, factory shipSinkFactory, stderr io.Writer) int {
+func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, maxBatchBytes int64, factory shipSinkFactory, stderr io.Writer) int {
 	cursor, err := readShipCursor(statePath, destination)
 	if err != nil {
 		fmt.Fprintf(stderr, "ship: read state %s: %v\n", statePath, err)
@@ -307,7 +329,7 @@ func runShipLoop(ctx context.Context, inputPath, statePath, destination string, 
 		cursor.resetReason = ""
 	}
 	return runShipRetryLoop(ctx, poll, stderr, func() error {
-		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, stderr)
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxBatchBytes, factory, stderr)
 		return err
 	})
 }
@@ -445,22 +467,28 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		}
 		cursor.rotationEOFID = ""
 		cursor.rotationEOFOffset = 0
-		if err := shipBatch(factory, batch.blob); err != nil {
+		acknowledge := func(delivered []byte, skipped bool) error {
+			if skipped {
+				fmt.Fprintf(stderr, "ship: %s: HTTP 413 rejected %d-byte record at offset %d; skipped from HTTP delivery and retained in the input file\n", inputPath, len(delivered), cursor.checkpoint.Offset)
+			}
+			drained := cursor.checkpoint.DrainedFileIDs
+			cursor.checkpoint = newShipCheckpoint(
+				cursor.checkpoint.DestinationSHA256,
+				batch.fileID,
+				cursor.checkpoint.Offset+int64(len(delivered)),
+				delivered,
+			)
+			cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
+			cursor.pending = true
+			if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+				return fmt.Errorf("persist state %s: %w", statePath, err)
+			}
+			cursor.pending = false
+			return nil
+		}
+		if err := shipBatchAdaptive(ctx, factory, batch.blob, acknowledge); err != nil {
 			return cursor, err
 		}
-		drained := cursor.checkpoint.DrainedFileIDs
-		cursor.checkpoint = newShipCheckpoint(
-			cursor.checkpoint.DestinationSHA256,
-			batch.fileID,
-			cursor.checkpoint.Offset+batch.n,
-			batch.blob,
-		)
-		cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
-		cursor.pending = true
-		if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
-			return cursor, fmt.Errorf("persist state %s: %w", statePath, err)
-		}
-		cursor.pending = false
 	}
 }
 
@@ -519,6 +547,9 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				consumed += line.consumed
 				skippedMalformed = true
 				skippedGuard = line.bytes
+				break
+			}
+			if buf.Len() > 0 && int64(buf.Len())+line.consumed > maxBytes {
 				break
 			}
 			_, _ = buf.Write(line.bytes)
@@ -742,6 +773,45 @@ func shipBatch(factory shipSinkFactory, blob []byte) error {
 		return fmt.Errorf("deliver: %w", err)
 	}
 	return nil
+}
+
+func shipBatchAdaptive(ctx context.Context, factory shipSinkFactory, blob []byte, acknowledge func([]byte, bool) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := shipBatch(factory, blob)
+	if err == nil {
+		return acknowledge(blob, false)
+	}
+	status, hasStatus := output.HTTPStatusCode(err)
+	if !hasStatus || status != http.StatusRequestEntityTooLarge {
+		return err
+	}
+	left, right, ok := splitShipBatch(blob)
+	if !ok {
+		return acknowledge(blob, true)
+	}
+	if err := shipBatchAdaptive(ctx, factory, left, acknowledge); err != nil {
+		return err
+	}
+	return shipBatchAdaptive(ctx, factory, right, acknowledge)
+}
+
+func splitShipBatch(blob []byte) ([]byte, []byte, bool) {
+	midpoint := len(blob) / 2
+	if next := bytes.IndexByte(blob[midpoint:], '\n'); next >= 0 {
+		split := midpoint + next + 1
+		if split < len(blob) {
+			return blob[:split], blob[split:], true
+		}
+	}
+	if previous := bytes.LastIndexByte(blob[:midpoint], '\n'); previous >= 0 {
+		split := previous + 1
+		if split < len(blob) {
+			return blob[:split], blob[split:], true
+		}
+	}
+	return nil, nil, false
 }
 
 func newShipCheckpoint(destination, fileID string, offset int64, delivered []byte) shipCheckpoint {

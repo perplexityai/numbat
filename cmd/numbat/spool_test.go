@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -86,7 +88,7 @@ func TestShipSpoolBatchAcknowledgesOnlyDeliveredPrefix(t *testing.T) {
 	defer server.Close()
 
 	wantBody := append(bytes.Clone(first), second...)
-	if sent, err := shipSpoolBatch(store, maxShipBatchBytes, newSinkFactory(server.URL)); !sent || err == nil {
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL)); !sent || err == nil {
 		t.Fatalf("failed delivery = (%v, %v), want (true, error)", sent, err)
 	}
 	if got := <-requests; !bytes.Equal(got, wantBody) {
@@ -94,13 +96,175 @@ func TestShipSpoolBatchAcknowledgesOnlyDeliveredPrefix(t *testing.T) {
 	}
 	assertQueuedRecords(t, store, first, second)
 
-	if sent, err := shipSpoolBatch(store, maxShipBatchBytes, newSinkFactory(server.URL)); !sent || err != nil {
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL)); !sent || err != nil {
 		t.Fatalf("successful delivery = (%v, %v), want (true, nil)", sent, err)
 	}
 	if got := <-requests; !bytes.Equal(got, wantBody) {
 		t.Fatalf("successful request body = %q, want %q", got, wantBody)
 	}
 	assertQueuedRecords(t, store, third)
+}
+
+func TestShipSpoolBatchSplits413AndAcknowledgesOnlyAcceptedPrefix(t *testing.T) {
+	store := spool.New(filepath.Join(t.TempDir(), "records.spool"))
+	first, second, third := []byte("{\"n\":1}\n"), []byte("{\"n\":2}\n"), []byte("{\"n\":3}\n")
+	for _, record := range [][]byte{first, second} {
+		if err := store.Put(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	var requests [][]byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		mu.Lock()
+		requests = append(requests, body)
+		mu.Unlock()
+		if len(body) > len(first) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		if err := store.Put(third); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL)); !sent || err != nil {
+		t.Fatalf("adaptive delivery = (%v, %v)", sent, err)
+	}
+	assertQueuedRecords(t, store, second, third)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 2 || !bytes.Equal(requests[0], bytes.Join([][]byte{first, second}, nil)) || !bytes.Equal(requests[1], first) {
+		t.Fatalf("requests = %q, want full batch followed by first record", requests)
+	}
+}
+
+func TestShipSpoolBatchRetainsSingleRecordRejectedWith413(t *testing.T) {
+	store := spool.New(filepath.Join(t.TempDir(), "records.spool"))
+	first, second := []byte("{\"n\":1}\n"), []byte("{\"n\":2}\n")
+	for _, record := range [][]byte{first, second} {
+		if err := store.Put(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	defer server.Close()
+
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL)); !sent || err == nil || !strings.Contains(err.Error(), "retained in queue") {
+		t.Fatalf("rejected delivery = (%v, %v), want retained-record error", sent, err)
+	}
+	assertQueuedRecords(t, store, first, second)
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want full batch then singleton", got)
+	}
+}
+
+func TestShipSpoolCancellationAcknowledgesSuccessButStops413Retry(t *testing.T) {
+	for _, status := range []int{http.StatusNoContent, http.StatusRequestEntityTooLarge} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			store := spool.New(filepath.Join(t.TempDir(), "records.spool"))
+			first, second := []byte("{\"n\":1}\n"), []byte("{\"n\":2}\n")
+			for _, record := range [][]byte{first, second} {
+				if err := store.Put(record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				cancel()
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			budget := maxShipBatchBytes
+			if status == http.StatusNoContent {
+				budget = len(first)
+			}
+			err := drainSpoolAvailable(ctx, store, budget, newSinkFactory(server.URL))
+			if status == http.StatusNoContent {
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertQueuedRecords(t, store, second)
+			} else {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("error = %v, want context cancellation", err)
+				}
+				assertQueuedRecords(t, store, first, second)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Fatalf("requests = %d, want no requests after cancellation", got)
+			}
+		})
+	}
+}
+
+func TestShipSpoolBatchRetainsAmbiguousSplitRequest(t *testing.T) {
+	store := spool.New(filepath.Join(t.TempDir(), "records.spool"))
+	first, second := []byte("{\"n\":1}\n"), []byte("{\"n\":2}\n")
+	for _, record := range [][]byte{first, second} {
+		if err := store.Put(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var singletonAttempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if len(body) > len(first) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		if !bytes.Equal(body, first) {
+			t.Errorf("singleton = %q, want unchanged first record", body)
+		}
+		if singletonAttempts.Add(1) == 1 {
+			// The receiver accepted the record but its response was lost.
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	factory := newSinkFactory(server.URL)
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, factory); !sent || err == nil {
+		t.Fatalf("ambiguous delivery = (%v, %v), want error", sent, err)
+	}
+	assertQueuedRecords(t, store, first, second)
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, factory); !sent || err != nil {
+		t.Fatalf("retry = (%v, %v)", sent, err)
+	}
+	assertQueuedRecords(t, store, second)
+	if got := singletonAttempts.Load(); got != 2 {
+		t.Fatalf("singleton attempts = %d, want duplicate delivery", got)
+	}
 }
 
 func TestSameShipPathFollowsFilesystemIdentity(t *testing.T) {

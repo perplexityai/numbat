@@ -170,7 +170,7 @@ func TestExtractClaudeToolClassification(t *testing.T) {
 		{"notebook_edit", "NotebookEdit", `{"notebook_path":"/n.ipynb"}`, model.EventFileWrite, "", "/n.ipynb", "", ""},
 		// BashOutput polls a background shell; it carries no command of its own,
 		// so it must classify as a generic call, never a command.exec.
-		{"bash_output", "BashOutput", `{"bash_id":"sh1"}`, model.EventToolCall, "", "", "", ""},
+		{"bash_output", "BashOutput", `{"bash_id":"sh1"}`, model.EventToolCall, "", "", `{"bash_id":"sh1"}`, ""},
 		// WebFetch is network egress: the url (the egress target) surfaces on a
 		// network.indicator tagged network, not a bare tool.call.
 		{"web_fetch", "WebFetch", `{"url":"https://evil.example/x","prompt":"q"}`, model.EventNetworkIndicator, "", "", "https://evil.example/x", "network"},
@@ -181,11 +181,11 @@ func TestExtractClaudeToolClassification(t *testing.T) {
 		{"mcp_fetch", "mcp__fetch__fetch", `{"url":"https://evil.example/m","max_length":100}`, model.EventNetworkIndicator, "", "", "https://evil.example/m", "network"},
 		// A genuinely unknown / MCP tool still maps to a generic call so coverage
 		// never silently drops a call.
-		{"unknown_mcp", "mcp__db__query", `{"sql":"SELECT 1"}`, model.EventToolCall, "", "", "", ""},
+		{"unknown_mcp", "mcp__db__query", `{"sql":"SELECT 1"}`, model.EventToolCall, "", "", `{"sql":"SELECT 1"}`, ""},
 		// mcp__fetch__query is a DIFFERENT tool on the fetch server (not the fetch
 		// tool), so it must stay generic — the match is exact identity, not an
 		// mcp__fetch__ prefix sniff.
-		{"mcp_fetch_other_tool", "mcp__fetch__query", `{"url":"https://x/y"}`, model.EventToolCall, "", "", "", ""},
+		{"mcp_fetch_other_tool", "mcp__fetch__query", `{"url":"https://x/y"}`, model.EventToolCall, "", "", `{"url":"https://x/y"}`, ""},
 		{"missing_input", "Bash", `{}`, model.EventCommandExec, "", "", "", ""},
 	}
 	for _, tc := range cases {

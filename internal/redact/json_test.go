@@ -63,3 +63,16 @@ func TestJSONRejectsMalformedAndTrailingValues(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONCredentialFields(t *testing.T) {
+	for _, key := range []string{"Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie", "auth", "credentials", "pwd"} {
+		raw, err := json.Marshal(map[string]any{key: []string{"private"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := JSON(raw)
+		if err != nil || strings.Contains(string(got), "private") || !strings.Contains(string(got), Mask) {
+			t.Fatalf("JSON(%s) = %s, %v", raw, got, err)
+		}
+	}
+}

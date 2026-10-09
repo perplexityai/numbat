@@ -99,11 +99,12 @@ func appendRecordLocked(f *os.File, p []byte, repairNewline bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !info.Mode().IsRegular() {
+		return f.Write(p)
+	}
 	size := info.Size()
-	if info.Mode().IsRegular() {
-		if _, err := f.Seek(size, io.SeekStart); err != nil {
-			return 0, err
-		}
+	if _, err := f.Seek(size, io.SeekStart); err != nil {
+		return 0, err
 	}
 	if repairNewline && size > 0 {
 		last := make([]byte, 1)

@@ -122,9 +122,11 @@ Spool output defaults to `$HOME/.numbat/findings.spool` or
 `$HOME/.numbat/records.spool`. Change it with `--spool-file PATH`.
 
 numbat does not rotate output files or manage host storage. Use a fleet
-forwarder for file output. A short append (for example, a full disk) is rolled
-back and a missing trailing newline is repaired before the next write, so
-records never concatenate onto a partial line. Supervise `numbat ship` for
+forwarder for file output. For regular files, a short append (for example, a full
+disk) is rolled back and a missing trailing newline is repaired before the next
+write, so records never concatenate onto a partial line. Linux FIFO outputs
+remain write-only pipes and report a disconnected reader as an output failure.
+Supervise `numbat ship` for
 spool output. Hook HTTP requests use a five-second timeout by default; change it
 with `--http-timeout`.
 Agents normally wait for the callback process to exit, so direct HTTP adds
@@ -239,5 +241,8 @@ If the host has no external forwarder, select spool-only output. Run
 keeps the queued records. Successful delivery removes only the delivered
 prefix. See [cli.md](cli.md#ship) for the complete contract.
 
-`numbat ship` also accepts a legacy file through `--input-file`. Use one local
-durable output with `ship`. Direct HTTP on the same hook sends a second copy.
+`numbat ship` also accepts a legacy file through `--input-file`. Legacy records
+larger than 8 MiB or individually rejected with HTTP `413` are logged and skipped.
+Spool records rejected with `413` remain queued and pause delivery.
+Use one local durable output with `ship`. Direct HTTP on the same hook sends a
+second copy.

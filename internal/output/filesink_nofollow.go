@@ -13,52 +13,47 @@ import (
 // This stops numbat being redirected to truncate/write an arbitrary target via a
 // planted symlink at an attacker-influenced output path. When appendMode is
 // false the file is truncated write-only (scan's fresh-file-per-run behavior);
-// when true it is opened read-write for append (the hook handler accumulates
-// findings across repeated per-event invocations into one durable file, and read
-// access lets writeFileLocked repair a missing trailing newline).
+// regular append files are reopened read-write to repair missing newlines.
+// FIFOs stay write-only so a disconnected reader is reported as a write failure.
 func openNoFollow(path string, perm os.FileMode, appendMode bool) (*os.File, error) {
-	flags := os.O_CREATE | syscall.O_NOFOLLOW
+	flags := os.O_CREATE | os.O_WRONLY | syscall.O_NOFOLLOW
 	if appendMode {
-		flags |= os.O_RDWR | os.O_APPEND
+		flags |= os.O_APPEND
 	} else {
-		flags |= os.O_WRONLY | os.O_TRUNC
+		flags |= os.O_TRUNC
 	}
 	f, err := os.OpenFile(path, flags, perm)
-	if err == nil || !appendMode || !errors.Is(err, os.ErrPermission) {
+	if err != nil || !appendMode {
 		return f, err
 	}
-
-	// A pre-existing owner-write-only file can be tightened safely, but it
-	// cannot be opened read-write until after that repair. Keep the write-only
-	// descriptor open while reopening and verify that both refer to the same
-	// file, so a path replacement cannot redirect the append.
-	repair, repairErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, perm)
-	if repairErr != nil {
-		return nil, repairErr
-	}
-	defer func() { _ = repair.Close() }()
-	before, repairErr := repair.Stat()
-	if repairErr != nil {
-		return nil, repairErr
-	}
-	if err := repair.Chmod(perm); err != nil {
+	before, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
 		return nil, err
 	}
-
-	f, repairErr = os.OpenFile(path, os.O_RDWR|os.O_APPEND|syscall.O_NOFOLLOW, perm)
-	if repairErr != nil {
-		return nil, repairErr
+	if !before.Mode().IsRegular() {
+		return f, nil
 	}
-	after, repairErr := f.Stat()
-	if repairErr != nil {
-		f.Close()
-		return nil, repairErr
+	// Keep the write-only descriptor open until the read-write descriptor is
+	// verified, including when repairing an owner-write-only file's permissions.
+	defer func() { _ = f.Close() }()
+	if err := f.Chmod(perm); err != nil {
+		return nil, err
+	}
+	readWrite, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|syscall.O_NOFOLLOW, perm)
+	if err != nil {
+		return nil, err
+	}
+	after, err := readWrite.Stat()
+	if err != nil {
+		_ = readWrite.Close()
+		return nil, err
 	}
 	if !os.SameFile(before, after) {
-		f.Close()
+		_ = readWrite.Close()
 		return nil, errors.New("file changed while tightening permissions")
 	}
-	return f, nil
+	return readWrite, nil
 }
 
 // isNoFollowErr reports whether err is the ELOOP that O_NOFOLLOW returns when

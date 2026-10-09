@@ -206,7 +206,7 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 
 ```json
 {
-  "schema_version": "0.3.0",
+  "schema_version": "0.4.0",
   "record_type": "indicator",
   "run_id": "run-example-01",
   "endpoint": {
@@ -257,7 +257,7 @@ is omitted when that event has no valid timestamp.
 
 numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`,
 `finding`, `enforcement`, `indicator`, or `scan_summary`) plus a `run_id` and
-`schema_version` (`0.3.0`). Every line carries an `endpoint` object with
+`schema_version` (`0.4.0`). Every line carries an `endpoint` object with
 `hostname`, `os`, `arch`,
 `username`, and `uid`; set `NUMBAT_DEVICE_ID` to add a stable opaque
 `endpoint.device_id` for fleet joins.
@@ -296,7 +296,7 @@ A one-batch run can therefore report zero for both; use `http_failed`,
 diagnostics, and the process exit code to determine delivery health.
 
 Machine-readable JSON Schemas for the record stream and each `record_type` live
-under [schema/v0.3.0](schema/v0.3.0/). Use `record-stream.schema.json` when
+under [schema/v0.4.0](schema/v0.4.0/). Use `record-stream.schema.json` when
 validating arbitrary NDJSON lines, or route on `record_type` and validate against
 the per-record schema.
 
@@ -307,9 +307,10 @@ reserved for inferred or best-effort normalizations.
 ## timeline
 
 `timeline` is a read-only view over the same extraction `scan` uses. It groups
-events by `source_agent`, `source_type`, and `session_id`; sessionless at-rest
-events fall back to their artifact path. Each chronological step retains its
-evidence reference.
+events by `source_agent`, `source_type`, active `session_id`, and
+`sub_agent_id` when provided; sessionless at-rest events fall back to their
+artifact path. The session header shows available tree, parent, role, and child
+identity context. Each chronological step retains its evidence reference.
 
 Unlike sequence correlation, a timeline does not split a conversation when the
 project path is missing or the agent changes its working directory;
@@ -464,10 +465,11 @@ only the delivered prefix after the endpoint returns `2xx`. Failed delivery
 keeps every selected record. A record appended during delivery remains queued
 for the next request.
 
-For legacy file input, the checkpoint advances only after a `2xx`. Eligible
-records are delivered at least once while the input and its rotations remain
-available. Legacy records larger than 8 MiB, and lines that are not a single
-JSON object, are skipped.
+For legacy file input, accepted batches advance the checkpoint after a `2xx`.
+Eligible records are delivered at least once while the input and its rotations
+remain available. Legacy records larger than 8 MiB, individually rejected with
+HTTP `413`, or lines that are not a single JSON object are logged and skipped,
+advancing the checkpoint as detailed below.
 
 Select exactly one input mode. Use spool-only or file-only hook output with
 `ship`. Direct HTTP on the same hook sends each record through both paths.
@@ -480,6 +482,8 @@ Select exactly one input mode. Use spool-only or file-only hook output with
                              (exactly one input path is required)
 --state-file PATH            legacy file checkpoint (default <input-file>.ship-state)
 --poll DURATION              interval between source polls (default 2s)
+--max-batch-bytes N           maximum uncompressed bytes per batch (1..4194304;
+                             default 4194304); larger single records sent alone
 --http-url URL               ingest URL (required)
 --http-timeout DURATION      request timeout (default 30s)
 --http-auth MODE             none, bearer, or hmac-sha256 (default none)
@@ -522,11 +526,40 @@ JSON object, such as two records glued together by an interrupted append, is
 skipped the same way so one poisoned line cannot stall the queue. Prefer an
 existing fleet forwarder when one is already available.
 
+Use `--max-batch-bytes 900000` for a receiver or proxy configured with a 1 MB
+request limit, leaving room for headers and other request overhead. Verify the
+effective limit across the ingest path. The default remains 4 MiB. The limit
+counts NDJSON bytes before optional gzip compression, not headers. A single record larger
+than the batch limit is attempted alone, so a record that the receiver accepts
+is not discarded merely because it exceeds the configured batch size.
+
+When a receiver returns HTTP `413`, `ship` retries smaller requests containing
+only whole records. For a spool, it selects a smaller FIFO prefix and
+acknowledges only the prefix accepted with `2xx`. A single record still rejected
+with `413` remains queued: delivery pauses and retries with backoff until the
+receiver accepts it. Later records are not shipped past that record.
+
+For legacy files, `ship` checkpoints every accepted prefix before attempting
+the remaining suffix. If one record is still rejected with `413`, it logs the
+input path, byte offset and size on stderr, advances the durable checkpoint
+past it, and continues. That record remains in the input file but is skipped
+from HTTP delivery, like records over the local 8 MiB limit. Retain the input
+and rotations to recover these records through a receiver that accepts them.
+Changing the endpoint replays retained legacy records, including skipped ones.
+
+Other HTTP failures and ambiguous transport errors keep their full
+unacknowledged request eligible for replay. Receivers must reject a `413` request
+without ingesting it; if they ingest any part before rejecting, the split retries
+can duplicate those records. A `2xx` must mean the whole request was accepted.
+Splitting is specific to `ship`; direct HTTP output remains best-effort.
+
 `--http-auth`, `--http-timeout`, `--http-gzip`, the HMAC header options, and
 `--http-allow-insecure` match the [scan HTTP options](#scan), including the wire
 contract and environment-only secrets. Failed delivery retries use exponential
 backoff with jitter. `ship` runs until SIGINT or SIGTERM; an in-flight request
-is bounded by `--http-timeout`.
+is bounded by `--http-timeout`. During adaptive delivery, a successful in-flight
+request is acknowledged before shutdown, and no further split request starts
+after cancellation is observed.
 
 ## hook
 
@@ -866,7 +899,7 @@ a manifest.
 ## version
 
 `numbat version` prints the tool version and the record schema version
-(`0.3.0`). Release and schema versions advance independently; the schema changes
+(`0.4.0`). Release and schema versions advance independently; the schema changes
 only when the emitted record contract changes.
 
 ## Exit status

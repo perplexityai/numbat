@@ -3,6 +3,7 @@
 package output
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,30 @@ import (
 	"testing"
 	"time"
 )
+
+func TestFileSinkAppendReportsDisconnectedFIFO(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.fifo")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	sink, err := NewFileSinkAppend(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	record := []byte("{\"record_type\":\"event\",\"event_id\":\"disconnected\"}\n")
+	if n, err := sink.Write(record); n != 0 || !errors.Is(err, syscall.EPIPE) {
+		t.Fatalf("write without FIFO reader = (%d, %v), want (0, EPIPE)", n, err)
+	}
+}
 
 func TestFileSinksWriteFIFO(t *testing.T) {
 	constructors := []struct {
