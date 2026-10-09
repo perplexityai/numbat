@@ -625,6 +625,20 @@ func (e *Engine) HasEnforceEligibleRules() bool {
 	return false
 }
 
+// CountEnforceEligibleRules returns the number of enabled compiled rules
+// that may block in live hook enforce mode. It is the count companion of
+// HasEnforceEligibleRules and is used by machine-readable surfaces that
+// need to report catalog shape (for example, `rules test --json`).
+func (e *Engine) CountEnforceEligibleRules() int {
+	n := 0
+	for _, c := range e.rules {
+		if c.rule.IsEnforceEligible() {
+			n++
+		}
+	}
+	return n
+}
+
 // SequenceRules returns the compiled sequence rules in load order, for a
 // window tracker to evaluate. Empty when the load contains none.
 func (e *Engine) SequenceRules() []*SequenceRule {
@@ -646,17 +660,38 @@ func (e *Engine) RuleIDs() []string {
 	return ids
 }
 
-// Eval runs every compiled single-event rule against one event and returns
-// the matches in rule load order. Sequence rules are skipped — they match
-// chains, not events, and are evaluated by the window tracker that holds
-// their partitioned state. An evaluation error for one rule does not stop
-// the others; it is returned alongside any matches so callers can surface it
-// as a diagnostic without losing detections.
-func (e *Engine) Eval(ev model.Event) ([]Match, error) {
+// EvalError identifies a failed rule without exposing input-bearing CEL errors.
+type EvalError struct {
+	RuleID  string
+	Message string
+}
+
+// EvalDiagnostics carries the non-per-rule signals produced while evaluating
+// one event: the shell-analysis error (if any) and its usability flags. It
+// lets callers distinguish a bounded, unusable shell parse from a clean
+// no-match without inspecting internal state.
+type EvalDiagnostics struct {
+	ShellParseError      error
+	ShellUsable          bool
+	ShellEnforcementSafe bool
+}
+
+// EvalDetailed returns the same matches as Eval, with safe per-rule errors and
+// separate shell diagnostics. An error does not suppress independent matches.
+func (e *Engine) EvalDetailed(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
+	return e.eval(ev)
+}
+
+func (e *Engine) eval(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
 	activations := prepareActivations(e.env.CELTypeAdapter(), ev, e.usesShellCommands)
+	diag := EvalDiagnostics{
+		ShellParseError:      activations.err,
+		ShellUsable:          activations.shellUsable,
+		ShellEnforcementSafe: activations.shellEnforcementSafe,
+	}
 	var (
 		matches []Match
-		errs    = []error{activations.err}
+		errs    []EvalError
 	)
 	for _, c := range e.rules {
 		if c.seq != nil {
@@ -667,7 +702,7 @@ func (e *Engine) Eval(ev model.Event) ([]Match, error) {
 		}
 		out, _, err := c.program.program.Eval(activations.detection)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("rule %q: evaluation failed", c.rule.ID))
+			errs = append(errs, EvalError{RuleID: c.rule.ID, Message: "evaluation failed"})
 			continue
 		}
 		if asBool(out) {
@@ -681,6 +716,21 @@ func (e *Engine) Eval(ev model.Event) ([]Match, error) {
 				EnforcementMatch: enforcementMatch,
 			})
 		}
+	}
+	return matches, errs, diag
+}
+
+// Eval runs every compiled single-event rule against one event and returns
+// the matches in rule load order. Sequence rules are skipped — they match
+// chains, not events, and are evaluated by the window tracker that holds
+// their partitioned state. An evaluation error for one rule does not stop
+// the others; it is returned alongside any matches so callers can surface it
+// as a diagnostic without losing detections.
+func (e *Engine) Eval(ev model.Event) ([]Match, error) {
+	matches, evalErrs, diag := e.eval(ev)
+	errs := []error{diag.ShellParseError}
+	for _, err := range evalErrs {
+		errs = append(errs, fmt.Errorf("rule %q: %s", err.RuleID, err.Message))
 	}
 	return matches, errors.Join(errs...)
 }
