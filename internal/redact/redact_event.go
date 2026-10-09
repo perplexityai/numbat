@@ -103,7 +103,7 @@ func payload(text string, truncated bool) (string, bool) {
 	}
 	masked, err := redactedJSONValue([]byte(text))
 	if err != nil {
-		return "[payload omitted: invalid JSON]", true
+		return "[payload omitted: JSON redaction failed]", true
 	}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)

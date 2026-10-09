@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -427,6 +428,67 @@ func TestScanToolContentModes(t *testing.T) {
 			}
 			if strings.Contains(out, secret) != (mode == "raw") {
 				t.Fatal("wrong redaction policy")
+			}
+		})
+	}
+}
+
+func TestScanSerializedToolContentRulesAndOutput(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	rulesDir := writeEnforceRuleFile(t, `id: test.serialized_tool_content
+version: "1.0"
+enabled: true
+title: Synthetic serialized input
+severity: high
+expr: event.tool_input.contains("PRIVATE_CANARY")
+`)
+	artifact := writeTranscript(t, `{"type":"response_item","payload":{"type":"message","role":"user","content":"fallback one"}}
+{"type":"response_item","payload":{"type":"function_call","name":"mcp__notes__save","call_id":"c","arguments":"{\"cookie\":\"PRIVATE_CANARY\",\"keep\":\"VISIBLE\"}"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":"fallback two"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"explicit prompt"}}`)
+	rolloutDir := filepath.Join(t.TempDir(), ".codex", "sessions")
+	if err := os.MkdirAll(rolloutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(rolloutDir, "rollout-synthetic.jsonl")
+	if err := os.Rename(artifact, rollout); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"preview", "full", "raw"} {
+		t.Run(mode, func(t *testing.T) {
+			out, errb, code := runCLI("scan", "--path", rollout, "--emit", "all", "--content", mode,
+				"--rules-dir", rulesDir, "--no-builtin-rules")
+			if code != 0 {
+				t.Fatalf("exit=%d stderr=%s", code, errb)
+			}
+			if countType(recordTypes(t, out), "finding") != 1 {
+				t.Fatal("local rule lost original input or artifact was discarded")
+			}
+			if strings.Contains(out, "PRIVATE_CANARY") != (mode == "raw") {
+				t.Fatal("wrong output redaction policy")
+			}
+			calls := 0
+			for _, ev := range decodeEventRecords(t, out) {
+				if ev.EventType != model.EventToolCall {
+					continue
+				}
+				calls++
+				if ev.Evidence.Line != 2 || ev.ToolInputBytes == 0 {
+					t.Fatal("tool input metadata or provenance lost")
+				}
+				if mode == "preview" {
+					if ev.ToolInput != "" {
+						t.Fatal("preview exposed full input")
+					}
+				} else {
+					var input string
+					if json.Unmarshal([]byte(ev.ToolInput), &input) != nil || !json.Valid([]byte(input)) || !strings.Contains(input, "VISIBLE") {
+						t.Fatal("input representation or benign value lost")
+					}
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("tool calls=%d", calls)
 			}
 		})
 	}

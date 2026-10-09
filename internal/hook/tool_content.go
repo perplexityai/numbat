@@ -21,7 +21,11 @@ func retainToolContent(ev *model.Event, r resolver) {
 		return
 	}
 	keys := []string{"tool_response", "toolResponse", "tool_result", "toolResult", "result", "response", "output", "error"}
+	fields := r.fieldMap()
 	switch r.agent {
+	case AgentHermes:
+		fields, _ = r.payload["extra"].(map[string]any)
+		keys = []string{"result", "error_message"}
 	case AgentGemini:
 		keys = []string{"tool_response"}
 	case AgentCursor:
@@ -32,7 +36,7 @@ func retainToolContent(ev *model.Event, r resolver) {
 		keys = []string{"tool_response", "error"}
 	}
 	for _, key := range keys {
-		if value, ok := r.fieldMap()[key]; ok {
+		if value, ok := fields[key]; ok {
 			if value == nil {
 				value = json.RawMessage("null")
 			}

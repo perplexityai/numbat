@@ -359,6 +359,7 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 		}
 		if isShellToolName(name) {
 			ev.EventType = model.EventCommandResult
+			ev.Command = firstNonEmpty(a.str(attrCommand, attrProcessCommandLine, attrProcessCommand), toolCommandArg(a))
 			applyCommandResultMetadata(ev, a)
 		}
 		if errored(a, rec) {

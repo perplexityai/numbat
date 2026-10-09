@@ -38,7 +38,10 @@ func fuzzExtractor(f *testing.F, e Extractor) {
 
 func FuzzClaudeExtract(f *testing.F) { fuzzExtractor(f, ClaudeExtractor{}) }
 
-func FuzzCodexExtract(f *testing.F) { fuzzExtractor(f, CodexExtractor{}) }
+func FuzzCodexExtract(f *testing.F) {
+	f.Add(promptRetractionHistory)
+	fuzzExtractor(f, CodexExtractor{})
+}
 
 func FuzzGeminiExtract(f *testing.F) { fuzzExtractor(f, GeminiExtractor{}) }
 

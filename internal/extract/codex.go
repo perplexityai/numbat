@@ -241,8 +241,6 @@ func (e CodexExtractor) emitSessionEnd(res *Result, src Source, sha string, st *
 
 // mapLine decodes one rollout line and dispatches on the outer "type".
 func (e CodexExtractor) mapLine(res *Result, src Source, sha string, st *codexState, line int, raw []byte) {
-	start := len(res.Events)
-	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var rl codexLine
 	if err := json.Unmarshal(raw, &rl); err != nil {
 		if st.forkReplay {

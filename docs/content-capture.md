@@ -42,6 +42,11 @@ be redacted by key. Rules that read an incomplete tool body receive a scoped
 evaluation error, preserving the existing fail-open enforcement contract.
 Keep the original artifacts when analysis needs content beyond these bounds.
 
+Full mode also masks recognized credential keys inside JSON-serialized strings,
+preserving their string representation. Decoding is limited to eight nested
+serialization layers; exceeding that bound omits the exported payload and sets
+its truncation flag. Raw output and the originals used by rules are unchanged.
+
 ## What is preserved
 
 Argument capture also applies to specialized shell, file and network actions,

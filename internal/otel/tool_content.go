@@ -18,11 +18,25 @@ func retainToolContent(ev *model.Event, rec logRecord) {
 	a := newAttrs(nil, rec.attributes)
 	inputKeys := []string{attrGenAIToolCallArgs, attrToolCallArgs}
 	resultKeys := []string{attrGenAIToolCallResult}
-	switch ev.SourceAgent {
+	// Use the native event discriminator, as the classifier does. Resource
+	// service.name can be absent or describe a collector rather than the agent.
+	formatAgent := ev.SourceAgent
+	switch eventName(&a, rec) {
+	case claudeToolResult, claudeToolDecision:
+		formatAgent = model.AgentClaudeCode
+	case codexToolResult, codexToolDecision:
+		formatAgent = model.AgentCodex
+	case geminiToolCall, qwenToolCall:
+		formatAgent = model.AgentGeminiCLI
+	}
+	switch formatAgent {
 	case model.AgentClaudeCode:
 		inputKeys = append(inputKeys, attrClaudeToolInput)
 	case model.AgentCodex:
+		inputKeys = append(inputKeys, attrArguments)
 		resultKeys = append(resultKeys, attrOutput)
+	case model.AgentGeminiCLI, model.AgentQwenCode:
+		inputKeys = append(inputKeys, attrFunctionArgs)
 	}
 	retainAttribute := func(keys []string, set func(any)) {
 		for _, key := range keys {

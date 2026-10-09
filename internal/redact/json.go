@@ -52,7 +52,15 @@ func JSON(raw []byte) ([]byte, error) {
 	return json.Marshal(value)
 }
 
+// Bound additional parses of JSON serialized inside JSON strings. Native JSON
+// nesting is already bounded by encoding/json's decoder.
+const maxSerializedJSONDepth = 8
+
 func redactedJSONValue(raw []byte) (any, error) {
+	return redactedJSONValueAtDepth(raw, 0)
+}
+
+func redactedJSONValueAtDepth(raw []byte, depth int) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var value any
@@ -66,14 +74,14 @@ func redactedJSONValue(raw []byte) (any, error) {
 		}
 		return nil, err
 	}
-	redacted, err := redactJSONValue(value)
+	redacted, err := redactJSONValue(value, depth)
 	if err != nil {
 		return nil, err
 	}
 	return redacted, nil
 }
 
-func redactJSONValue(value any) (any, error) {
+func redactJSONValue(value any, depth int) (any, error) {
 	switch value := value.(type) {
 	case map[string]any:
 		for key, child := range value {
@@ -89,7 +97,7 @@ func redactJSONValue(value any) (any, error) {
 				value[key] = Mask
 				continue
 			}
-			redacted, err := redactJSONValue(child)
+			redacted, err := redactJSONValue(child, depth)
 			if err != nil {
 				return nil, err
 			}
@@ -98,7 +106,7 @@ func redactJSONValue(value any) (any, error) {
 		return value, nil
 	case []any:
 		for i := range value {
-			redacted, err := redactJSONValue(value[i])
+			redacted, err := redactJSONValue(value[i], depth)
 			if err != nil {
 				return nil, err
 			}
@@ -106,6 +114,23 @@ func redactJSONValue(value any) (any, error) {
 		}
 		return value, nil
 	case string:
+		raw := bytes.TrimSpace([]byte(value))
+		if len(raw) != 0 && (raw[0] == '{' || raw[0] == '[' || raw[0] == '"') && json.Valid(raw) {
+			if depth >= maxSerializedJSONDepth {
+				return nil, fmt.Errorf("serialized JSON nesting exceeds redaction limit")
+			}
+			masked, err := redactedJSONValueAtDepth(raw, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			var buf bytes.Buffer
+			encoder := json.NewEncoder(&buf)
+			encoder.SetEscapeHTML(false)
+			if err := encoder.Encode(masked); err != nil {
+				return nil, err
+			}
+			return strings.TrimSuffix(buf.String(), "\n"), nil
+		}
 		return String(value), nil
 	default:
 		return value, nil
