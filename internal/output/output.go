@@ -162,9 +162,10 @@ type StatsReporter interface {
 type Emitter struct {
 	runID    string
 	endpoint Endpoint
-	// fullContent is fixed by a constructor option before concurrent use.
-	fullContent bool
-	rawContent  bool
+	// Content options are fixed before concurrent use.
+	fullContent        bool
+	rawContent         bool
+	messageContentOnly bool
 
 	mu                sync.Mutex
 	sink              Sink
@@ -188,6 +189,12 @@ func WithFullContent() EmitterOption {
 
 // WithRawContent explicitly includes unredacted mapped content in event output.
 func WithRawContent() EmitterOption { return func(e *Emitter) { e.rawContent = true } }
+
+// WithMessageContentOnly limits full/raw output to conversation bodies. Tool
+// fields keep the normal preview policy; analysis content is unchanged.
+func WithMessageContentOnly() EmitterOption {
+	return func(e *Emitter) { e.messageContentOnly = true }
+}
 
 // Stats is a point-in-time snapshot of emitter counters.
 type Stats struct {
@@ -301,7 +308,9 @@ func (e *Emitter) EmitEvent(ev model.Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var projected model.Event
-	if e.rawContent {
+	if e.messageContentOnly && (e.fullContent || e.rawContent) {
+		projected = redact.EventWithMessageContent(ev, e.rawContent)
+	} else if e.rawContent {
 		projected = redact.EventWithRawContent(ev)
 	} else if e.fullContent {
 		projected = redact.EventWithContent(ev)

@@ -113,8 +113,10 @@ events or indicators are selected, the default becomes
 rule engine; `--emit all` includes findings and runs it. Event records use
 bounded previews by default; add
 `--content full` to retain bounded, redacted message and tool content when the agent
-exposes it. Add `--include-reasoning` for source-exposed Pi, OpenCode, and
-Kilo reasoning; hidden model chain-of-thought is not reconstructed. Repeat
+exposes it. Scope defaults to `all`; add `--content-scope messages` to export full
+messages with tool previews and metadata. Add `--include-reasoning` for
+source-exposed Pi, OpenCode, and Kilo reasoning; hidden model chain-of-thought is
+not reconstructed. Repeat
 `--output file --output http --http-url URL` to keep the file and also attempt
 direct HTTP delivery. Direct HTTP alone is not durable: it has bounded in-memory
 buffering, but no disk spool. numbat does not rotate output files itself; for
@@ -233,6 +235,7 @@ rejected with HTTP `413` are logged and skipped. See [cli.md](cli.md#ship) for
 the complete limits. Use file-only hook output with
 `ship` so the same record is not also sent through direct HTTP.
 
-`--content raw` exports mapped content without redaction. See
+`--content raw` exports mapped content without redaction. Reinstall hooks to
+change their content mode or scope. See
 [content capture](content-capture.md) for source coverage, limits and the
 difference between original local rule input and exported records.

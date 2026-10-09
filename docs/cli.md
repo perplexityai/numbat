@@ -95,8 +95,10 @@ agent's transcript.
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings)
---content preview|full|raw       message and tool content in event output (default preview;
-                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
+--content preview|full|raw   selected content in event output (default preview;
+                             full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
+--content-scope all|messages  full/raw body selection (default all; messages keeps
+                             tool previews and metadata; local detection unchanged)
 --include-reasoning          include source-recorded reasoning events
 --profile evidence|full      deprecated alias; full enables --include-reasoning
 --rules-dir DIR              operator rules to add or replace by id
@@ -224,13 +226,18 @@ An indicator record (a `https://get.example.sh/install` URL seen twice):
 ### Message and tool content
 
 Events contain a redacted `content_preview` of at most 200 Unicode code points
-by default. One option controls all mapped message and tool content:
+by default. `--content` selects detail and redaction; `--content-scope`
+selects which bodies full/raw include:
 
 | Mode | Exported content |
 | --- | --- |
 | `--content preview` (default) | Redacted previews and typed fields; tool byte counts and truncation flags, without tool bodies. |
 | `--content full` | Redacted message bodies, tool inputs and tool results. |
 | `--content raw` | Unredacted mapped message bodies, tool inputs, tool results and typed fields. |
+
+Scope defaults to `all`. `--content-scope messages` omits tool bodies while
+keeping tool previews and metadata. With `--content raw --content-scope messages`,
+only message bodies are unredacted; other fields use normal preview-mode redaction.
 
 Full and raw require `--emit events` or `--emit all`. Message `content` is
 bounded to 1 MiB; each JSON-encoded `tool_input` and `tool_result` is bounded
@@ -241,7 +248,7 @@ not the complete source transcript. Both modes can include file bodies,
 patches and non-text tool content. See [content capture](content-capture.md)
 for source and transport limits.
 
-Local rules inspect retained originals independently of the export mode.
+Local rules inspect retained originals independently of the export mode and scope.
 Redaction applies at emission, so a rule can match content omitted from the
 chosen export. Replaying a redacted export cannot restore original secrets.
 
@@ -343,8 +350,10 @@ explicit-root `--path` modes as `scan`.
                              agent locations under $HOME plus supported
                              agent home/data env overrides)
 --case-id ID                 case identifier stamped on every event
---content preview|full|raw       message and tool content in JSON output (default preview;
-                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
+--content preview|full|raw   selected content in JSON output (default preview;
+                             full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
+--content-scope all|messages  full/raw body selection (default all; messages keeps
+                             tool previews and metadata)
 --include-reasoning          include source-recorded reasoning events
 --profile evidence|full      deprecated alias; full enables --include-reasoning
 --format text|json           output format (default text)
@@ -393,8 +402,10 @@ IDs so receivers can deduplicate it.
 --case-id ID                 case identifier stamped on every emitted event and derived finding
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings)
---content preview|full|raw       message and tool content in event output (default preview;
-                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
+--content preview|full|raw   selected content in event output (default preview;
+                             full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
+--content-scope all|messages  full/raw body selection (default all; messages keeps
+                             tool previews and metadata)
 --output SINK                record sink: stdout, file, or http
                              (repeatable; default stdout; stdout cannot be combined)
 --output-file PATH           destination path (required when output includes file)
@@ -600,8 +611,10 @@ below.
 --emit KIND                  record kind to emit: findings, events, indicators,
                              or all (repeatable; default findings; enforce mode
                              requires findings)
---content preview|full|raw       message and tool content in event output (default preview;
-                             full redacts; raw does not; messages 1 MiB, tools 16 MiB)
+--content preview|full|raw   selected content in event output (default preview;
+                             full redacts; raw preserves originals; messages 1 MiB, tools 16 MiB)
+--content-scope all|messages  full/raw body selection (default all; messages keeps
+                             tool previews and metadata)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --enforce                    opt-in enforce mode: block an action when a rule
@@ -671,8 +684,10 @@ default. This agent process deadline is separate from the hook handler's
                              findings, events, indicators, or all
                              (repeatable; default findings; enforce mode requires
                              findings)
---content preview|full|raw       message and tool content installed hook commands emit
-                             (default preview; full requires events or all)
+--content preview|full|raw   selected content installed hook commands emit
+                             (default preview; full/raw require events or all)
+--content-scope all|messages  full/raw body selection installed hooks use (default all;
+                             messages keeps tool previews and metadata)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --output SINK                record sink installed hook commands use:

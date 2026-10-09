@@ -106,6 +106,8 @@ Preview output keeps these metadata fields but omits the bodies. Full output
 redacts both bodies; raw output preserves them without redaction. An incomplete
 JSON payload is omitted with a marker in full mode because it cannot safely be
 redacted structurally. Raw mode can contain a flagged incomplete JSON prefix.
+`--content-scope messages` omits tool bodies even in full/raw mode, preserving
+their byte counts and actual truncation flags without changing local rule input.
 
 The conversation-only meaning of `content` is unchanged. See
 [content capture](content-capture.md) for output choices and source limitations.

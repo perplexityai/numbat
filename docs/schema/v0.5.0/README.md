@@ -62,15 +62,18 @@ events. Preview records can contain metadata without bodies.
 message bodies. Existing full-mode consumers must allow larger records and
 potentially sensitive source code, file bodies and patches. `--content raw`
 opts into unredacted mapped content. `content` remains conversation-only.
+Use `--content full --content-scope messages` to exclude tool bodies while
+keeping full messages and tool metadata. Scope defaults to `all`.
 Messages retain their 1 MiB bound; each tool payload has a 16 MiB bound.
 Tool byte counts describe JSON bytes before retention and redaction, not the
 size of a source file or an assurance that upstream content was complete.
 Truncated JSON is omitted with a marker in full mode; raw mode can retain a
 flagged prefix. See [content capture](../../content-capture.md).
 
-Local rules receive original tool payloads regardless of export mode. A rule
+Local rules receive original tool payloads regardless of export mode or scope. A rule
 that reads an incomplete tool body receives a scoped evaluation error. Preview
-exports with known omitted bodies behave the same way during rule replay.
+and messages-scope exports with known omitted tool bodies behave the same way
+during rule replay.
 
 On findings, `timestamp` is the matched event's activity time (the completing
 event for a sequence) and may be absent when that event has no valid timestamp.

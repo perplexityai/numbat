@@ -6,12 +6,22 @@ export should mask recognized secrets, or `--content preview` for the default
 compact output. The same modes apply to scan, hooks, installed hooks and the
 OTLP collector; timeline supports full and raw with `--format json`.
 
-One option controls message bodies, tool arguments and tool results. Separate
-input/result switches would make partial capture easy to configure by mistake.
-Full retains its existing redaction policy while expanding to tool content;
-raw makes the unredacted choice explicit. The default remains preview.
+`--content-scope all|messages` selects which bodies full/raw export. The default
+is `all`; scope has no effect in preview mode.
 
-Rules inspect retained original payloads before this output choice is applied.
+| Selection | Exported bodies |
+| --- | --- |
+| `--content full` | Redacted messages, tool arguments and tool results. |
+| `--content full --content-scope messages` | Redacted messages only. |
+| `--content raw` | Original mapped messages, tool arguments and tool results, with unredacted typed fields. |
+| `--content raw --content-scope messages` | Original mapped messages only; other fields keep normal preview-mode redaction. |
+
+`messages` includes prompts, assistant responses and any enabled reasoning.
+It keeps tool events, redacted previews, typed fields and original tool byte
+counts/truncation flags, but omits `tool_input` and `tool_result`. Scope does not
+change local detection or enforcement.
+
+Rules inspect retained original payloads before these output choices are applied.
 Use `event.tool_input` and `event.tool_result` for tool content; `event.content`
 keeps its conversation-only meaning. Payloads are JSON-encoded strings so the
 flat schema accommodates objects, arrays, strings, numbers, booleans and null.

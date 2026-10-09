@@ -14,6 +14,24 @@ const (
 	contentRaw
 )
 
+type contentScope uint8
+
+const (
+	contentScopeAll contentScope = iota
+	contentScopeMessages
+)
+
+func parseContentScope(value string) (contentScope, error) {
+	switch value {
+	case "all":
+		return contentScopeAll, nil
+	case "messages":
+		return contentScopeMessages, nil
+	default:
+		return contentScopeAll, fmt.Errorf("invalid --content-scope %q: want all|messages", value)
+	}
+}
+
 func parseContentMode(value string) (contentMode, error) {
 	switch value {
 	case "preview":
@@ -50,15 +68,23 @@ func validateContentSelection(mode contentMode, sel emitSelection) error {
 }
 
 func contentFlagHelp() string {
-	return "message and tool content in event output: preview|full|raw (full redacts, raw does not; messages: 1 MiB; tool payloads: 16 MiB)"
+	return "message and tool content in event output: preview|full|raw (full redacts; raw preserves selected content; messages: 1 MiB; tool payloads: 16 MiB)"
 }
 
-func contentEmitterOptions(mode contentMode) []output.EmitterOption {
-	if mode == contentRaw {
-		return []output.EmitterOption{output.WithRawContent()}
+func contentScopeFlagHelp() string {
+	return "scope of full/raw content: all|messages (messages keeps tool previews and metadata; does not affect local detection)"
+}
+
+func contentEmitterOptions(mode contentMode, scope contentScope) []output.EmitterOption {
+	var opts []output.EmitterOption
+	switch mode {
+	case contentRaw:
+		opts = append(opts, output.WithRawContent())
+	case contentFull:
+		opts = append(opts, output.WithFullContent())
 	}
-	if mode == contentFull {
-		return []output.EmitterOption{output.WithFullContent()}
+	if scope == contentScopeMessages {
+		opts = append(opts, output.WithMessageContentOnly())
 	}
-	return nil
+	return opts
 }

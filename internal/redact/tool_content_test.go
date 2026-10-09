@@ -70,3 +70,25 @@ func TestToolContentSerializedArgumentsRedaction(t *testing.T) {
 		t.Fatalf("serialized arguments = %s", full.ToolInput)
 	}
 }
+
+func TestMessageContentKeepsToolMetadata(t *testing.T) {
+	for _, value := range []string{"", `null`, `""`, `{}`, `{"cookie":"PRIVATE_CANARY"`, `{"data":"complete"}`} {
+		for _, truncated := range []bool{false, true} {
+			ev := model.Event{
+				ToolInput: value, ToolInputBytes: len(value), ToolInputTruncated: truncated,
+				ToolResult: value, ToolResultBytes: len(value), ToolResultTruncated: truncated,
+			}
+			for _, raw := range []bool{false, true} {
+				got := EventWithMessageContent(ev, raw)
+				if got.ToolInput != "" || got.ToolResult != "" ||
+					got.ToolInputBytes != len(value) || got.ToolResultBytes != len(value) ||
+					got.ToolInputTruncated != truncated || got.ToolResultTruncated != truncated {
+					t.Fatalf("value=%q truncated=%t raw=%t: body omission changed source metadata", value, truncated, raw)
+				}
+				if got.ToolInputForAnalysis() != "" || got.ToolResultForAnalysis() != "" {
+					t.Fatal("export retained private tool bodies")
+				}
+			}
+		}
+	}
+}

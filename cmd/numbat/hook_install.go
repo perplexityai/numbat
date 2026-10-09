@@ -40,6 +40,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		enforce           bool
 		emitValues        multiFlag
 		contentValue      = "preview"
+		contentScopeValue = "all"
 		includeReasoning  bool
 		outputValues      multiFlag
 		outputFileValue   string
@@ -58,6 +59,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&enforce, "enforce", false, "install in enforce mode for agents with blocking support: deny supported pre-action requests when a rule marked enforce=true matches; requires an enabled enforce=true rule in the effective catalog (default: monitor only)")
 		fs.Var(&emitValues, "emit", "records emitted by live integrations: findings, events, indicators, or all (repeatable; default findings; enforce mode requires findings)")
 		fs.StringVar(&contentValue, "content", "preview", contentFlagHelp())
+		fs.StringVar(&contentScopeValue, "content-scope", "all", contentScopeFlagHelp())
 		fs.BoolVar(&includeReasoning, "include-reasoning", false, "include source-recorded reasoning events when an integration exposes them")
 		fs.Var(&outputValues, "output", outputFlagHelp(outputModeFile)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
 		fs.StringVar(&outputFileValue, "output-file", "", "destination path when --output includes file (default findings.ndjson, or records.ndjson when --emit includes events/indicators)")
@@ -79,7 +81,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "usage: numbat hook %s %s [--settings PATH] [--managed]", action, agentArg)
 		if action == "install" {
-			fmt.Fprint(stderr, " [--emit KIND ...] [--content preview|full|raw] [--include-reasoning] [--output SINK ...] [--rules-dir DIR ...] [--no-builtin-rules] [--enforce]")
+			fmt.Fprint(stderr, " [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--include-reasoning] [--output SINK ...] [--rules-dir DIR ...] [--no-builtin-rules] [--enforce]")
 		}
 		fmt.Fprintln(stderr)
 		switch action {
@@ -183,9 +185,15 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "hook install: %v\n", parseErr)
 			return 2
 		}
+		scope, parseErr := parseContentScope(contentScopeValue)
+		if parseErr != nil {
+			fmt.Fprintf(stderr, "hook install: %v\n", parseErr)
+			return 2
+		}
 		args, err := installRuntimeArgs(installRuntimeConfig{
 			emit:             emitValues,
 			content:          content,
+			contentScope:     scope,
 			includeReasoning: includeReasoning,
 			modes:            outputValues,
 			file:             outputFileValue,
@@ -286,6 +294,7 @@ func runHookAction(action, agent, path, binary string, installOpts hook.InstallO
 type installRuntimeConfig struct {
 	emit             []string
 	content          contentMode
+	contentScope     contentScope
 	includeReasoning bool
 	modes            []string
 	file             string
@@ -366,6 +375,9 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 		args = append(args, "--content=full")
 	case contentRaw:
 		args = append(args, "--content=raw")
+	}
+	if cfg.contentScope == contentScopeMessages {
+		args = append(args, "--content-scope=messages")
 	}
 	if cfg.includeReasoning {
 		args = append(args, "--include-reasoning")

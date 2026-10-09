@@ -88,6 +88,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	var emitValues multiFlag
 	fs.Var(&emitValues, "emit", emitFlagHelp()+"; enforce mode requires findings")
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events when the integration exposes them")
 	var outputValues multiFlag
 	fs.Var(&outputValues, "output", outputFlagHelp(outputModeStdout)+"; stdout mode writes records to hook stderr and is unavailable in enforce mode")
@@ -109,7 +110,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full|raw] [--include-reasoning] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
+		fmt.Fprintln(stderr, "usage: numbat hook EVENT --agent "+hook.AgentUsage()+" [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--include-reasoning] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -141,6 +142,11 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 		return 0
 	}
 	content, err := parseContentMode(*contentFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "hook: %v\n", err)
+		return 0
+	}
+	scope, err := parseContentScope(*contentScopeFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 0
@@ -195,6 +201,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 		caseID:           *caseID,
 		sel:              sel,
 		content:          content,
+		contentScope:     scope,
 		includeReasoning: *includeReasoning,
 		stateDB:          *stateDB,
 		modes:            outputValues,
@@ -249,6 +256,7 @@ type hookOptions struct {
 	caseID           string
 	sel              emitSelection
 	content          contentMode
+	contentScope     contentScope
 	includeReasoning bool
 	stateDB          string
 	modes            []string
@@ -315,9 +323,9 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	run := runID()
 	var em *output.Emitter
 	if opts.enforce {
-		em = output.NewWithSinkAndDiagnostics(sink, run, contentEmitterOptions(opts.content)...)
+		em = output.NewWithSinkAndDiagnostics(sink, run, contentEmitterOptions(opts.content, opts.contentScope)...)
 	} else {
-		em = output.NewWithSink(sink, stderr, run, contentEmitterOptions(opts.content)...)
+		em = output.NewWithSink(sink, stderr, run, contentEmitterOptions(opts.content, opts.contentScope)...)
 	}
 	closeWithDiagnostic := func(err error) error {
 		em.Diag("error", err.Error())

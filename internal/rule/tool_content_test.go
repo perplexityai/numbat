@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 func TestRulesSeeOriginalToolBodies(t *testing.T) {
@@ -45,5 +46,17 @@ func TestPreviewReplayCannotTreatOmittedBodyAsEmpty(t *testing.T) {
 	matches, err := eng.Eval(model.Event{ToolInputBytes: 123})
 	if err == nil || len(matches) != 0 {
 		t.Fatal("omitted preview body was treated as clean")
+	}
+}
+
+func TestMessageScopeReplayCannotTreatOmittedBodyAsEmpty(t *testing.T) {
+	eng := mustEngine(t, Rule{ID: "test.scope", Severity: model.SeverityHigh, Expr: `!event.tool_input.contains("bad")`})
+	var ev model.Event
+	ev.SetToolInput(map[string]string{"data": "bad"})
+	for _, raw := range []bool{false, true} {
+		matches, err := eng.Eval(redact.EventWithMessageContent(ev, raw))
+		if err == nil || len(matches) != 0 {
+			t.Fatal("scope-filtered tool body was treated as clean")
+		}
 	}
 }

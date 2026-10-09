@@ -46,23 +46,35 @@ func Event(ev model.Event) model.Event {
 // body is still redacted, while its byte count describes the mapped text before
 // Numbat's content bound and output redaction were applied.
 func EventWithContent(ev model.Event) model.Event {
-	content := ev.ContentForAnalysis()
-	contentBytes := ev.ContentBytesForAnalysis()
-	contentTruncated := ev.ContentTruncatedForAnalysis()
 	input, result := ev.ToolInputForAnalysis(), ev.ToolResultForAnalysis()
 	inputBytes, resultBytes := ev.ToolInputBytesForAnalysis(), ev.ToolResultBytesForAnalysis()
 	inputTruncated, resultTruncated := ev.ToolInputTruncatedForAnalysis(), ev.ToolResultTruncatedForAnalysis()
-	ev = Event(ev)
+	ev = EventWithMessageContent(ev, false)
 	ev.ToolInput, ev.ToolInputTruncated = payload(input, inputTruncated)
 	ev.ToolResult, ev.ToolResultTruncated = payload(result, resultTruncated)
 	ev.ToolInputBytes, ev.ToolResultBytes = inputBytes, resultBytes
+	return ev
+}
+
+// EventWithMessageContent includes only the retained conversation body. Raw
+// preserves that body without redaction; other fields use the preview policy.
+// Tool byte counts and truncation flags remain available even without bodies.
+func EventWithMessageContent(ev model.Event, raw bool) model.Event {
+	content := ev.ContentForAnalysis()
+	contentBytes := ev.ContentBytesForAnalysis()
+	contentTruncated := ev.ContentTruncatedForAnalysis()
+	ev = Event(ev)
 	if content == "" {
 		return ev
 	}
-	var outputTruncated bool
-	ev.Content, outputTruncated = model.LimitContent(String(content))
+	ev.Content = content
 	ev.ContentBytes = contentBytes
-	ev.ContentTruncated = contentTruncated || outputTruncated
+	ev.ContentTruncated = contentTruncated
+	if !raw {
+		var outputTruncated bool
+		ev.Content, outputTruncated = model.LimitContent(String(content))
+		ev.ContentTruncated = contentTruncated || outputTruncated
+	}
 	return ev
 }
 

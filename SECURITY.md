@@ -39,9 +39,13 @@ environment values, credentials, and MCP configuration.
 - `--content full` explicitly includes bounded, redacted message text and tool
   arguments/results, including source code, file bodies and patches when
   provided. `--content raw` includes mapped content without redaction. Neither
-  mode archives the entire source transcript. Rules inspect retained originals
-  before output redaction. Choose the mode and storage access controls for the
-  intended analysis; redaction can remove security-relevant evidence.
+  mode archives the entire source transcript. Scope defaults to `all`;
+  `--content-scope messages` omits tool bodies while keeping redacted previews,
+  typed fields and tool size/truncation metadata. In raw messages scope, only
+  message bodies are unredacted.
+  Rules inspect retained originals before output redaction. Choose the mode,
+  scope and storage access controls for the intended analysis; redaction can
+  remove security-relevant evidence.
 - Redaction masks recognized secret patterns; it is not a declassification or
   data-loss-prevention boundary. Review records and redacted case evidence
   before sharing them.

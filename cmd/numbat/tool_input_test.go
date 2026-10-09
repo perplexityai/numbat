@@ -110,7 +110,7 @@ func TestToolInputPreviewAcrossCaptureSurfaces(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					em := output.New(&records, &diags, "run-test", contentEmitterOptions(projection)...)
+					em := output.New(&records, &diags, "run-test", contentEmitterOptions(projection, contentScopeAll)...)
 					c, err := newCollector(collectorConfig{emit: em, runID: "run-test", sel: emitSelection{events: true}})
 					if err != nil {
 						t.Fatal(err)

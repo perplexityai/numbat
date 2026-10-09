@@ -52,11 +52,12 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&agents, "agent", "limit automatic discovery to a parser-backed agent (repeatable; cannot be combined with --path)")
 	caseID := fs.String("case-id", "", "case identifier stamped on every event")
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
 	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	formatFlag := fs.String("format", timelineFormatText, "output format: text|json")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--include-reasoning] [--content preview|full|raw] [--format text|json]")
+		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--include-reasoning] [--content preview|full|raw] [--content-scope all|messages] [--format text|json]")
 		fmt.Fprintln(stderr, "\nReconstructs a per-session chronological view of agent activity (prompts, tool calls,")
 		fmt.Fprintln(stderr, "commands, approvals, file edits, outcomes) from the same artifacts scan reads.")
 		fmt.Fprintf(stderr, "Automatic-discovery agents: %s.\n", artifactAgentUsage())
@@ -92,6 +93,12 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	content, err := parseContentMode(*contentFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "timeline: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	scope, err := parseContentScope(*contentScopeFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "timeline: %v\n", err)
 		fs.Usage()
@@ -165,17 +172,19 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	sessions := groupSessions(events)
 	// Group first, then apply the requested shared event projection.
 	for i := range sessions {
-		switch content {
-		case contentRaw:
-			for j, ev := range sessions[i].Events {
+		for j, ev := range sessions[i].Events {
+			switch {
+			case content == contentPreview:
+				sessions[i].Events[j] = redact.Event(ev)
+			case scope == contentScopeMessages:
+				sessions[i].Events[j] = redact.EventWithMessageContent(ev, content == contentRaw)
+			case content == contentRaw:
 				sessions[i].Events[j] = redact.EventWithRawContent(ev)
+			default:
+				sessions[i].Events[j] = redact.EventWithContent(ev)
 			}
-		case contentFull:
-			sessions[i].Events = redact.EventsWithContent(sessions[i].Events)
-		default:
-			sessions[i].Events = redact.Events(sessions[i].Events)
 		}
-		if content != contentRaw {
+		if content != contentRaw || scope == contentScopeMessages {
 			sessions[i].ProjectPath = redact.String(sessions[i].ProjectPath)
 		}
 	}
