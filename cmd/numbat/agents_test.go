@@ -913,3 +913,182 @@ func TestAgentsMalformedConfigWiredError(t *testing.T) {
 		t.Errorf("wired = %q, want an error/unknown state for an unreadable config", claude.Wired)
 	}
 }
+
+func writeMuseBundle(t *testing.T, appsDir, bundleID string) {
+	t.Helper()
+	dir := filepath.Join(appsDir, "Muse.app", "Contents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Binary plists store ASCII strings verbatim; this is enough for the check.
+	body := append([]byte("bplist00"), []byte("\x00CFBundleIdentifier\x00"+bundleID+"\x00")...)
+	if err := os.WriteFile(filepath.Join(dir, "Info.plist"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type agentsJSONRow struct {
+	Agent     string `json:"agent"`
+	Supported bool   `json:"supported"`
+	Present   bool   `json:"present"`
+	Detected  bool   `json:"detected"`
+	AtRest    string `json:"at_rest"`
+	Hook      string `json:"hook"`
+	Wired     string `json:"wired"`
+	SetupHint string `json:"setup_hint"`
+}
+
+func agentsJSON(t *testing.T, args ...string) []agentsJSONRow {
+	t.Helper()
+	out, errb, code := runCLI(append([]string{"agents", "--format", "json"}, args...)...)
+	if code != 0 {
+		t.Fatalf("agents %v exit = %d (stderr=%s)", args, code, errb)
+	}
+	var rows []agentsJSONRow
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("decode json: %v\n%s", err, out)
+	}
+	return rows
+}
+
+func museDesktopRow(rows []agentsJSONRow) (agentsJSONRow, bool) {
+	for _, r := range rows {
+		if r.Agent == "Muse Desktop" {
+			return r, true
+		}
+	}
+	return agentsJSONRow{}, false
+}
+
+// Muse Desktop has no parser or hook, so it is listed from a presence signal
+// alone and flagged unsupported. Each signal is checked independently.
+func TestAgentsListsMuseDesktopWhenDetected(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, home string)
+	}{
+		{"application support directory", func(t *testing.T, home string) {
+			mustMkdir(t, filepath.Join(home, "Library", "Application Support", "com.meta.endo"))
+		}},
+		{"caches directory", func(t *testing.T, home string) {
+			mustMkdir(t, filepath.Join(home, "Library", "Caches", "com.meta.endo"))
+		}},
+		{"system Applications bundle", func(t *testing.T, home string) {
+			writeMuseBundle(t, systemApplicationsDir, "com.meta.endo")
+		}},
+		{"user Applications bundle", func(t *testing.T, home string) {
+			writeMuseBundle(t, filepath.Join(home, "Applications"), "com.meta.endo")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setTestHome(t, home)
+			tc.setup(t, home)
+
+			for _, args := range [][]string{nil, {"--all"}} {
+				row, ok := museDesktopRow(agentsJSON(t, args...))
+				if !ok {
+					t.Fatalf("agents %v: Muse Desktop not listed", args)
+				}
+				if row.Supported || !row.Present || !row.Detected {
+					t.Errorf("agents %v: row flags = %+v, want unsupported but present and detected", args, row)
+				}
+				if row.Hook != "none" || row.Wired != "n/a" || !strings.Contains(row.AtRest, "unsupported") || !strings.Contains(row.SetupHint, "unsupported") {
+					t.Errorf("agents %v: row must say unsupported with no hook or wiring: %+v", args, row)
+				}
+			}
+			out, _, _ := runCLI("agents")
+			if !strings.Contains(out, "Muse Desktop") || !strings.Contains(out, "unsupported") {
+				t.Errorf("text output missing the unsupported Muse Desktop row:\n%s", out)
+			}
+		})
+	}
+}
+
+// The bundle identifier, not the app name, is the signal, so an unrelated
+// Muse.app must never be reported as Muse Desktop.
+func TestAgentsDoesNotMistakeAnotherMuseAppForMuseDesktop(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	writeMuseBundle(t, systemApplicationsDir, "com.example.somethingelse")
+	writeMuseBundle(t, filepath.Join(home, "Applications"), "com.example.somethingelse")
+
+	for _, args := range [][]string{nil, {"--all"}} {
+		if _, ok := museDesktopRow(agentsJSON(t, args...)); ok {
+			t.Errorf("agents %v listed Muse Desktop for a bundle with a different identifier", args)
+		}
+	}
+}
+
+// Unsupported rows are inventory of what is present. When nothing is detected
+// they must not appear even under --all, which stays the supported matrix.
+func TestAgentsOmitsUnsupportedRowsWhenAbsent(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+
+	rows := agentsJSON(t, "--all")
+	if len(rows) != len(agentDescriptors) {
+		t.Fatalf("--all rows = %d, want %d supported rows only", len(rows), len(agentDescriptors))
+	}
+	if _, ok := museDesktopRow(rows); ok {
+		t.Error("Muse Desktop listed on a machine with no Muse Desktop signal")
+	}
+	for _, r := range rows {
+		if !r.Supported {
+			t.Errorf("supported matrix row reported unsupported: %+v", r)
+		}
+	}
+}
+
+// A mixed machine reports both kinds of row, distinguished by the supported flag.
+func TestAgentsDistinguishesSupportedFromUnsupportedRows(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	mustMkdir(t, filepath.Join(home, ".claude"))
+	mustMkdir(t, filepath.Join(home, "Library", "Application Support", "com.meta.endo"))
+
+	var sawClaude, sawMuseDesktop bool
+	for _, r := range agentsJSON(t) {
+		switch r.Agent {
+		case "Claude Code":
+			sawClaude = true
+			if !r.Supported {
+				t.Errorf("Claude Code must be supported: %+v", r)
+			}
+		case "Muse Desktop":
+			sawMuseDesktop = true
+			if r.Supported {
+				t.Errorf("Muse Desktop must be unsupported: %+v", r)
+			}
+		}
+	}
+	if !sawClaude || !sawMuseDesktop {
+		t.Fatalf("expected both rows: claude=%v muse-desktop=%v", sawClaude, sawMuseDesktop)
+	}
+}
+
+// Detect-only entries must stay out of the supported descriptor table, whose
+// sync test requires every row to be parser- or hook-backed.
+func TestUnsupportedAgentsAreDisjointFromSupportedDescriptors(t *testing.T) {
+	supported := map[string]bool{}
+	for _, d := range agentDescriptors {
+		supported[d.display] = true
+	}
+	for _, u := range unsupportedAgents {
+		if supported[u.display] {
+			t.Errorf("%q is listed as both supported and unsupported", u.display)
+		}
+		if u.detect == nil || u.atRest == "" || u.hint == "" {
+			t.Errorf("%q has an incomplete unsupported descriptor: %+v", u.display, u)
+		}
+	}
+}
+
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}

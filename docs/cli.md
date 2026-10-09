@@ -47,6 +47,14 @@ artifacts (`ARTIFACTS`), its live capture mode (`LIVE`), whether numbat is wired
 there (`WIRED`), and the next useful command (`NEXT`). It makes no changes,
 executes no agent binary, and supports text (default) or JSON output.
 
+A product numbat recognizes on this machine but cannot parse or hook is listed
+as well, marked unsupported (`LIVE` is `none` and `NEXT` points to the
+[unsupported-agent notes](agent-coverage.md#evaluated-but-unsupported)). Today
+that is Muse Desktop, detected by its macOS bundle identifier or its per-user
+data directories. These rows are inventory only: they appear when detected, not
+under `--all` when absent, and never emit events. In JSON, each row carries
+`"supported": true|false` to tell the two kinds apart.
+
 For OpenClaw, `WIRED=yes` means the native package is present and readable in
 the selected Gateway plugin config root and matches numbat's manifest, package,
 and generated-source checksum contract. It does not prove provenance or that
