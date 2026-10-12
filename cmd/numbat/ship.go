@@ -394,6 +394,8 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 					}
 					if nextID == "" {
 						cursor.checkpoint = newShipCheckpoint(cursor.checkpoint.DestinationSHA256, batch.activeFileID, 0, nil)
+						cursor.checkpoint.VolumeID = batch.volumeID
+						cursor.checkpoint.DrainedFileIDs = drained
 					} else {
 						cursor.checkpoint = newShipCheckpoint(cursor.checkpoint.DestinationSHA256, nextID, 0, nil)
 						cursor.checkpoint.DrainedFileIDs = drained
@@ -802,6 +804,11 @@ func readShipCursor(path, destination string) (shipCursor, error) {
 	var cp shipCheckpoint
 	if json.Unmarshal(b, &cp) != nil || !validShipCheckpoint(cp, destination) {
 		empty.resetReason = fmt.Sprintf("state %s is invalid, incompatible, or belongs to another destination", path)
+		return empty, nil
+	}
+	if cp.VolumeID == "" && len(cp.DrainedFileIDs) > 0 {
+		empty.resetReason = fmt.Sprintf("state %s cannot verify retained files without a volume identity", path)
+		empty.pending = true
 		return empty, nil
 	}
 	return shipCursor{checkpoint: cp}, nil
