@@ -347,8 +347,10 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			cursor.pending = false
 		}
 		if cursor.checkpoint.Offset == 0 && cursor.checkpoint.GuardBytes == 0 && len(batch.blob) > 0 && !batch.rotated {
+			drained := cursor.checkpoint.DrainedFileIDs
 			cursor.checkpoint = newPendingShipCheckpoint(cursor.checkpoint.DestinationSHA256, batch.fileID, batch.blob)
 			cursor.checkpoint.VolumeID = batch.volumeID
+			cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
 			cursor.pending = true
 			if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
 				return cursor, fmt.Errorf("persist state %s: %w", statePath, err)
