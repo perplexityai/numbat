@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // OpenClawExtractor parses an OpenClaw CLI session transcript. OpenClaw writes
@@ -663,6 +664,11 @@ func (e OpenClawExtractor) baseSub(src Source, sha string, st *openClawState, li
 // fields. It returns whether the call is a command tool, so a correlated
 // tool_result becomes a command.result.
 func classifyOpenClawTool(ev *model.Event, name string, input map[string]json.RawMessage) (isCommand bool) {
+	defer func() {
+		if ev.EventType == model.EventToolCall {
+			ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
+		}
+	}()
 	switch {
 	case inOpenClawToolSet(openClawCommandTools, name):
 		if name == "exec" {
@@ -709,19 +715,11 @@ func classifyOpenClawTool(ev *model.Event, name string, input map[string]json.Ra
 		}
 		rawURL := openClawArgString(input, openClawArgURL)
 		if name == "browser" {
+			ev.Tags = append(ev.Tags, "browser")
 			rawURL = openClawArgFirstString(input, openClawArgTargetURL, openClawArgURL)
-			query := openClawArgString(input, openClawArgQuery)
-			if rawURL == "" && query == "" {
-				// Stable browser also exposes local/non-egress actions such as tabs
-				// and screenshot. A browser invocation is not itself proof of a
-				// network boundary when it has no target or query.
+			action := openClawArgString(input, "action")
+			if (action != "open" && action != "navigate") || networkTargetURL(rawURL) == "" {
 				ev.EventType = model.EventToolCall
-				return false
-			}
-			if rawURL == "" {
-				ev.EventType = model.EventNetworkIndicator
-				ev.ContentPreview = preview(query)
-				ev.Tags = append(ev.Tags, model.TagNetwork)
 				return false
 			}
 		}
@@ -730,6 +728,9 @@ func classifyOpenClawTool(ev *model.Event, name string, input map[string]json.Ra
 			ev.URL = httpURL
 		}
 		ev.ContentPreview = preview(rawURL)
+		if name == "browser" {
+			ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
+		}
 		ev.Tags = append(ev.Tags, model.TagNetwork)
 		return false
 	default:

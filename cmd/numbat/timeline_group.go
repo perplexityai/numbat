@@ -10,34 +10,39 @@ import (
 // timelineSession is one reconstructed conversation. ProjectPath is display
 // context and does not partition a session as it does for sequence detection.
 type timelineSession struct {
-	SourceAgent string        `json:"source_agent"`
-	SessionID   string        `json:"session_id,omitempty"`
-	ProjectPath string        `json:"project_path,omitempty"`
-	Start       string        `json:"start,omitempty"`
-	End         string        `json:"end,omitempty"`
-	Events      []model.Event `json:"events"`
+	SourceAgent     string        `json:"source_agent"`
+	SessionID       string        `json:"session_id,omitempty"`
+	SessionTreeID   string        `json:"session_tree_id,omitempty"`
+	ParentSessionID string        `json:"parent_session_id,omitempty"`
+	SubAgent        string        `json:"sub_agent,omitempty"`
+	SubAgentID      string        `json:"sub_agent_id,omitempty"`
+	ProjectPath     string        `json:"project_path,omitempty"`
+	Start           string        `json:"start,omitempty"`
+	End             string        `json:"end,omitempty"`
+	Events          []model.Event `json:"events"`
 
 	sourceType string
 	// boundary partitions events without a session id.
 	boundary string
 }
 
-// groupSessions keys by source agent, source type, and session id. Empty session
-// ids fall back to artifact path or event identity. Events and sessions use
-// explicit timestamp and identity tiebreakers for deterministic output.
+// groupSessions keys by source agent, source type, active session, and child id.
+// Empty session ids fall back to child, artifact, or event identity. Events and
+// sessions use explicit timestamp and identity tiebreakers for deterministic
+// output.
 func groupSessions(events []model.Event) []timelineSession {
 	type bucket struct {
-		agent, sourceType, session, project string
-		boundary                            string // the identity that keyed this session (empty-id partitioning)
-		start, end                          string
-		idx                                 []int // original indices, for the stable within-session order
+		agent, sourceType, session, tree, parent, subAgent, subAgentID, project string
+		boundary                                                                string // the identity that keyed this session (empty-id partitioning)
+		start, end                                                              string
+		idx                                                                     []int // original indices, for the stable within-session order
 	}
 	order := []string{} // group keys in first-seen order, before final sort
 	byKey := map[string]*bucket{}
 
 	for i, ev := range events {
 		sourceType := timelineSourceType(ev)
-		key := ev.SourceAgent + "\x00" + sourceType + "\x00" + ev.SessionID
+		key := ev.SourceAgent + "\x00" + sourceType + "\x00" + ev.SessionID + "\x00" + ev.SubAgentID
 		boundary := ""
 		if ev.SessionID == "" {
 			boundary = timelineEmptySessionBoundary(ev, i)
@@ -62,6 +67,18 @@ func groupSessions(events []model.Event) []timelineSession {
 		evs := make([]model.Event, len(b.idx))
 		for j, i := range b.idx {
 			evs[j] = events[i]
+			if b.tree == "" && events[i].SessionTreeID != "" {
+				b.tree = events[i].SessionTreeID
+			}
+			if b.parent == "" && events[i].ParentSessionID != "" {
+				b.parent = events[i].ParentSessionID
+			}
+			if b.subAgent == "" && events[i].SubAgent != "" {
+				b.subAgent = events[i].SubAgent
+			}
+			if b.subAgentID == "" && events[i].SubAgentID != "" {
+				b.subAgentID = events[i].SubAgentID
+			}
 			if b.project == "" && events[i].ProjectPath != "" {
 				b.project = events[i].ProjectPath
 			}
@@ -73,14 +90,18 @@ func groupSessions(events []model.Event) []timelineSession {
 			}
 		}
 		sessions = append(sessions, timelineSession{
-			SourceAgent: b.agent,
-			SessionID:   b.session,
-			ProjectPath: b.project,
-			Start:       b.start,
-			End:         b.end,
-			Events:      evs,
-			sourceType:  b.sourceType,
-			boundary:    b.boundary,
+			SourceAgent:     b.agent,
+			SessionID:       b.session,
+			SessionTreeID:   b.tree,
+			ParentSessionID: b.parent,
+			SubAgent:        b.subAgent,
+			SubAgentID:      b.subAgentID,
+			ProjectPath:     b.project,
+			Start:           b.start,
+			End:             b.end,
+			Events:          evs,
+			sourceType:      b.sourceType,
+			boundary:        b.boundary,
 		})
 	}
 
@@ -98,6 +119,9 @@ func groupSessions(events []model.Event) []timelineSession {
 		if a.SessionID != b.SessionID {
 			return a.SessionID < b.SessionID
 		}
+		if a.SubAgentID != b.SubAgentID {
+			return a.SubAgentID < b.SubAgentID
+		}
 		return a.boundary < b.boundary
 	})
 	return sessions
@@ -113,6 +137,9 @@ func timelineSourceType(ev model.Event) string {
 }
 
 func timelineEmptySessionBoundary(ev model.Event, idx int) string {
+	if ev.SubAgentID != "" {
+		return "subagent:" + ev.SubAgentID
+	}
 	if timelineSourceType(ev) == model.SourceArtifact && ev.Evidence.LocalPath != "" {
 		return "artifact:" + ev.Evidence.LocalPath
 	}

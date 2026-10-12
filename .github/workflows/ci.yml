@@ -114,7 +114,7 @@ jobs:
 
       - name: fuzz redaction decoder
         run: |
-          for t in FuzzString FuzzJSONProducesValidJSON; do
+          for t in FuzzString FuzzJSONProducesValidJSON FuzzToolInputPreview; do
             go test -run='^$' -fuzz="^${t}$" -fuzztime=30s ./internal/redact/
           done
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -141,6 +142,26 @@ func TestScanEmitEvents(t *testing.T) {
 	}
 	if countType(types, "scan_summary") != 1 {
 		t.Errorf("want one scan_summary: %v", types)
+	}
+}
+
+func TestScanCodexSubagentContext(t *testing.T) {
+	p := filepath.Join("..", "..", "internal", "extract", "testdata", ".codex", "sessions", "2026", "08", "31", "rollout-codex-subagent.jsonl")
+	out, errb, code := runCLI("scan", "--path", p, "--emit", "events")
+	if code != 0 {
+		t.Fatalf("exit = %d (err=%s)", code, errb)
+	}
+	events := decodeEventRecords(t, out)
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want lifecycle plus command pair", len(events))
+	}
+	for _, ev := range events {
+		if ev.SessionID != "019f84fe-e5e1-7f80-8745-493ccff96186" ||
+			ev.SessionTreeID != "019f620e-730d-76e2-8204-f108cfe2f082" ||
+			ev.ParentSessionID != "019f620e-730d-76e2-8204-f108cfe2f082" ||
+			ev.SubAgentID != ev.SessionID || ev.SubAgent != "/agents/reviewer" {
+			t.Fatalf("%s context = session %q tree %q parent %q id %q role %q", ev.EventType, ev.SessionID, ev.SessionTreeID, ev.ParentSessionID, ev.SubAgentID, ev.SubAgent)
+		}
 	}
 }
 

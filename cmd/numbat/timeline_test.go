@@ -81,6 +81,30 @@ func TestRenderTimelineTextEscapesControlsAndReportsWriteErrors(t *testing.T) {
 	}
 }
 
+func TestRenderTimelineTextShowsSubagentRelationship(t *testing.T) {
+	sessions := []timelineSession{{
+		SourceAgent:     model.AgentCodex,
+		SessionID:       "child-1",
+		SessionTreeID:   "tree-1",
+		ParentSessionID: "parent-1",
+		SubAgent:        "default",
+		SubAgentID:      "child-1",
+		Events:          []model.Event{},
+	}}
+	var out bytes.Buffer
+	if err := renderTimelineText(sessions, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"session child-1 [codex]", "tree:    tree-1", "parent:  parent-1", "subagent: default"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("text output missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "subagent_id:") {
+		t.Errorf("text output repeated child id already shown as session:\n%s", out.String())
+	}
+}
+
 // The json format is one document carrying schema_version and the grouped
 // sessions, deterministic across runs.
 func TestTimelineJSONShapeAndDeterminism(t *testing.T) {
@@ -105,8 +129,8 @@ func TestTimelineJSONShapeAndDeterminism(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatalf("json output not a single document: %v\n%s", err, out)
 	}
-	if report.SchemaVersion != "0.3.0" {
-		t.Errorf("schema_version = %q, want 0.3.0", report.SchemaVersion)
+	if report.SchemaVersion != "0.4.0" {
+		t.Errorf("schema_version = %q, want 0.4.0", report.SchemaVersion)
 	}
 	if len(report.Sessions) != 1 {
 		t.Fatalf("got %d sessions, want 1", len(report.Sessions))

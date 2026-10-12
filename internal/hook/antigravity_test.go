@@ -83,21 +83,28 @@ func TestMapAntigravityDocumentedTools(t *testing.T) {
 	}
 }
 
-func TestMapAntigravityPostToolUsesStepCorrelation(t *testing.T) {
-	payload := antigravityPayload("", nil)
-	payload["error"] = "exit status 1"
-	ev := Map(LifecycleAntigravityPostTool, AgentAntigravity, model.AgentAntigravity, "event-2", payload)
-	if ev.EventType != model.EventToolResult || ev.ToolName != "" {
-		t.Errorf("event = %+v", ev)
-	}
-	if ev.ToolCallID != "step:7" {
-		t.Errorf("tool_call_id = %q", ev.ToolCallID)
-	}
-	if !hasTag(ev.Tags, model.TagToolError) {
-		t.Errorf("tags = %v, want tool_error", ev.Tags)
-	}
-	if err := ev.Validate(); err != nil {
-		t.Errorf("Validate: %v", err)
+// https://antigravity.google/docs/hooks#posttooluse
+func TestMapAntigravityPostToolUsesSuppliedIdentity(t *testing.T) {
+	for _, tc := range []struct{ name, server, tool string }{
+		{}, {name: "run_command"}, {name: "mcp__notes__save", server: "notes", tool: "save"},
+	} {
+		name := tc.name
+		for _, failure := range []string{"", "exit status 1"} {
+			t.Run(name+"/"+failure, func(t *testing.T) {
+				payload := antigravityPayload(name, map[string]any{"body": "input is not output"})
+				payload["error"] = failure
+				ev := Map(LifecycleAntigravityPostTool, AgentAntigravity, model.AgentAntigravity, "event-2", payload)
+				if ev.EventType != model.EventToolResult || ev.ToolName != name || ev.ToolCallID != "step:7" || ev.ContentPreview != "" {
+					t.Fatalf("event = %+v", ev)
+				}
+				if ev.MCPServer != tc.server || ev.MCPTool != tc.tool || hasTag(ev.Tags, model.TagToolError) != (failure != "") {
+					t.Fatalf("result identity/status = %+v", ev)
+				}
+				if err := ev.Validate(); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

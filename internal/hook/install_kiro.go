@@ -40,12 +40,15 @@ type kiroHookEvent struct {
 	timeout   int
 }
 
+// kiroHookEvents is append-only: ownership detection treats a prefix as a file
+// written by an earlier release.
 var kiroHookEvents = []kiroHookEvent{
 	{trigger: "SessionStart", lifecycle: "session-start", timeout: fastHookTimeoutSeconds},
 	{trigger: "UserPromptSubmit", lifecycle: "prompt-submit", timeout: promptHookTimeoutSeconds},
 	{trigger: "PreToolUse", lifecycle: "pre-tool", timeout: fastHookTimeoutSeconds},
 	{trigger: "PostToolUse", lifecycle: "post-tool", timeout: fastHookTimeoutSeconds},
 	{trigger: "Stop", lifecycle: "stop", timeout: stopHookTimeoutSeconds},
+	{trigger: "SessionEnd", lifecycle: "session-end", timeout: fastHookTimeoutSeconds},
 }
 
 // KiroHooksPath returns Kiro's versioned global hook file. At the default
@@ -128,11 +131,14 @@ func readKiroHookFileIfExists(path string) (kiroHookFileDocument, bool, error) {
 
 func isNumbatKiroHookFile(path string) bool {
 	doc, err := readKiroHookFile(path)
-	return err == nil && isNumbatKiroHookDocument(doc)
+	return err == nil && isNumbatKiroHookDocument(doc) && len(doc.Hooks) == len(kiroHookEvents)
 }
 
+// isNumbatKiroHookDocument reports whether doc holds numbat hooks for a prefix
+// of kiroHookEvents. A file written before a trigger was appended still
+// qualifies, so install can upgrade it and uninstall can remove it.
 func isNumbatKiroHookDocument(doc kiroHookFileDocument) bool {
-	if doc.Version != "v1" || len(doc.Hooks) != len(kiroHookEvents) {
+	if doc.Version != "v1" || len(doc.Hooks) == 0 {
 		return false
 	}
 	expected := make(map[string]kiroHookEvent, len(kiroHookEvents))
@@ -148,7 +154,12 @@ func isNumbatKiroHookDocument(doc kiroHookFileDocument) bool {
 		}
 		delete(expected, entry.Trigger)
 	}
-	return len(expected) == 0
+	for _, event := range kiroHookEvents[:len(doc.Hooks)] {
+		if _, missing := expected[event.trigger]; missing {
+			return false
+		}
+	}
+	return true
 }
 
 func installKiroWithArgs(path, binary string, runtimeArgs []string, enforce bool) (InstallReport, error) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactCopilotEvents is the Evidence.ArtifactType for GitHub Copilot CLI's
@@ -361,6 +362,7 @@ func classifyCopilotTool(ev *model.Event, name string, input map[string]json.Raw
 		ev.Tags = append(ev.Tags, model.TagNetwork)
 	default:
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
 		if server, tool, ok := splitMCPName(name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
 		}
