@@ -43,11 +43,13 @@ type shipCheckpoint struct {
 	Offset            int64    `json:"offset"`
 	FileID            string   `json:"file_id,omitempty"`
 	VolumeID          string   `json:"volume_id,omitempty"`
+	PrefixSHA256      string   `json:"prefix_sha256,omitempty"`
 	GuardOffset       int64    `json:"guard_offset,omitempty"`
 	GuardBytes        int      `json:"guard_bytes,omitempty"`
 	GuardSHA256       string   `json:"guard_sha256,omitempty"`
 	DestinationSHA256 string   `json:"destination_sha256"`
 	DrainedFileIDs    []string `json:"drained_file_ids,omitempty"`
+	verified          bool
 }
 
 // shipCursor retains an acknowledged offset in memory when persisting the
@@ -65,6 +67,8 @@ type shipRead struct {
 	n                int64
 	fileID           string
 	volumeID         string
+	prefixSHA256     string
+	skippedDigest    [sha256.Size]byte
 	drainedID        string
 	activeFileID     string
 	modTime          time.Time
@@ -288,6 +292,7 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		}
 		if batch.reset {
 			cursor.checkpoint.DrainedFileIDs = nil
+			cursor.checkpoint.verified = false
 			resumed, err := resumeOldestUndrainedRotated(inputPath, &cursor, stderr)
 			if err != nil {
 				return cursor, fmt.Errorf("scan rotated backlog %s: %w", inputPath, err)
@@ -304,6 +309,36 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			cursor.pending = false
 			continue
 		}
+		if batch.prefixSHA256 != "" && cursor.checkpoint.PrefixSHA256 == "" {
+			cursor.checkpoint.PrefixSHA256 = batch.prefixSHA256
+			cursor.pending = true
+		}
+		if cursor.checkpoint.FileID != "" && (batch.fileID != cursor.checkpoint.FileID ||
+			(cursor.checkpoint.VolumeID != "" && batch.volumeID != cursor.checkpoint.VolumeID)) {
+			cursor.checkpoint.DrainedFileIDs = nil
+			resumed, err := resumeOldestUndrainedRotated(inputPath, &cursor, stderr)
+			if err != nil {
+				return cursor, fmt.Errorf("scan rotated backlog %s: %w", inputPath, err)
+			}
+			if resumed {
+				cursor.pending = true
+				if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+					return cursor, fmt.Errorf("persist state %s: %w", statePath, err)
+				}
+				cursor.pending = false
+				continue
+			}
+			cursor.checkpoint.FileID = batch.fileID
+			cursor.checkpoint.VolumeID = batch.volumeID
+			cursor.pending = true
+		}
+		cursor.checkpoint.verified = true
+		if cursor.pending {
+			if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
+				return cursor, fmt.Errorf("persist state %s: %w", statePath, err)
+			}
+			cursor.pending = false
+		}
 		if cursor.checkpoint.Offset == 0 && cursor.checkpoint.GuardBytes == 0 && len(batch.blob) > 0 && !batch.rotated {
 			cursor.checkpoint = newPendingShipCheckpoint(cursor.checkpoint.DestinationSHA256, batch.fileID, batch.blob)
 			cursor.checkpoint.VolumeID = batch.volumeID
@@ -315,6 +350,10 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		}
 		if len(batch.blob) == 0 {
 			if batch.n > 0 {
+				prefixSHA256, err := nextShipPrefixHash(cursor.checkpoint.PrefixSHA256, batch.n, batch.skippedDigest)
+				if err != nil {
+					return cursor, err
+				}
 				// readShipBatch reports n>0 with an empty blob only when it
 				// skipped an oversized record; the offset must still advance
 				// past those bytes or the same record blocks the next read.
@@ -329,6 +368,8 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 					batch.guard,
 				)
 				cursor.checkpoint.VolumeID = batch.volumeID
+				cursor.checkpoint.PrefixSHA256 = prefixSHA256
+				cursor.checkpoint.verified = true
 				cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
 				cursor.pending = true
 				if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
@@ -369,6 +410,10 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		if err := shipBatch(factory, batch.blob); err != nil {
 			return cursor, err
 		}
+		prefixSHA256, err := appendShipPrefixHash(cursor.checkpoint.PrefixSHA256, batch.blob)
+		if err != nil {
+			return cursor, err
+		}
 		drained := cursor.checkpoint.DrainedFileIDs
 		cursor.checkpoint = newShipCheckpoint(
 			cursor.checkpoint.DestinationSHA256,
@@ -377,6 +422,8 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			batch.blob,
 		)
 		cursor.checkpoint.VolumeID = batch.volumeID
+		cursor.checkpoint.PrefixSHA256 = prefixSHA256
+		cursor.checkpoint.verified = true
 		cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
 		cursor.pending = true
 		if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
@@ -405,6 +452,13 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 	if err != nil {
 		return shipRead{}, err
 	}
+	var prefixSHA256 string
+	if checkpoint.Offset > 0 && checkpoint.PrefixSHA256 == "" {
+		prefixSHA256, err = hashShipPrefix(source.file, checkpoint.Offset)
+		if err != nil {
+			return shipRead{}, err
+		}
+	}
 	if _, err := source.file.Seek(checkpoint.Offset, io.SeekStart); err != nil {
 		return shipRead{}, err
 	}
@@ -414,6 +468,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 	var consumed int64
 	var skipped bool
 	var skippedGuard []byte
+	var skippedDigest [sha256.Size]byte
 	for buf.Len() == 0 || int64(buf.Len()) < maxBytes {
 		line, readErr := readShipLine(br, maxShipRecordBytes)
 		if errors.Is(readErr, errShipRecordTooLarge) {
@@ -425,6 +480,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 			}
 			consumed += line.consumed
 			skipped = true
+			skippedDigest = line.digest
 			skippedGuard = line.tail
 			break
 		}
@@ -450,7 +506,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		}
 	}
 	var volumeID string
-	if consumed > 0 || buf.Len() > 0 {
+	if consumed > 0 || buf.Len() > 0 || source.fileID != checkpoint.FileID || checkpoint.VolumeID != "" {
 		volumeID, err = shipVolumeIdentity(source.file)
 		if err != nil {
 			return shipRead{}, err
@@ -461,6 +517,8 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		n:                consumed,
 		fileID:           source.fileID,
 		volumeID:         volumeID,
+		prefixSHA256:     prefixSHA256,
+		skippedDigest:    skippedDigest,
 		drainedID:        drainedID,
 		activeFileID:     source.activeFileID,
 		modTime:          info.ModTime(),
@@ -703,6 +761,14 @@ func validShipCheckpoint(cp shipCheckpoint, destination string) bool {
 			return false
 		}
 		if _, err := hex.DecodeString(cp.VolumeID); err != nil {
+			return false
+		}
+	}
+	if cp.PrefixSHA256 != "" {
+		if cp.Offset == 0 || len(cp.PrefixSHA256) != 2*sha256.Size {
+			return false
+		}
+		if _, err := hex.DecodeString(cp.PrefixSHA256); err != nil {
 			return false
 		}
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -179,21 +180,112 @@ func shipCheckpointMatches(f *os.File, fileID string, checkpoint shipCheckpoint)
 	if checkpoint.FileID == "" && checkpoint.Offset == 0 {
 		return true, nil
 	}
+	sameFile := checkpoint.FileID != "" && checkpoint.FileID == fileID
+	if !sameFile && (checkpoint.GuardBytes == 0 || checkpoint.PrefixSHA256 == "" || !shipFileIdentityMatches(checkpoint.FileID, fileID)) {
+		return false, nil
+	}
+	volumeMatches := true
 	if checkpoint.VolumeID != "" {
 		volumeID, err := shipVolumeIdentity(f)
 		if err != nil {
 			return false, err
 		}
-		if volumeID != checkpoint.VolumeID {
+		volumeMatches = volumeID == checkpoint.VolumeID
+	}
+	if checkpoint.PrefixSHA256 == "" {
+		if !volumeMatches {
 			return false, nil
 		}
-	}
-	if checkpoint.FileID != "" && fileID != "" && checkpoint.FileID != fileID {
-		if checkpoint.GuardBytes == 0 || checkpoint.VolumeID == "" || !shipFileIdentityMatches(checkpoint.FileID, fileID) {
-			return false, nil
+	} else if !sameFile || !volumeMatches || !checkpoint.verified {
+		matches, err := shipPrefixMatches(f, checkpoint.Offset, checkpoint.PrefixSHA256)
+		if err != nil || !matches {
+			return matches, err
 		}
 	}
 	return shipCheckpointContentMatches(f, checkpoint)
+}
+
+var shipPrefixSeed = sha256.Sum256([]byte("numbat ship prefix v1"))
+
+func nextShipPrefixHash(previous string, size int64, digest [sha256.Size]byte) (string, error) {
+	var block [2*sha256.Size + 8]byte
+	if previous == "" {
+		copy(block[:sha256.Size], shipPrefixSeed[:])
+	} else {
+		decoded, err := hex.DecodeString(previous)
+		if err != nil || len(decoded) != sha256.Size {
+			return "", fmt.Errorf("invalid ship prefix hash")
+		}
+		copy(block[:sha256.Size], decoded)
+	}
+	binary.BigEndian.PutUint64(block[sha256.Size:], uint64(size))
+	copy(block[sha256.Size+8:], digest[:])
+	sum := sha256.Sum256(block[:])
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func appendShipPrefixHash(previous string, records []byte) (string, error) {
+	for len(records) > 0 {
+		end := bytes.IndexByte(records, '\n')
+		if end < 0 {
+			return "", fmt.Errorf("ship prefix record is incomplete")
+		}
+		line := records[:end+1]
+		var err error
+		previous, err = nextShipPrefixHash(previous, int64(len(line)), sha256.Sum256(line))
+		if err != nil {
+			return "", err
+		}
+		records = records[end+1:]
+	}
+	return previous, nil
+}
+
+func hashShipPrefix(f *os.File, offset int64) (string, error) {
+	if offset == 0 {
+		return "", nil
+	}
+	reader := bufio.NewReader(io.NewSectionReader(f, 0, offset))
+	var prefix string
+	var consumed int64
+	for consumed < offset {
+		h := sha256.New()
+		var lineBytes int64
+		for {
+			fragment, err := reader.ReadSlice('\n')
+			_, _ = h.Write(fragment)
+			lineBytes += int64(len(fragment))
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, bufio.ErrBufferFull) {
+				if errors.Is(err, io.EOF) {
+					return "", io.ErrUnexpectedEOF
+				}
+				return "", err
+			}
+		}
+		if lineBytes > offset-consumed {
+			return "", io.ErrUnexpectedEOF
+		}
+		var digest [sha256.Size]byte
+		copy(digest[:], h.Sum(nil))
+		var err error
+		prefix, err = nextShipPrefixHash(prefix, lineBytes, digest)
+		if err != nil {
+			return "", err
+		}
+		consumed += lineBytes
+	}
+	return prefix, nil
+}
+
+func shipPrefixMatches(f *os.File, offset int64, expected string) (bool, error) {
+	prefix, err := hashShipPrefix(f, offset)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return false, nil
+	}
+	return err == nil && prefix == expected, err
 }
 
 func shipCheckpointContentMatches(f *os.File, checkpoint shipCheckpoint) (bool, error) {
@@ -225,6 +317,7 @@ func shipCheckpointContentMatches(f *os.File, checkpoint shipCheckpoint) (bool, 
 type shipLineRead struct {
 	bytes    []byte
 	tail     []byte
+	digest   [sha256.Size]byte
 	consumed int64
 	complete bool
 }
@@ -235,6 +328,9 @@ func readShipLine(br *bufio.Reader, maxBytes int) (shipLineRead, error) {
 		fragment, err := br.ReadSlice('\n')
 		out.consumed += int64(len(fragment))
 		if len(out.bytes)+len(fragment) > maxBytes {
+			h := sha256.New()
+			_, _ = h.Write(out.bytes)
+			_, _ = h.Write(fragment)
 			// Keep counting through the newline without retaining the full record.
 			out.tail = appendShipTail(out.tail, out.bytes)
 			out.tail = appendShipTail(out.tail, fragment)
@@ -242,8 +338,10 @@ func readShipLine(br *bufio.Reader, maxBytes int) (shipLineRead, error) {
 			for errors.Is(err, bufio.ErrBufferFull) {
 				fragment, err = br.ReadSlice('\n')
 				out.consumed += int64(len(fragment))
+				_, _ = h.Write(fragment)
 				out.tail = appendShipTail(out.tail, fragment)
 			}
+			copy(out.digest[:], h.Sum(nil))
 			out.complete = err == nil
 			return out, fmt.Errorf("NDJSON record exceeds %d-byte limit: %w", maxBytes, errShipRecordTooLarge)
 		}
