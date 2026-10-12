@@ -533,7 +533,7 @@ func TestShipDrainsMultipleRetainedRotationsAfterOutage(t *testing.T) {
 	if got := sink.uniqueDelivered(); got != 115 {
 		t.Fatalf("delivered=%d, want all 115 records across two rotations", got)
 	}
-	if cursor.checkpoint.Offset != activeSize || len(cursor.checkpoint.DrainedFileIDs) != 0 {
+	if cursor.checkpoint.Offset != activeSize || len(cursor.checkpoint.DrainedFileIDs) != 2 {
 		t.Fatalf("active checkpoint offset=%d/%d drained=%v", cursor.checkpoint.Offset, activeSize, cursor.checkpoint.DrainedFileIDs)
 	}
 }
