@@ -29,7 +29,7 @@ const internalPrefix = modulePath + "/internal/"
 // Plane membership. Names are the package's path under internal/ (e.g. "model"
 // or a nested package such as "rule/foo").
 var (
-	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile"}
+	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "spool", "winfile"}
 	forensicsPkgs  = []string{"extract", "discover", "casebundle"}
 	monitoringPkgs = []string{"hook", "otel", "state"}
 )
@@ -41,7 +41,7 @@ var (
 var nonPlane = map[string]bool{"version": true, "archguard": true}
 
 // bboltAllowed lists the only internal packages permitted to import bbolt.
-var bboltAllowed = map[string]bool{"state": true, "sequence": true}
+var bboltAllowed = map[string]bool{"state": true, "sequence": true, "spool": true}
 
 // ---------------------------------------------------------------------------
 // A2a — package-level guard (go list)
@@ -117,9 +117,9 @@ func TestPackageImportSeam(t *testing.T) {
 			if monitoring[pkg] && inPlane(forensics, imp) {
 				t.Errorf("monitoring package %q imports %q (monitoring must stay independent of the forensics plane)", pkg, imp)
 			}
-			// bbolt allowlist: only {state, sequence} may touch it.
+			// bbolt allowlist: only state, sequence, and spool may touch it.
 			if imp == bboltPath && !bboltAllowed[pkg] {
-				t.Errorf("package %q imports %s but is not on the bbolt allowlist {state, sequence}", pkg, bboltPath)
+				t.Errorf("package %q imports %s but is not on the bbolt allowlist {state, sequence, spool}", pkg, bboltPath)
 			}
 		}
 	}
