@@ -524,7 +524,7 @@ func TestShipDrainsMultipleRetainedRotationsAfterOutage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restart state: %v", err)
 	}
-	for i := 2; i < 4; i++ {
+	for i := 2; i < 5; i++ {
 		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
 		if err != nil {
 			t.Fatalf("recovery pass %d after restart: %v", i+1, err)
