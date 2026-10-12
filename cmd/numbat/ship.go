@@ -287,6 +287,7 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			return cursor, fmt.Errorf("read input %s: %w", inputPath, err)
 		}
 		if batch.reset {
+			cursor.checkpoint.DrainedFileIDs = nil
 			resumed, err := resumeOldestUndrainedRotated(inputPath, &cursor, stderr)
 			if err != nil {
 				return cursor, fmt.Errorf("scan rotated backlog %s: %w", inputPath, err)
