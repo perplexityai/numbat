@@ -42,6 +42,7 @@ type shipCheckpoint struct {
 	Version           int      `json:"version"`
 	Offset            int64    `json:"offset"`
 	FileID            string   `json:"file_id,omitempty"`
+	VolumeID          string   `json:"volume_id,omitempty"`
 	GuardOffset       int64    `json:"guard_offset,omitempty"`
 	GuardBytes        int      `json:"guard_bytes,omitempty"`
 	GuardSHA256       string   `json:"guard_sha256,omitempty"`
@@ -63,6 +64,7 @@ type shipRead struct {
 	blob             []byte
 	n                int64
 	fileID           string
+	volumeID         string
 	drainedID        string
 	activeFileID     string
 	modTime          time.Time
@@ -303,6 +305,7 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		}
 		if cursor.checkpoint.Offset == 0 && cursor.checkpoint.GuardBytes == 0 && len(batch.blob) > 0 && !batch.rotated {
 			cursor.checkpoint = newPendingShipCheckpoint(cursor.checkpoint.DestinationSHA256, batch.fileID, batch.blob)
+			cursor.checkpoint.VolumeID = batch.volumeID
 			cursor.pending = true
 			if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
 				return cursor, fmt.Errorf("persist state %s: %w", statePath, err)
@@ -324,6 +327,7 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 					cursor.checkpoint.Offset+batch.n,
 					batch.guard,
 				)
+				cursor.checkpoint.VolumeID = batch.volumeID
 				cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
 				cursor.pending = true
 				if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
@@ -371,6 +375,7 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			cursor.checkpoint.Offset+batch.n,
 			batch.blob,
 		)
+		cursor.checkpoint.VolumeID = batch.volumeID
 		cursor.checkpoint.DrainedFileIDs = append([]string(nil), drained...)
 		cursor.pending = true
 		if err := writeShipCheckpoint(statePath, cursor.checkpoint); err != nil {
@@ -443,10 +448,18 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 			return shipRead{}, err
 		}
 	}
+	var volumeID string
+	if consumed > 0 || buf.Len() > 0 {
+		volumeID, err = shipVolumeIdentity(source.file)
+		if err != nil {
+			return shipRead{}, err
+		}
+	}
 	return shipRead{
 		blob:             buf.Bytes(),
 		n:                consumed,
 		fileID:           source.fileID,
+		volumeID:         volumeID,
 		drainedID:        drainedID,
 		activeFileID:     source.activeFileID,
 		modTime:          info.ModTime(),
@@ -683,6 +696,14 @@ func readShipCursor(path, destination string) (shipCursor, error) {
 func validShipCheckpoint(cp shipCheckpoint, destination string) bool {
 	if cp.Version != shipStateVersion || cp.Offset < 0 || cp.DestinationSHA256 != destination {
 		return false
+	}
+	if cp.VolumeID != "" {
+		if len(cp.VolumeID) != 32 {
+			return false
+		}
+		if _, err := hex.DecodeString(cp.VolumeID); err != nil {
+			return false
+		}
 	}
 	if len(cp.DrainedFileIDs) > 1024 {
 		return false

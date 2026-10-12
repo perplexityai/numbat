@@ -179,8 +179,17 @@ func shipCheckpointMatches(f *os.File, fileID string, checkpoint shipCheckpoint)
 	if checkpoint.FileID == "" && checkpoint.Offset == 0 {
 		return true, nil
 	}
+	if checkpoint.VolumeID != "" {
+		volumeID, err := shipVolumeIdentity(f)
+		if err != nil {
+			return false, err
+		}
+		if volumeID != checkpoint.VolumeID {
+			return false, nil
+		}
+	}
 	if checkpoint.FileID != "" && fileID != "" && checkpoint.FileID != fileID {
-		if checkpoint.GuardBytes == 0 || !shipFileIdentityMatches(checkpoint.FileID, fileID) {
+		if checkpoint.GuardBytes == 0 || checkpoint.VolumeID == "" || !shipFileIdentityMatches(checkpoint.FileID, fileID) {
 			return false, nil
 		}
 	}
