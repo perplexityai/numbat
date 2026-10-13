@@ -509,7 +509,7 @@ NUMBAT_HTTP_TOKEN=... numbat ship \
 
 Spool input does not use `--state-file`. The queue stores its own delivery
 state. The spool sink rejects partial records, multiple records in one write,
-non-object JSON, and records larger than 8 MiB. The queue keeps undelivered
+non-object JSON, and records larger than 32 MiB. The queue keeps undelivered
 records. numbat does not delete them to free storage.
 
 For legacy input, the default state file is `<input-file>.ship-state`. Override

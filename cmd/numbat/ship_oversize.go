@@ -171,7 +171,8 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 		if err := json.Unmarshal(fields["evidence_refs"], &refs); err != nil || len(refs) == 0 {
 			return nil, errors.New("oversized finding has no evidence_refs")
 		}
-		first, err := uniqueJSONObject(refs[0])
+		var first map[string]json.RawMessage
+		first, err = uniqueJSONObject(refs[0])
 		if err != nil {
 			return nil, fmt.Errorf("oversized finding evidence_refs[0]: %w", err)
 		}

@@ -137,12 +137,7 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 		return summary, err
 	}
 	for _, dir := range []string{filepath.Join(outputDir, "retained"), outputDir, filepath.Dir(outputDir)} {
-		f, err := os.Open(dir)
-		if err != nil {
-			return summary, err
-		}
-		err = errors.Join(f.Sync(), f.Close())
-		if err != nil {
+		if err := syncExportDirectory(dir); err != nil {
 			return summary, err
 		}
 	}

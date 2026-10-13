@@ -30,3 +30,5 @@ func installDatabaseFile(candidate, path string) error {
 	}
 	return nil
 }
+
+func syncExportDirectory(string) error { return nil }

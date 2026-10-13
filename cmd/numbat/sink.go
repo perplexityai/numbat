@@ -324,8 +324,8 @@ func (stdoutSink) Close() error { return nil }
 type spoolSink struct{ store spool.Store }
 
 func (sink spoolSink) Write(p []byte) (int, error) {
-	if len(p) == 0 || len(p) > maxShipRecordBytes || p[len(p)-1] != '\n' || bytes.Count(p, []byte("\n")) != 1 {
-		return 0, fmt.Errorf("spool sink: record must be one complete NDJSON line of at most %d bytes", maxShipRecordBytes)
+	if len(p) == 0 || len(p) > maxShipOriginalBytes || p[len(p)-1] != '\n' || bytes.Count(p, []byte("\n")) != 1 {
+		return 0, fmt.Errorf("spool sink: record must be one complete NDJSON line of at most %d bytes", maxShipOriginalBytes)
 	}
 	if !isShippableRecord(p[:len(p)-1]) {
 		return 0, fmt.Errorf("spool sink: record must be a JSON object")
