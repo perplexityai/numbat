@@ -21,7 +21,7 @@ func TestShipOversizedRecordDoesNotWedgeDrain(t *testing.T) {
 	rec := func(id string) string {
 		return fmt.Sprintf(`{"record_type":"event","event_id":%q}`, id) + "\n"
 	}
-	oversized := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","pad":%q}`,
+	oversized := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","command":%q}`,
 		strings.Repeat("x", maxShipRecordBytes+1024)) + "\n"
 	appendRaw(t, inputPath, []byte(rec("before-1")+rec("before-2")+oversized+rec("after-1")+rec("after-2")))
 	info, err := os.Stat(inputPath)
@@ -39,15 +39,15 @@ func TestShipOversizedRecordDoesNotWedgeDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	if got := sink.uniqueDelivered(); got != 4 {
-		t.Fatalf("oversized record wedged drain: want 4 non-oversized records delivered, got %d (offset=%d, err=%v)", got, cursor.checkpoint.Offset, err)
+	if got := sink.uniqueDelivered(); got != 5 {
+		t.Fatalf("oversized record wedged drain: want 5 records delivered, got %d (offset=%d, err=%v)", got, cursor.checkpoint.Offset, err)
 	}
 	if cursor.checkpoint.Offset != fullSize {
 		t.Fatalf("offset did not advance past oversized record: got %d, want %d", cursor.checkpoint.Offset, fullSize)
 	}
 }
 
-func TestShipRecoverySkipsOversizedFirstRecord(t *testing.T) {
+func TestShipRecoveryBlocksMalformedOversizedFirstRecord(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "records.ndjson")
@@ -63,16 +63,12 @@ func TestShipRecoverySkipsOversizedFirstRecord(t *testing.T) {
 	sink := newFlakySink()
 	sink.healthy.Store(true)
 	defer sink.srv.Close()
-	cursor := newTestShipCursor()
-	var err error
-	for i := 0; i < 6; i++ {
-		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
-		if err != nil {
-			t.Fatalf("drain pass %d: %v", i+1, err)
-		}
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "not a single JSON object") {
+		t.Fatalf("malformed oversized source did not block: %v", err)
 	}
-	if got := sink.uniqueDelivered(); got != 2 {
-		t.Fatalf("delivered=%d, want retained and active records", got)
+	if cursor.checkpoint.Offset != 0 || sink.uniqueDelivered() != 0 {
+		t.Fatalf("malformed oversized source was consumed: offset=%d delivered=%d", cursor.checkpoint.Offset, sink.uniqueDelivered())
 	}
 }
 
@@ -82,7 +78,7 @@ func TestShipOversizedRecordPersistsTailGuard(t *testing.T) {
 	inputPath := filepath.Join(dir, "records.ndjson")
 	statePath := filepath.Join(dir, "records.ship-state")
 
-	record := strings.Repeat("x", maxShipRecordBytes+1024) + "\n"
+	record := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","command":%q}`, strings.Repeat("x", maxShipRecordBytes+1024)) + "\n"
 	appendRaw(t, inputPath, []byte(record))
 
 	sink := newFlakySink()
@@ -314,7 +310,7 @@ func TestShipReanchorEmitsReDeliverySignal(t *testing.T) {
 	}
 }
 
-func TestShipOversizedSkipNoticeRoutedToWriter(t *testing.T) {
+func TestShipBoundedNoticeRoutedToWriter(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "records.ndjson")
@@ -323,7 +319,7 @@ func TestShipOversizedSkipNoticeRoutedToWriter(t *testing.T) {
 	rec := func(id string) string {
 		return fmt.Sprintf(`{"record_type":"event","event_id":%q}`, id) + "\n"
 	}
-	oversized := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","pad":%q}`,
+	oversized := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","command":%q}`,
 		strings.Repeat("x", maxShipRecordBytes+1024)) + "\n"
 	appendRaw(t, inputPath, []byte(rec("before")+oversized+rec("after")))
 
@@ -337,8 +333,8 @@ func TestShipOversizedSkipNoticeRoutedToWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	if !strings.Contains(logs.String(), "skipped from HTTP delivery and retained in the input file") {
-		t.Fatalf("oversized-skip notice was not routed to the injected writer: got %q", logs.String())
+	if !strings.Contains(logs.String(), "accepted bounded representation") {
+		t.Fatalf("bounded-delivery notice was not routed to the injected writer: got %q", logs.String())
 	}
 }
 

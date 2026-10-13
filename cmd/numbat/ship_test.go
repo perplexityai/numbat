@@ -237,7 +237,7 @@ func TestShipSplitsRejectedBatchAtRecordBoundaries(t *testing.T) {
 	}
 }
 
-func TestShipSkipsSingleRejectedRecord(t *testing.T) {
+func TestShipRetainsUnrepresentableRejectedRecord(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "records.ndjson")
 	statePath := inputPath + ".ship-state"
@@ -271,26 +271,17 @@ func TestShipSkipsSingleRejectedRecord(t *testing.T) {
 
 	var logs bytes.Buffer
 	cursor, err := drainAvailable(context.Background(), inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(srv.URL), &logs)
-	if err != nil || cursor.checkpoint.Offset != int64(len(input)) {
-		t.Fatalf("drain: offset=%d want=%d err=%v", cursor.checkpoint.Offset, len(input), err)
+	if err == nil || !strings.Contains(err.Error(), "record_type") || cursor.checkpoint.Offset != int64(len(prefix)) {
+		t.Fatalf("unrepresentable record advanced checkpoint: offset=%d want=%d err=%v", cursor.checkpoint.Offset, len(prefix), err)
 	}
 	restored, err := readShipCursor(statePath, testShipDestination)
-	if err != nil || restored.checkpoint.Offset != int64(len(input)) {
-		t.Fatalf("persisted offset=%d want=%d err=%v", restored.checkpoint.Offset, len(input), err)
-	}
-	for _, detail := range []string{inputPath, "HTTP 413", fmt.Sprintf("%d-byte", len(rejected)), fmt.Sprintf("offset %d", len(prefix)), "skipped"} {
-		if !strings.Contains(logs.String(), detail) {
-			t.Fatalf("skip diagnostic lacks %q: %s", detail, &logs)
-		}
-	}
-	attempted := attempts.Load()
-	if _, err := drainAvailable(context.Background(), inputPath, statePath, restored, maxShipBatchBytes, newSinkFactory(srv.URL), &logs); err != nil || attempts.Load() != attempted {
-		t.Fatalf("restart retried checkpointed records: requests=%d want=%d err=%v", attempts.Load(), attempted, err)
+	if err != nil || restored.checkpoint.Offset != int64(len(prefix)) {
+		t.Fatalf("persisted offset=%d want=%d err=%v", restored.checkpoint.Offset, len(prefix), err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if want := bytes.Join([][]byte{prefix, suffix}, nil); !bytes.Equal(accepted.Bytes(), want) {
-		t.Fatalf("accepted=%q, want prefix and suffix %q", accepted.Bytes(), want)
+	if !bytes.Equal(accepted.Bytes(), prefix) || attempts.Load() == 0 {
+		t.Fatalf("accepted=%q, want prefix only; attempts=%d", accepted.Bytes(), attempts.Load())
 	}
 }
 

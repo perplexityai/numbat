@@ -64,20 +64,20 @@ type shipCursor struct {
 }
 
 type shipRead struct {
-	blob             []byte
-	n                int64
-	fileID           string
-	volumeID         string
-	prefixSHA256     string
-	skippedDigest    [sha256.Size]byte
-	drainedID        string
-	activeFileID     string
-	modTime          time.Time
-	rotated          bool
-	reset            bool
-	skippedOversized bool
-	skippedMalformed bool
-	guard            []byte
+	blob                   []byte
+	n                      int64
+	fileID                 string
+	volumeID               string
+	prefixSHA256           string
+	skippedDigest          [sha256.Size]byte
+	drainedID              string
+	activeFileID           string
+	modTime                time.Time
+	rotated                bool
+	reset                  bool
+	skippedMalformed       bool
+	requiresRepresentation bool
+	guard                  []byte
 }
 
 type shipSource struct {
@@ -112,7 +112,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Legacy file input uses a durable")
 		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
-		fmt.Fprintln(stderr, "Records larger than 8 MiB or individually rejected with HTTP 413 are logged,\nretained in the input file, and skipped from HTTP delivery.")
+		fmt.Fprintln(stderr, "Representable command records larger than 8 MiB or rejected with HTTP 413 are sent as bounded, marked records; unrepresentable records remain pending with an error.")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -221,6 +221,12 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		}
 		defer lock.Close()
 		fmt.Fprintf(stderr, "numbat ship: shipping spool %s to the configured HTTP endpoint (Ctrl-C to stop)\n", *spoolPath)
+		count, retainedBytes, err := store.RetainedStats()
+		if err != nil {
+			fmt.Fprintf(stderr, "ship: inspect retained originals: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stderr, "ship: spool retains %d accepted oversized originals (%d bytes) locally\n", count, retainedBytes)
 		return runSpoolShipLoop(ctx, store, *poll, int(*maxBatchBytes), factory, stderr)
 	}
 
@@ -245,7 +251,7 @@ func spoolOpenIsFatal(err error) bool {
 
 func runSpoolShipLoop(ctx context.Context, store spool.Store, poll time.Duration, maxBytes int, factory shipSinkFactory, stderr io.Writer) int {
 	return runShipRetryLoop(ctx, poll, stderr, func() error {
-		return drainSpoolAvailable(ctx, store, maxBytes, factory)
+		return drainSpoolAvailable(ctx, store, maxBytes, factory, stderr)
 	})
 }
 
@@ -282,9 +288,9 @@ func runShipRetryLoop(ctx context.Context, poll time.Duration, stderr io.Writer,
 	}
 }
 
-func drainSpoolAvailable(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory) error {
+func drainSpoolAvailable(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory, stderr io.Writer) error {
 	for ctx.Err() == nil {
-		sent, err := shipSpoolBatch(ctx, store, maxBytes, factory)
+		sent, err := shipSpoolBatch(ctx, store, maxBytes, factory, stderr)
 		if err != nil || !sent {
 			return err
 		}
@@ -292,7 +298,7 @@ func drainSpoolAvailable(ctx context.Context, store spool.Store, maxBytes int, f
 	return nil
 }
 
-func shipSpoolBatch(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory) (bool, error) {
+func shipSpoolBatch(ctx context.Context, store spool.Store, maxBytes int, factory shipSinkFactory, stderr io.Writer) (bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return false, err
@@ -304,13 +310,22 @@ func shipSpoolBatch(ctx context.Context, store spool.Store, maxBytes int, factor
 		if len(batch.Records) == 0 {
 			return false, nil
 		}
+		if len(batch.Records) == 1 && len(batch.Records[0]) > maxShipOriginalBytes {
+			return true, fmt.Errorf("%d-byte spool original exceeds %d-byte source bound; retained in queue", len(batch.Records[0]), maxShipOriginalBytes)
+		}
 		blob := bytes.Join(batch.Records, nil)
+		if len(batch.Records) == 1 && len(blob) > maxShipRecordBytes {
+			return true, shipBoundedSpoolRecord(ctx, store, batch, factory, stderr)
+		}
 		if err := shipBatch(factory, blob); err != nil {
 			if status, ok := output.HTTPStatusCode(err); !ok || status != http.StatusRequestEntityTooLarge {
 				return true, err
 			}
 			if len(batch.Records) == 1 {
-				return true, fmt.Errorf("HTTP 413 rejected %d-byte spool record; retained in queue: %w", len(blob), err)
+				if fallbackErr := shipBoundedSpoolRecord(ctx, store, batch, factory, stderr); fallbackErr != nil {
+					return true, fmt.Errorf("HTTP 413 rejected %d-byte spool record; original remains queued: %w", len(blob), fallbackErr)
+				}
+				return true, nil
 			}
 			// Obtain a fresh, smaller prefix with its own opaque Ack identity.
 			// Never acknowledge a rejected record just to advance the queue.
@@ -322,6 +337,29 @@ func shipSpoolBatch(ctx context.Context, store spool.Store, maxBytes int, factor
 		}
 		return true, nil
 	}
+}
+
+func shipBoundedSpoolRecord(ctx context.Context, store spool.Store, batch spool.Batch, factory shipSinkFactory, stderr io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	original := batch.Records[0]
+	bounded, err := boundedShipRecord(original)
+	if err != nil {
+		return fmt.Errorf("cannot represent %d-byte spool original: %w", len(original), err)
+	}
+	if err := store.CheckRetain(len(original)); err != nil {
+		return err
+	}
+	if err := shipBatch(factory, bounded); err != nil {
+		return fmt.Errorf("bounded spool representation rejected; original remains queued: %w", err)
+	}
+	count, retainedBytes, err := store.AckRepresented(batch)
+	if err != nil {
+		return fmt.Errorf("retain accepted spool original and acknowledge: %w", err)
+	}
+	fmt.Fprintf(stderr, "ship: accepted bounded spool representation; retained full original locally (%d records, %d bytes)\n", count, retainedBytes)
+	return nil
 }
 
 func runShipLoop(ctx context.Context, inputPath, statePath, destination string, poll time.Duration, maxBatchBytes int64, factory shipSinkFactory, stderr io.Writer) int {
@@ -460,12 +498,9 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 				if err != nil {
 					return cursor, err
 				}
-				// readShipBatch reports n>0 with an empty blob only when it
-				// skipped an oversized or malformed record; the offset must still
-				// advance past those bytes or the same record blocks the next read.
-				if batch.skippedOversized {
-					fmt.Fprintf(stderr, "ship: %s: record at offset %d exceeds %d-byte limit; skipped from HTTP delivery and retained in the input file\n", inputPath, cursor.checkpoint.Offset, maxShipRecordBytes)
-				} else if batch.skippedMalformed {
+				// Only malformed lines enter this legacy skip branch. A valid
+				// oversized record stays pending until its bounded POST succeeds.
+				if batch.skippedMalformed {
 					fmt.Fprintf(stderr, "ship: %s: record at offset %d is not a single JSON object; skipped from HTTP delivery and retained in the input file\n", inputPath, cursor.checkpoint.Offset)
 				}
 				drained := cursor.checkpoint.DrainedFileIDs
@@ -517,13 +552,10 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 		}
 		cursor.rotationEOFID = ""
 		cursor.rotationEOFOffset = 0
-		acknowledge := func(delivered []byte, skipped bool) error {
+		acknowledge := func(delivered []byte) error {
 			prefixSHA256, err := appendShipPrefixHash(cursor.checkpoint.PrefixSHA256, delivered)
 			if err != nil {
 				return err
-			}
-			if skipped {
-				fmt.Fprintf(stderr, "ship: %s: HTTP 413 rejected %d-byte record at offset %d; skipped from HTTP delivery and retained in the input file\n", inputPath, len(delivered), cursor.checkpoint.Offset)
 			}
 			drained := cursor.checkpoint.DrainedFileIDs
 			cursor.checkpoint = newShipCheckpoint(
@@ -543,7 +575,30 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			cursor.pending = false
 			return nil
 		}
-		if err := shipBatchAdaptive(ctx, factory, batch.blob, acknowledge); err != nil {
+		represent := func(original []byte) error {
+			bounded, err := boundedShipRecord(original)
+			if err != nil {
+				return fmt.Errorf("cannot represent %d-byte file original at offset %d: %w", len(original), cursor.checkpoint.Offset, err)
+			}
+			if err := shipBatch(factory, bounded); err != nil {
+				return fmt.Errorf("bounded file representation rejected at offset %d; original remains pending: %w", cursor.checkpoint.Offset, err)
+			}
+			fmt.Fprintf(stderr, "ship: accepted bounded representation of %d-byte file original at offset %d; original remains in %s\n", len(original), cursor.checkpoint.Offset, inputPath)
+			return nil
+		}
+		if batch.requiresRepresentation {
+			if err := ctx.Err(); err != nil {
+				return cursor, err
+			}
+			if err := represent(batch.blob); err != nil {
+				return cursor, err
+			}
+			if err := acknowledge(batch.blob); err != nil {
+				return cursor, err
+			}
+			continue
+		}
+		if err := shipBatchAdaptive(ctx, factory, batch.blob, acknowledge, represent); err != nil {
 			return cursor, err
 		}
 	}
@@ -582,27 +637,28 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 	br := bufio.NewReader(source.file)
 	var buf bytes.Buffer
 	var consumed int64
-	var skipped bool
 	var skippedMalformed bool
+	var requiresRepresentation bool
 	var skippedGuard []byte
 	var skippedDigest [sha256.Size]byte
 	for buf.Len() == 0 || int64(buf.Len()) < maxBytes {
-		line, readErr := readShipLine(br, maxShipRecordBytes)
+		line, readErr := readShipLine(br, maxShipOriginalBytes)
 		if errors.Is(readErr, errShipRecordTooLarge) {
-			// A batch with delivered bytes must stay contiguous for its guard
-			// fingerprint, and a record without a terminating newline may still
-			// be growing, so in both cases stop and skip on a later empty batch.
+			// Ship any preceding complete records first. An unrepresentable
+			// completed source cannot be acknowledged as if it was delivered.
 			if buf.Len() > 0 || !line.complete {
 				break
 			}
-			consumed += line.consumed
-			skipped = true
-			skippedDigest = line.digest
-			skippedGuard = line.tail
-			break
+			return shipRead{}, fmt.Errorf("complete NDJSON record at offset %d exceeds %d-byte source bound; original remains pending", checkpoint.Offset+consumed, maxShipOriginalBytes)
 		}
 		if line.complete {
 			if !isShippableRecord(line.bytes) {
+				if len(line.bytes) > maxShipRecordBytes {
+					if buf.Len() > 0 {
+						break
+					}
+					return shipRead{}, fmt.Errorf("complete oversized record at offset %d is not a single JSON object; original remains pending", checkpoint.Offset+consumed)
+				}
 				// A partial record left by a short append, glued onto the next
 				// record, is not a single JSON object; ingestion would reject the
 				// whole batch on it. Ship any good records buffered so far, then
@@ -619,8 +675,17 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 			if buf.Len() > 0 && int64(buf.Len())+line.consumed > maxBytes {
 				break
 			}
+			if len(line.bytes) > maxShipRecordBytes {
+				if buf.Len() > 0 {
+					break
+				}
+				requiresRepresentation = true
+			}
 			_, _ = buf.Write(line.bytes)
 			consumed += line.consumed
+			if requiresRepresentation {
+				break
+			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
@@ -647,19 +712,19 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		}
 	}
 	return shipRead{
-		blob:             buf.Bytes(),
-		n:                consumed,
-		fileID:           source.fileID,
-		volumeID:         volumeID,
-		prefixSHA256:     prefixSHA256,
-		skippedDigest:    skippedDigest,
-		drainedID:        drainedID,
-		activeFileID:     source.activeFileID,
-		modTime:          info.ModTime(),
-		rotated:          source.rotated,
-		skippedOversized: skipped,
-		skippedMalformed: skippedMalformed,
-		guard:            skippedGuard,
+		blob:                   buf.Bytes(),
+		n:                      consumed,
+		fileID:                 source.fileID,
+		volumeID:               volumeID,
+		prefixSHA256:           prefixSHA256,
+		skippedDigest:          skippedDigest,
+		drainedID:              drainedID,
+		activeFileID:           source.activeFileID,
+		modTime:                info.ModTime(),
+		rotated:                source.rotated,
+		skippedMalformed:       skippedMalformed,
+		requiresRepresentation: requiresRepresentation,
+		guard:                  skippedGuard,
 	}, nil
 }
 
@@ -838,13 +903,13 @@ func shipBatch(factory shipSinkFactory, blob []byte) error {
 	return nil
 }
 
-func shipBatchAdaptive(ctx context.Context, factory shipSinkFactory, blob []byte, acknowledge func([]byte, bool) error) error {
+func shipBatchAdaptive(ctx context.Context, factory shipSinkFactory, blob []byte, acknowledge func([]byte) error, represent func([]byte) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	err := shipBatch(factory, blob)
 	if err == nil {
-		return acknowledge(blob, false)
+		return acknowledge(blob)
 	}
 	status, hasStatus := output.HTTPStatusCode(err)
 	if !hasStatus || status != http.StatusRequestEntityTooLarge {
@@ -852,12 +917,15 @@ func shipBatchAdaptive(ctx context.Context, factory shipSinkFactory, blob []byte
 	}
 	left, right, ok := splitShipBatch(blob)
 	if !ok {
-		return acknowledge(blob, true)
+		if err := represent(blob); err != nil {
+			return err
+		}
+		return acknowledge(blob)
 	}
-	if err := shipBatchAdaptive(ctx, factory, left, acknowledge); err != nil {
+	if err := shipBatchAdaptive(ctx, factory, left, acknowledge, represent); err != nil {
 		return err
 	}
-	return shipBatchAdaptive(ctx, factory, right, acknowledge)
+	return shipBatchAdaptive(ctx, factory, right, acknowledge, represent)
 }
 
 func splitShipBatch(blob []byte) ([]byte, []byte, bool) {

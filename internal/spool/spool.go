@@ -18,10 +18,12 @@ import (
 )
 
 const (
-	generationBytes = 16
-	recordIDBytes   = 16
-	maxBatchRecords = 500
-	lockTimeout     = time.Second
+	generationBytes    = 16
+	recordIDBytes      = 16
+	maxBatchRecords    = 500
+	lockTimeout        = time.Second
+	maxRetainedRecords = 256
+	maxRetainedBytes   = 256 << 20
 )
 
 var (
@@ -30,12 +32,15 @@ var (
 	ErrBusy     = bolterrors.ErrTimeout
 	errNotSpool = errors.New("not a numbat spool")
 
-	metadataBucket = []byte("numbat.spool.meta")
-	recordsBucket  = []byte("numbat.spool.records")
-	markerKey      = []byte("format")
-	markerValue    = []byte("numbat-spool-v1")
-	generationKey  = []byte("generation")
-	ackedKey       = []byte("acked-through")
+	metadataBucket   = []byte("numbat.spool.meta")
+	recordsBucket    = []byte("numbat.spool.records")
+	retainedBucket   = []byte("numbat.spool.retained-originals")
+	markerKey        = []byte("format")
+	markerValue      = []byte("numbat-spool-v1")
+	generationKey    = []byte("generation")
+	ackedKey         = []byte("acked-through")
+	retainedCountKey = []byte("retained-count")
+	retainedBytesKey = []byte("retained-bytes")
 )
 
 // Store is a path-bound durable record queue. It owns no open resources
@@ -156,6 +161,97 @@ func (store Store) Ack(batch Batch) error {
 			return metadata.Put(ackedKey, key(batch.lastID))
 		})
 	})
+}
+
+// AckRepresented atomically retains the complete original of a single record
+// and acknowledges it after its bounded HTTP representation was accepted. The
+// retained bucket is intentionally separate from the FIFO queue: later normal
+// acknowledgments cannot remove accepted originals.
+func (store Store) AckRepresented(batch Batch) (count, totalBytes uint64, err error) {
+	if len(batch.Records) != 1 || batch.lastID == 0 || batch.fileInfo == nil {
+		return 0, 0, errors.New("spool: represented acknowledgment requires one record")
+	}
+	err = store.withDB(func(db *bolt.DB, info os.FileInfo) error {
+		if !os.SameFile(batch.fileInfo, info) {
+			return errors.New("acknowledgment belongs to a replaced store")
+		}
+		return db.Update(func(tx *bolt.Tx) error {
+			metadata := tx.Bucket(metadataBucket)
+			records := tx.Bucket(recordsBucket)
+			if !bytes.Equal(metadata.Get(generationKey), batch.generation[:]) {
+				return errors.New("acknowledgment belongs to a replaced store")
+			}
+			if binary.BigEndian.Uint64(metadata.Get(ackedKey)) >= batch.lastID {
+				return errors.New("represented record already acknowledged without retention")
+			}
+			value := records.Get(key(batch.lastID))
+			if len(value) < recordIDBytes || !bytes.Equal(value[:recordIDBytes], batch.boundary[:]) || !bytes.Equal(value[recordIDBytes:], batch.Records[0]) {
+				return errors.New("represented record no longer matches the store")
+			}
+			count, totalBytes = retainedTotals(metadata)
+			if count >= maxRetainedRecords || uint64(len(batch.Records[0])) > maxRetainedBytes-totalBytes {
+				return fmt.Errorf("retained original limit reached: %d records, %d bytes", count, totalBytes)
+			}
+			retained, err := tx.CreateBucketIfNotExists(retainedBucket)
+			if err != nil {
+				return err
+			}
+			if err := retained.Put(key(batch.lastID), value[recordIDBytes:]); err != nil {
+				return err
+			}
+			count++
+			totalBytes += uint64(len(batch.Records[0]))
+			if err := metadata.Put(retainedCountKey, key(count)); err != nil {
+				return err
+			}
+			if err := metadata.Put(retainedBytesKey, key(totalBytes)); err != nil {
+				return err
+			}
+			if err := records.Delete(key(batch.lastID)); err != nil {
+				return err
+			}
+			return metadata.Put(ackedKey, key(batch.lastID))
+		})
+	})
+	return count, totalBytes, err
+}
+
+// RetainedStats reports accepted originals kept locally for inspection.
+func (store Store) RetainedStats() (count, bytes uint64, err error) {
+	err = store.withDB(func(db *bolt.DB, _ os.FileInfo) error {
+		return db.View(func(tx *bolt.Tx) error {
+			count, bytes = retainedTotals(tx.Bucket(metadataBucket))
+			return nil
+		})
+	})
+	return count, bytes, err
+}
+
+// CheckRetain fails before HTTP when the next accepted representation could
+// exceed the local retention budget. AckRepresented repeats the check in its
+// transaction, so a concurrent change cannot make an unsafe acknowledgment.
+func (store Store) CheckRetain(recordBytes int) error {
+	if recordBytes <= 0 || recordBytes > maxRetainedBytes {
+		return errors.New("spool: represented original exceeds retention limit")
+	}
+	count, bytes, err := store.RetainedStats()
+	if err != nil {
+		return err
+	}
+	if count >= maxRetainedRecords || uint64(recordBytes) > maxRetainedBytes-bytes {
+		return fmt.Errorf("spool: retained original limit reached: %d records, %d bytes", count, bytes)
+	}
+	return nil
+}
+
+func retainedTotals(metadata *bolt.Bucket) (count, bytes uint64) {
+	if raw := metadata.Get(retainedCountKey); len(raw) == 8 {
+		count = binary.BigEndian.Uint64(raw)
+	}
+	if raw := metadata.Get(retainedBytesKey); len(raw) == 8 {
+		bytes = binary.BigEndian.Uint64(raw)
+	}
+	return count, bytes
 }
 
 func (store Store) withDB(fn func(*bolt.DB, os.FileInfo) error) (err error) {
@@ -333,8 +429,17 @@ func validateStore(tx *bolt.Tx) error {
 	if binary.BigEndian.Uint64(metadata.Get(ackedKey)) > records.Sequence() {
 		return fmt.Errorf("%w: invalid acknowledged sequence", errNotSpool)
 	}
+	if (len(metadata.Get(retainedCountKey)) != 0 && len(metadata.Get(retainedCountKey)) != 8) ||
+		(len(metadata.Get(retainedBytesKey)) != 0 && len(metadata.Get(retainedBytesKey)) != 8) {
+		return fmt.Errorf("%w: invalid retained accounting", errNotSpool)
+	}
+	retainedCount, retainedBytes := retainedTotals(metadata)
+	if retainedCount > maxRetainedRecords || retainedBytes > maxRetainedBytes ||
+		(retainedCount > 0 && tx.Bucket(retainedBucket) == nil) {
+		return fmt.Errorf("%w: invalid retained originals", errNotSpool)
+	}
 	return tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
-		if bytes.Equal(name, metadataBucket) || bytes.Equal(name, recordsBucket) {
+		if bytes.Equal(name, metadataBucket) || bytes.Equal(name, recordsBucket) || bytes.Equal(name, retainedBucket) {
 			return nil
 		}
 		return fmt.Errorf("%w: unexpected bucket %q", errNotSpool, name)
