@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/perplexityai/numbat/internal/output"
 )
 
 const (
@@ -17,14 +21,46 @@ const (
 	// a native command beyond the former 8 MiB ship reader limit.
 	maxShipOriginalBytes      = 32 << 20
 	maxBoundedShipRecordBytes = 512 << 10
-	boundedCommandPrefixBytes = 32 << 10
 )
+
+var errBoundedRecordTooLarge = errors.New("bounded representation still exceeds local transport limit")
+
+// shipBoundedHTTP reacts only to an actual 413 or the local representation
+// bound. It makes at most five attempts and never acknowledges the source.
+func shipBoundedHTTP(ctx context.Context, factory shipSinkFactory, original []byte) error {
+	var lastErr error
+	for _, prefixBytes := range []int{1024, 256, 64, 16, 1} {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		bounded, err := boundedShipRecord(original, prefixBytes)
+		if errors.Is(err, errBoundedRecordTooLarge) {
+			lastErr = err
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := shipBatch(factory, bounded); err != nil {
+			lastErr = err
+			if status, ok := output.HTTPStatusCode(err); ok && status == http.StatusRequestEntityTooLarge {
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("bounded representation remained unaccepted; original remains pending: %w", lastErr)
+}
 
 // boundedShipRecord constructs a deliberately incomplete, detectable transport
 // representation. It never changes the original line used for checkpointing or
-// spool retention. Only the two command fields with observed source reachability
-// may be shortened; an identity or finding envelope is never shortened.
-func boundedShipRecord(original []byte) ([]byte, error) {
+// spool retention. It shortens only observed command or message content fields;
+// an identity or finding envelope is never shortened.
+func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
+	if prefixBytes < 1 {
+		return nil, errors.New("invalid bounded preview length")
+	}
 	if len(original) > maxShipOriginalBytes || len(original) == 0 || original[len(original)-1] != '\n' ||
 		!utf8.Valid(original) || !isShippableRecord(original) {
 		return nil, errors.New("oversized source is not a bounded complete UTF-8 JSON object")
@@ -38,9 +74,24 @@ func boundedShipRecord(original []byte) ([]byte, error) {
 		return nil, errors.New("oversized source has no record_type")
 	}
 	var field, idField string
+	var contentField bool
 	switch recordType {
 	case "event":
-		field, idField = "command", "event_id"
+		idField = "event_id"
+		if _, hasCommand := fields["command"]; hasCommand {
+			field = "command"
+		} else if _, hasContent := fields["content"]; hasContent {
+			eventType, err := requiredShipString(fields, "event_type")
+			if err != nil {
+				return nil, err
+			}
+			if eventType != "prompt.user" && eventType != "message.assistant" && eventType != "message.reasoning" {
+				return nil, fmt.Errorf("oversized event type %q has no supported content fallback", eventType)
+			}
+			field, contentField = "content", true
+		} else {
+			return nil, errors.New("oversized event has no supported variable field")
+		}
 	case "finding":
 		field, idField = "observed_command", "finding_id"
 		for _, required := range []string{"severity", "confidence"} {
@@ -54,16 +105,29 @@ func boundedShipRecord(original []byte) ([]byte, error) {
 	if _, err := requiredShipString(fields, idField); err != nil {
 		return nil, err
 	}
-	commandRaw, ok := fields[field]
+	fieldRaw, ok := fields[field]
 	if !ok {
 		return nil, fmt.Errorf("oversized source lacks %s", field)
 	}
-	var command string
-	if err := json.Unmarshal(commandRaw, &command); err != nil || command == "" {
+	var observed string
+	if err := json.Unmarshal(fieldRaw, &observed); err != nil || observed == "" {
 		return nil, fmt.Errorf("oversized source has invalid %s", field)
 	}
-	if len(command) <= boundedCommandPrefixBytes {
+	firstRune, _ := utf8.DecodeRuneInString(observed)
+	if len(observed) <= utf8.RuneLen(firstRune) {
 		return nil, fmt.Errorf("oversized %s has no shorten-able %s", recordType, field)
+	}
+	if contentField {
+		var contentBytes int
+		if err := json.Unmarshal(fields["content_bytes"], &contentBytes); err != nil || contentBytes <= 0 {
+			return nil, errors.New("oversized content lacks valid content_bytes")
+		}
+		if raw, ok := fields["content_truncated"]; ok {
+			var previous bool
+			if err := json.Unmarshal(raw, &previous); err != nil {
+				return nil, errors.New("oversized content has invalid content_truncated")
+			}
+		}
 	}
 	evidence := make(map[string]json.RawMessage)
 	if raw, ok := fields["evidence"]; ok {
@@ -76,7 +140,7 @@ func boundedShipRecord(original []byte) ([]byte, error) {
 		return nil, errors.New("oversized source already has evidence.transport")
 	}
 	digest := sha256.Sum256(original)
-	fieldDigest := sha256.Sum256([]byte(command))
+	fieldDigest := sha256.Sum256([]byte(observed))
 	marker, err := json.Marshal(struct {
 		Version              int    `json:"version"`
 		TruncatedField       string `json:"truncated_field"`
@@ -84,7 +148,7 @@ func boundedShipRecord(original []byte) ([]byte, error) {
 		OriginalRecordSHA256 string `json:"original_record_sha256"`
 		OriginalFieldBytes   int    `json:"original_field_bytes"`
 		OriginalFieldSHA256  string `json:"original_field_sha256"`
-	}{1, field, len(original), hex.EncodeToString(digest[:]), len(command), hex.EncodeToString(fieldDigest[:])})
+	}{1, field, len(original), hex.EncodeToString(digest[:]), len(observed), hex.EncodeToString(fieldDigest[:])})
 	if err != nil {
 		return nil, err
 	}
@@ -93,13 +157,20 @@ func boundedShipRecord(original []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	prefix := command[:boundedCommandPrefixBytes]
+	end := min(prefixBytes, len(observed)-1)
+	prefix := observed[:end]
 	for !utf8.ValidString(prefix) {
 		prefix = prefix[:len(prefix)-1]
+	}
+	if prefix == "" {
+		prefix = observed[:utf8.RuneLen(firstRune)]
 	}
 	fields[field], err = json.Marshal(prefix)
 	if err != nil {
 		return nil, err
+	}
+	if contentField {
+		fields["content_truncated"] = json.RawMessage("true")
 	}
 	bounded, err := json.Marshal(fields)
 	if err != nil {
@@ -107,7 +178,7 @@ func boundedShipRecord(original []byte) ([]byte, error) {
 	}
 	bounded = append(bounded, '\n')
 	if len(bounded) > maxBoundedShipRecordBytes {
-		return nil, fmt.Errorf("oversized %s still exceeds %d-byte bounded transport limit", recordType, maxBoundedShipRecordBytes)
+		return nil, fmt.Errorf("oversized %s still exceeds %d-byte bounded transport limit: %w", recordType, maxBoundedShipRecordBytes, errBoundedRecordTooLarge)
 	}
 	return bounded, nil
 }

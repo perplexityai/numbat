@@ -344,14 +344,10 @@ func shipBoundedSpoolRecord(ctx context.Context, store spool.Store, batch spool.
 		return err
 	}
 	original := batch.Records[0]
-	bounded, err := boundedShipRecord(original)
-	if err != nil {
-		return fmt.Errorf("cannot represent %d-byte spool original: %w", len(original), err)
-	}
 	if err := store.CheckRetain(len(original)); err != nil {
 		return err
 	}
-	if err := shipBatch(factory, bounded); err != nil {
+	if err := shipBoundedHTTP(ctx, factory, original); err != nil {
 		return fmt.Errorf("bounded spool representation rejected; original remains queued: %w", err)
 	}
 	count, retainedBytes, err := store.AckRepresented(batch)
@@ -576,11 +572,7 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			return nil
 		}
 		represent := func(original []byte) error {
-			bounded, err := boundedShipRecord(original)
-			if err != nil {
-				return fmt.Errorf("cannot represent %d-byte file original at offset %d: %w", len(original), cursor.checkpoint.Offset, err)
-			}
-			if err := shipBatch(factory, bounded); err != nil {
+			if err := shipBoundedHTTP(ctx, factory, original); err != nil {
 				return fmt.Errorf("bounded file representation rejected at offset %d; original remains pending: %w", cursor.checkpoint.Offset, err)
 			}
 			fmt.Fprintf(stderr, "ship: accepted bounded representation of %d-byte file original at offset %d; original remains in %s\n", len(original), cursor.checkpoint.Offset, inputPath)
