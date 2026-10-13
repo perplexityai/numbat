@@ -16,6 +16,8 @@ numbat timeline [--agent NAME ... | --path FILE|DIR ...]
 numbat collect [--addr HOST:PORT]        receive OTLP/HTTP protobuf logs; emit records
 numbat ship (--spool-file S | --input-file F) --http-url U
                                         send queued or legacy file records to HTTP
+numbat ship --spool-file COPIED-S --export-originals NEW-DIR
+                                        read-only export of retained and pending originals
 numbat hook EVENT --agent NAME           live integration callback (normally not run by hand)
 numbat hook install --agent NAME|all     install numbat's live integrations
 numbat hook uninstall --agent NAME|all   remove numbat-owned live integrations
@@ -467,9 +469,8 @@ for the next request.
 
 For legacy file input, accepted batches advance the checkpoint after a `2xx`.
 Eligible records are delivered at least once while the input and its rotations
-remain available. Legacy records larger than 8 MiB, individually rejected with
-HTTP `413`, or lines that are not a single JSON object are logged and skipped,
-advancing the checkpoint as detailed below.
+remain available. Complete malformed lines are logged and skipped; their source
+bytes remain in the file. Valid records up to 32 MiB may use bounded delivery.
 
 Select exactly one input mode. Use spool-only or file-only hook output with
 `ship`. Direct HTTP on the same hook sends each record through both paths.
@@ -478,6 +479,8 @@ Select exactly one input mode. Use spool-only or file-only hook output with
 
 ```
 --spool-file PATH            transactional record queue to drain
+--export-originals NEW-DIR  with --spool-file, export a stopped copied spool;
+                             do not send HTTP or modify the copied spool
 --input-file PATH            legacy append-only NDJSON file to tail
                              (exactly one input path is required)
 --state-file PATH            legacy file checkpoint (default <input-file>.ship-state)
@@ -520,11 +523,11 @@ An ambiguous HTTP result can also cause a repeated spool batch. Receivers must
 tolerate duplicates and use stable record identifiers where present.
 
 `ship` never truncates or rotates a legacy input. Retention remains the
-operator's responsibility. A complete record larger than 8 MiB remains in the
-input but is skipped, so later records can continue. A line that is not a single
-JSON object, such as two records glued together by an interrupted append, is
-skipped the same way so one poisoned line cannot stall the queue. Prefer an
-existing fleet forwarder when one is already available.
+operator's responsibility. A complete malformed line within the 32 MiB read
+bound, such as records glued together by an interrupted append, is logged and
+skipped. Its exact bytes remain in the source file. A line beyond that bound
+or a valid record that cannot be represented blocks with an error; it is not
+acknowledged. Prefer an existing fleet forwarder when one is already available.
 
 Use `--max-batch-bytes 900000` for a receiver or proxy configured with a 1 MB
 request limit, leaving room for headers and other request overhead. Verify the
@@ -535,17 +538,45 @@ is not discarded merely because it exceeds the configured batch size.
 
 When a receiver returns HTTP `413`, `ship` retries smaller requests containing
 only whole records. For a spool, it selects a smaller FIFO prefix and
-acknowledges only the prefix accepted with `2xx`. A single record still rejected
-with `413` remains queued: delivery pauses and retries with backoff until the
-receiver accepts it. Later records are not shipped past that record.
+acknowledges only the prefix accepted with `2xx`. For one oversized event
+command, full prompt/message content, or finding observed command, it sends a
+bounded preview marked with original byte counts and SHA-256. Preview limits
+are UTF-8-safe byte limits of 1,024, 256, 64, 16, then one full first rune.
+If no representation is accepted, the original remains pending and blocks later
+records. A spool retains the exact original after a bounded representation is
+accepted, in addition to acknowledging its FIFO position.
 
 For legacy files, `ship` checkpoints every accepted prefix before attempting
-the remaining suffix. If one record is still rejected with `413`, it logs the
-input path, byte offset and size on stderr, advances the durable checkpoint
-past it, and continues. That record remains in the input file but is skipped
-from HTTP delivery, like records over the local 8 MiB limit. Retain the input
-and rotations to recover these records through a receiver that accepts them.
-Changing the endpoint replays retained legacy records, including skipped ones.
+the remaining suffix. A bounded representation advances the checkpoint using
+the original source bytes, which remain recoverable only while the input and
+its rotations are retained. An unrepresentable valid record does not advance
+the checkpoint or release later records. Changing the endpoint replays retained
+legacy records.
+
+For a stopped copied spool, `numbat ship --spool-file COPY --export-originals
+NEW-DIR` opens the database read-only and creates a new private directory.
+`retained/` contains exact accepted originals named by sequence;
+`pending.ndjson` contains the still-unacknowledged FIFO in order; and
+`manifest.json` records counts and SHA-256 values. An existing output directory
+is refused. Use the files only after the command exits successfully. The
+retained capacity is 256 records and 256 MiB of original payload bytes, apart
+from database overhead. A full retained capacity stops a new bounded send
+before HTTP and leaves the FIFO record pending. The transactional check repeats
+after HTTP acceptance; if capacity changed meanwhile, the record remains
+pending and may be sent again after recovery.
+
+To recover capacity without deleting originals, stop the producer and shipper,
+copy and hash the complete spool, export that stopped copy, and keep both the
+copy and export. Move the stopped original spool to an archive path, then resume
+the producer on a fresh spool at the original path. Ship the exported
+`pending.ndjson` through the existing `--input-file` path with its own new
+checkpoint, then verify its typed record IDs and manifest hash against accepted delivery.
+The archived spool and retained export must remain until recovery is verified;
+do not also ship the archived FIFO or the retained records to the same receiver,
+which would duplicate them. The prior `bc0` shipper rejects a spool after its
+first bounded ACK creates the retained bucket, despite the unchanged v1 format
+marker. Rollback requires the stopped export and a fresh spool; it cannot
+reopen that archived database directly.
 
 Other HTTP failures and ambiguous transport errors keep their full
 unacknowledged request eligible for replay. Receivers must reject a `413` request

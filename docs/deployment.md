@@ -85,10 +85,13 @@ the undelivered records. numbat does not delete those records to manage storage.
 Supervise the `ship` process and monitor the spool filesystem.
 
 `ship --input-file` remains available for legacy file output. Prefer an
-existing fleet forwarder when one is already available. Legacy records larger
-than 8 MiB or individually rejected with HTTP `413` are logged and skipped;
-spool records rejected with `413` remain queued and pause delivery. See
-[cli.md](cli.md#ship) for adaptive batch delivery and retention. Do not combine
+existing fleet forwarder when one is already available. Representable event
+commands, full prompt/message content, and finding observed commands receive
+bounded, marked delivery after HTTP `413`; exact file originals remain subject
+to file retention. Spool originals accepted in bounded form remain in the local
+retained bucket until an operator archives them. Unrepresentable valid records
+remain pending and block later records. See [cli.md](cli.md#ship) for read-only
+export, capacity recovery, and the old-spool rollback boundary. Do not combine
 direct HTTP with a later `ship` path unless the receiver expects a second copy.
 
 ## Choose an install scope

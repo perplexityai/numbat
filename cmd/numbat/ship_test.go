@@ -278,6 +278,15 @@ func TestShipRetainsUnrepresentableRejectedRecord(t *testing.T) {
 	if err != nil || restored.checkpoint.Offset != int64(len(prefix)) {
 		t.Fatalf("persisted offset=%d want=%d err=%v", restored.checkpoint.Offset, len(prefix), err)
 	}
+	attempted := attempts.Load()
+	restarted, err := drainAvailable(context.Background(), inputPath, statePath, restored, maxShipBatchBytes, newSinkFactory(srv.URL), &logs)
+	if err == nil || !strings.Contains(err.Error(), "record_type") || restarted.checkpoint.Offset != int64(len(prefix)) || attempts.Load() <= attempted {
+		t.Fatalf("restart must retry unrepresentable source without ACK: offset=%d attempts=%d before=%d err=%v", restarted.checkpoint.Offset, attempts.Load(), attempted, err)
+	}
+	restored, err = readShipCursor(statePath, testShipDestination)
+	if err != nil || restored.checkpoint.Offset != int64(len(prefix)) {
+		t.Fatalf("restart advanced persisted offset: offset=%d err=%v", restored.checkpoint.Offset, err)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if !bytes.Equal(accepted.Bytes(), prefix) || attempts.Load() == 0 {

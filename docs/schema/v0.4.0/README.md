@@ -39,6 +39,17 @@ Evidence refs always carry `artifact_type`. File-backed refs also carry
 `local_path`; live hook and OTLP refs may omit it because there is no local file
 to reopen.
 
+When `ship` must shorten one representable record after an HTTP `413` or the
+local 8 MiB HTTP buffer, `event.evidence.transport` or the first finding
+`evidence_refs[0].transport` marks the bounded representation. The version 1
+object names the shortened field and records the exact original NDJSON and
+field byte counts and SHA-256 values. Existing evidence provenance and record
+identities remain. For shortened event `content`, `content_bytes` keeps its
+original value and `content_truncated` becomes true. Indicator and enforcement
+records have no bounded identity-field representation. The original file line
+or locally retained spool value is required to recover complete content; the
+marked representation alone cannot reconstruct it.
+
 `event.project_path`, `event.file_path`, and finding `observed_file_path` use `/`
 separators on every operating system so one rule works across platforms.
 `evidence.local_path` remains host-native because it is an endpoint reopen path.

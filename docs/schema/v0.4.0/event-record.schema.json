@@ -153,7 +153,21 @@
         "line": { "type": "integer", "minimum": 1 },
         "rowid": { "type": "integer", "minimum": 1 },
         "json_pointer": { "type": "string" },
-        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "transport": { "$ref": "#/$defs/transport" }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "truncated_field", "original_record_bytes", "original_record_sha256", "original_field_bytes", "original_field_sha256"],
+      "properties": {
+        "version": { "const": 1 },
+        "truncated_field": { "enum": ["command", "content"] },
+        "original_record_bytes": { "type": "integer", "minimum": 1 },
+        "original_record_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "original_field_bytes": { "type": "integer", "minimum": 1 },
+        "original_field_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     }
   }

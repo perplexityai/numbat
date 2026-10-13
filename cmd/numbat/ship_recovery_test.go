@@ -47,14 +47,15 @@ func TestShipOversizedRecordDoesNotWedgeDrain(t *testing.T) {
 	}
 }
 
-func TestShipRecoveryBlocksMalformedOversizedFirstRecord(t *testing.T) {
+func TestShipRecoverySkipsOversizedFirstRecord(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "records.ndjson")
 	statePath := filepath.Join(dir, "records.ship-state")
 
-	oversized := strings.Repeat("x", maxShipRecordBytes+1024) + "\n"
-	appendRaw(t, inputPath, []byte(oversized+`{"record_type":"event","event_id":"rotated"}`+"\n"))
+	torn := strings.Repeat("x", maxShipRecordBytes+1024)
+	rotated := []byte(torn + `{"record_type":"event","event_id":"glued"}` + "\n" + `{"record_type":"event","event_id":"rotated"}` + "\n")
+	appendRaw(t, inputPath, rotated)
 	if err := os.Rename(inputPath, inputPath+".1"); err != nil {
 		t.Fatal(err)
 	}
@@ -63,12 +64,23 @@ func TestShipRecoveryBlocksMalformedOversizedFirstRecord(t *testing.T) {
 	sink := newFlakySink()
 	sink.healthy.Store(true)
 	defer sink.srv.Close()
-	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, newSinkFactory(sink.srv.URL), io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "not a single JSON object") {
-		t.Fatalf("malformed oversized source did not block: %v", err)
+	cursor := newTestShipCursor()
+	var err error
+	var logs bytes.Buffer
+	for i := 0; i < 6; i++ {
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, newSinkFactory(sink.srv.URL), &logs)
+		if err != nil {
+			t.Fatalf("drain pass %d: %v", i+1, err)
+		}
 	}
-	if cursor.checkpoint.Offset != 0 || sink.uniqueDelivered() != 0 {
-		t.Fatalf("malformed oversized source was consumed: offset=%d delivered=%d", cursor.checkpoint.Offset, sink.uniqueDelivered())
+	if got := sink.uniqueDelivered(); got != 2 {
+		t.Fatalf("delivered=%d, want retained suffix and active record", got)
+	}
+	if !strings.Contains(logs.String(), "not a single JSON object; skipped from HTTP delivery and retained in the input file") {
+		t.Fatalf("missing explicit malformed-line diagnostic: %s", &logs)
+	}
+	if got, err := os.ReadFile(inputPath + ".1"); err != nil || !bytes.Equal(got, rotated) {
+		t.Fatalf("rotated original changed: bytes=%d err=%v", len(got), err)
 	}
 }
 

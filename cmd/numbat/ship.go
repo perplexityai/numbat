@@ -95,6 +95,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	inputPath := fs.String("input-file", "", "legacy append-only NDJSON file to ship")
 	spoolPath := fs.String("spool-file", "", "durable record queue to ship (use instead of --input-file)")
+	exportOriginals := fs.String("export-originals", "", "read-only export of a stopped copied spool into a new private directory")
 	statePath := fs.String("state-file", "", "delivery checkpoint (default <input-file>.ship-state)")
 	poll := fs.Duration("poll", defaultShipPoll, "interval between source polls")
 	maxBatchBytes := fs.Int64("max-batch-bytes", maxShipBatchBytes, "maximum uncompressed bytes per batch (1..4194304; larger single records are attempted alone)")
@@ -107,12 +108,13 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	httpGzip := fs.Bool("http-gzip", false, "gzip the HTTP POST body")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat ship (--spool-file PATH | --input-file PATH) --http-url URL [--state-file PATH] [--poll DUR] [HTTP options]")
+		fmt.Fprintln(stderr, "       numbat ship --spool-file COPIED-PATH --export-originals NEW-DIR")
 		fmt.Fprintln(stderr, "\nDrains a transactional numbat spool, or tails a legacy append-only NDJSON file,")
 		fmt.Fprintln(stderr, "to an HTTP endpoint. Spool records are acknowledged only after a successful POST.")
 		fmt.Fprintln(stderr, "Legacy file input uses a durable")
 		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
-		fmt.Fprintln(stderr, "Representable command records larger than 8 MiB or rejected with HTTP 413 are sent as bounded, marked records; unrepresentable records remain pending with an error.")
+		fmt.Fprintln(stderr, "Representable command, prompt, and message records larger than 8 MiB or rejected with HTTP 413 are sent as bounded, marked records; unrepresentable records remain pending with an error.")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -133,6 +135,32 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ship: exactly one of --spool-file or --input-file is required")
 		fs.Usage()
 		return 2
+	}
+	if *exportOriginals != "" {
+		if !spoolSet {
+			fmt.Fprintln(stderr, "ship: --export-originals requires --spool-file")
+			return 2
+		}
+		var extra []string
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name != "spool-file" && f.Name != "export-originals" {
+				extra = append(extra, f.Name)
+			}
+		})
+		if len(extra) != 0 {
+			fmt.Fprintf(stderr, "ship: --export-originals cannot be combined with %v\n", extra)
+			return 2
+		}
+		summary, err := spool.New(*spoolPath).ExportOriginals(*exportOriginals)
+		if err != nil {
+			fmt.Fprintf(stderr, "ship: export originals: %v\n", err)
+			return 1
+		}
+		if err := json.NewEncoder(stdout).Encode(summary); err != nil {
+			fmt.Fprintf(stderr, "ship: report export: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	if strings.TrimSpace(*httpURL) == "" {
 		fmt.Fprintln(stderr, "ship: --http-url is required")
@@ -645,12 +673,6 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		}
 		if line.complete {
 			if !isShippableRecord(line.bytes) {
-				if len(line.bytes) > maxShipRecordBytes {
-					if buf.Len() > 0 {
-						break
-					}
-					return shipRead{}, fmt.Errorf("complete oversized record at offset %d is not a single JSON object; original remains pending", checkpoint.Offset+consumed)
-				}
 				// A partial record left by a short append, glued onto the next
 				// record, is not a single JSON object; ingestion would reject the
 				// whole batch on it. Ship any good records buffered so far, then
@@ -1027,7 +1049,7 @@ func validShipCheckpoint(cp shipCheckpoint, destination string) bool {
 	if cp.GuardBytes == 0 {
 		return cp.GuardOffset == 0 && cp.GuardSHA256 == ""
 	}
-	if cp.GuardOffset < 0 || cp.GuardBytes < 0 || cp.GuardBytes > shipHTTPBufferBytes {
+	if cp.GuardOffset < 0 || cp.GuardBytes < 0 || cp.GuardBytes > maxShipOriginalBytes {
 		return false
 	}
 	if cp.GuardOffset > (1<<63-1)-int64(cp.GuardBytes) {

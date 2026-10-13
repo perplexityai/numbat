@@ -129,16 +129,6 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 			}
 		}
 	}
-	evidence := make(map[string]json.RawMessage)
-	if raw, ok := fields["evidence"]; ok {
-		evidence, err = uniqueJSONObject(raw)
-		if err != nil {
-			return nil, fmt.Errorf("oversized source evidence: %w", err)
-		}
-	}
-	if _, collision := evidence["transport"]; collision {
-		return nil, errors.New("oversized source already has evidence.transport")
-	}
 	digest := sha256.Sum256(original)
 	fieldDigest := sha256.Sum256([]byte(observed))
 	marker, err := json.Marshal(struct {
@@ -152,8 +142,51 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	evidence["transport"] = marker
-	fields["evidence"], err = json.Marshal(evidence)
+	if recordType == "event" {
+		evidence := make(map[string]json.RawMessage)
+		if raw, ok := fields["evidence"]; ok {
+			evidence, err = uniqueJSONObject(raw)
+			if err != nil {
+				return nil, fmt.Errorf("oversized source evidence: %w", err)
+			}
+		}
+		if raw, present := fields["schema_version"]; present {
+			var schemaVersion string
+			if err := json.Unmarshal(raw, &schemaVersion); err != nil || schemaVersion == "" {
+				return nil, errors.New("oversized event has invalid schema_version")
+			}
+			if schemaVersion == "0.4.0" {
+				if _, err := requiredShipString(evidence, "artifact_type"); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if _, collision := evidence["transport"]; collision {
+			return nil, errors.New("oversized source already has evidence.transport")
+		}
+		evidence["transport"] = marker
+		fields["evidence"], err = json.Marshal(evidence)
+	} else {
+		var refs []json.RawMessage
+		if err := json.Unmarshal(fields["evidence_refs"], &refs); err != nil || len(refs) == 0 {
+			return nil, errors.New("oversized finding has no evidence_refs")
+		}
+		first, err := uniqueJSONObject(refs[0])
+		if err != nil {
+			return nil, fmt.Errorf("oversized finding evidence_refs[0]: %w", err)
+		}
+		if _, err := requiredShipString(first, "artifact_type"); err != nil {
+			return nil, err
+		}
+		if _, collision := first["transport"]; collision {
+			return nil, errors.New("oversized finding already has evidence_refs[0].transport")
+		}
+		first["transport"] = marker
+		refs[0], err = json.Marshal(first)
+		if err == nil {
+			fields["evidence_refs"], err = json.Marshal(refs)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
