@@ -25,7 +25,10 @@ const (
 	maxBoundedShipRecordBytes = 512 << 10
 )
 
-var errBoundedRecordTooLarge = errors.New("bounded representation still exceeds local transport limit")
+var (
+	errBoundedRecordTooLarge = errors.New("bounded representation still exceeds local transport limit")
+	errShipUnrepresentable   = errors.New("record has no supported bounded representation")
+)
 
 // shipBoundedHTTP reacts only to an actual 413 or the local representation
 // bound. It makes at most five attempts and never acknowledges the source.
@@ -41,7 +44,7 @@ func shipBoundedHTTP(ctx context.Context, factory shipSinkFactory, original []by
 			continue
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", errShipUnrepresentable, err)
 		}
 		if err := shipBatch(factory, bounded); err != nil {
 			lastErr = err
@@ -51,6 +54,9 @@ func shipBoundedHTTP(ctx context.Context, factory shipSinkFactory, original []by
 			return err
 		}
 		return nil
+	}
+	if errors.Is(lastErr, errBoundedRecordTooLarge) {
+		return fmt.Errorf("%w: %v", errShipUnrepresentable, lastErr)
 	}
 	return fmt.Errorf("bounded representation remained unaccepted; original remains pending: %w", lastErr)
 }

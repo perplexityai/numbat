@@ -18,6 +18,8 @@ numbat ship (--spool-file S | --input-file F) --http-url U
                                         send queued or legacy file records to HTTP
 numbat ship --spool-file COPIED-S --export-originals NEW-DIR
                                         read-only export of retained and pending originals
+numbat ship --spool-file S --spool-status
+                                        read-only JSON recovery status
 numbat hook EVENT --agent NAME           live integration callback (normally not run by hand)
 numbat hook install --agent NAME|all     install numbat's live integrations
 numbat hook uninstall --agent NAME|all   remove numbat-owned live integrations
@@ -463,9 +465,11 @@ collector for that telemetry.
 drain a transactional spool or tail a legacy NDJSON file.
 
 For spool input, `ship` reads the oldest complete records first. It removes
-only the delivered prefix after the endpoint returns `2xx`. Failed delivery
-keeps every selected record. A record appended during delivery remains queued
-for the next request.
+only the delivered prefix after the endpoint returns `2xx`. Transient delivery
+failures keep every selected record. Permanently unshippable individual records
+move atomically into local quarantine, not into delivered state, so later
+records can proceed. A record appended during delivery remains queued for the
+next request.
 
 For legacy file input, accepted batches advance the checkpoint after a `2xx`.
 Eligible records are delivered at least once while the input and its rotations
@@ -484,6 +488,8 @@ Select exactly one input mode. Use spool-only or file-only hook output with
 --input-file PATH            legacy append-only NDJSON file to tail
                              (exactly one input path is required)
 --state-file PATH            legacy file checkpoint (default <input-file>.ship-state)
+--spool-status               read-only JSON local recovery status; no HTTP options
+--export-originals NEW-DIR   read-only export of a stopped copied spool; no HTTP options
 --poll DURATION              interval between source polls (default 2s)
 --max-batch-bytes N           maximum uncompressed bytes per batch (1..4194304;
                              default 4194304); larger single records sent alone
@@ -553,16 +559,29 @@ acknowledges only the prefix accepted with `2xx`. For one oversized event
 command, full prompt/message content, or finding observed command, it sends a
 bounded preview marked with original byte counts and SHA-256. Preview limits
 are UTF-8-safe byte limits of 1,024, 256, 64, 16, then one full first rune.
-If no representation is accepted, the original remains pending and blocks later
-records. A spool retains the exact original after a bounded representation is
-accepted, in addition to acknowledging its FIFO position.
+After a single spool record receives `413`, the shipper tries supported bounded
+representations before quarantining it. A source within the 32 MiB bound that
+cannot be represented is also quarantined when bounded delivery is required.
+The exact original and a fixed reason (`unrepresentable`, `http_413`, or
+`retention_full`) are committed before removing the record from the pending
+FIFO. Quarantine is not a delivery acknowledgment. Later deliverable records
+remain ordered, but quarantined records are deferred for separate recovery.
+Network errors, cancellation, and HTTP statuses other than `413` remain
+retryable and do not trigger quarantine. Sources beyond the 32 MiB bound remain
+pending with an error.
+
+A spool retains the exact original after a bounded representation is accepted,
+in addition to acknowledging its FIFO position. Legacy file input does not use
+quarantine: if no representation is accepted, the original remains pending and
+blocks later records.
 
 Bounded representations use `schema_version: "0.5.0"`; unchanged records and
 retained originals keep their original version. Receivers must route this
 mixed-version stream and support the [bounded transport schema](schema/v0.5.0/README.md)
 before enabling delivery. The fallback supports versioned `0.2.0`, `0.3.0`,
 and `0.4.0` originals with evidence provenance. Unversioned or unknown-version
-oversized records remain pending rather than receiving invented metadata.
+oversized records are not assigned invented metadata; a spool quarantines them
+when bounded delivery is required, while legacy file input remains pending.
 
 For legacy files, `ship` checkpoints every accepted prefix before attempting
 the remaining suffix. A bounded representation advances the checkpoint using
@@ -574,14 +593,34 @@ legacy records.
 For a stopped copied spool, `numbat ship --spool-file COPY --export-originals
 NEW-DIR` opens the database read-only and creates a new private directory.
 `retained/` contains exact accepted originals named by sequence;
+`quarantined/` contains exact unaccepted originals as individual `.record` files;
 `pending.ndjson` contains the still-unacknowledged FIFO in order; and
-`manifest.json` records counts and SHA-256 values. An existing output directory
+`manifest.json` records counts, quarantine reasons, and SHA-256 values. An existing output directory
 is refused. Use the files only after the command exits successfully. The
 retained capacity is 256 records and 256 MiB of original payload bytes, apart
-from database overhead. A full retained capacity stops a new bounded send
-before HTTP and leaves the FIFO record pending. The transactional check repeats
-after HTTP acceptance; if capacity changed meanwhile, the record remains
-pending and may be sent again after recovery.
+from database overhead. A full retained capacity prevents a new bounded send
+and quarantines that original with reason `retention_full`. Quarantine has its
+own limit of 256 records and 256 MiB, apart from database overhead. If quarantine
+is full or its transaction fails, the original stays pending and delivery
+pauses; no evidence is deleted to make room. The retained-capacity check repeats
+after HTTP acceptance; if capacity changed meanwhile, the record stays pending
+and may be sent again after recovery.
+
+Each quarantine emits a diagnostic without record contents, and startup reports
+outstanding quarantined records. Independently of HTTP delivery, run
+`numbat ship --spool-file PATH --spool-status` to read JSON counts without
+modifying or creating the database. Exit `1` means quarantined records or full
+retained capacity require attention (or the status read failed); exit `0` means
+neither local recovery condition was found. This is not a receiver-connectivity
+or delivery-liveness check. Monitor these counts and shipper diagnostics through
+a separate health channel, not through the queue being monitored.
+
+The first quarantine atomically upgrades the local database to
+`numbat-spool-v2`. Its export uses `settled_through`, which includes quarantined
+positions, instead of `acked_through`; the quarantine list identifies records
+that were not accepted remotely. Existing v1 queues remain readable and stay
+v1 until their first quarantine. Older binaries refuse v2 databases. HTTP
+record schema versions are unchanged by this local storage upgrade.
 
 To recover capacity without deleting originals, stop the producer and shipper,
 copy and hash the complete spool, export that stopped copy, and keep both the
@@ -589,6 +628,12 @@ copy and export. Move the stopped original spool to an archive path, then resume
 the producer on a fresh spool at the original path. Ship the exported
 `pending.ndjson` through the existing `--input-file` path with its own new
 checkpoint, then verify its typed record IDs and manifest hash against accepted delivery.
+Inspect quarantined files and their reasons separately. After correcting the
+receiver limit, schema compatibility, or retention problem, retry each complete
+supported NDJSON file through `--input-file` with a separate checkpoint, or use
+an ingestion path that accepts its exact original. A `.record` file is not
+guaranteed to be valid NDJSON; do not blindly concatenate quarantined originals.
+Do not mark a quarantined record delivered merely because it was exported.
 The archived spool and retained export must remain until recovery is verified;
 do not also ship the archived FIFO or the retained records to the same receiver,
 which would duplicate them. The prior `bc0` shipper rejects a spool after its

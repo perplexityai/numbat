@@ -16,31 +16,33 @@ import (
 
 // ExportOriginals reads a stopped copy of a spool. It leaves the database
 // unchanged and creates a private directory containing the exact retained
-// originals, pending FIFO bytes, and a manifest written last.
+// originals, quarantined records, pending FIFO bytes, and a manifest written last.
 func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err error) {
+	err = store.withReadOnlyDB(func(db *bolt.DB) error {
+		var exportErr error
+		summary, exportErr = exportOriginals(db, outputDir)
+		return exportErr
+	})
+	return summary, err
+}
+
+func (store Store) withReadOnlyDB(read func(*bolt.DB) error) (err error) {
 	info, err := os.Lstat(store.path)
 	if err != nil {
-		return summary, err
+		return err
 	}
 	if !info.Mode().IsRegular() {
-		return summary, errors.New("spool export requires a regular copied database")
+		return errors.New("spool read requires a regular database")
 	}
 	if err := validateDatabaseMode(info); err != nil {
-		return summary, err
+		return err
 	}
 	parentInfo, err := os.Lstat(filepath.Dir(store.path))
 	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
-		return summary, errors.New("spool export requires a real input parent directory")
+		return errors.New("spool read requires a real input parent directory")
 	}
 	if err := validateParentMode(parentInfo); err != nil {
-		return summary, err
-	}
-	outputParent, err := os.Lstat(filepath.Dir(outputDir))
-	if err != nil || !outputParent.IsDir() || outputParent.Mode()&os.ModeSymlink != 0 {
-		return summary, errors.New("spool export requires a real output parent directory")
-	}
-	if err := validateParentMode(outputParent); err != nil {
-		return summary, err
+		return err
 	}
 	db, err := bolt.Open(store.path, 0, &bolt.Options{
 		ReadOnly: true,
@@ -59,10 +61,21 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 		},
 	})
 	if err != nil {
-		return summary, err
+		return err
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
 	if err := db.View(validateStore); err != nil {
+		return err
+	}
+	return read(db)
+}
+
+func exportOriginals(db *bolt.DB, outputDir string) (summary ExportSummary, err error) {
+	outputParent, err := os.Lstat(filepath.Dir(outputDir))
+	if err != nil || !outputParent.IsDir() || outputParent.Mode()&os.ModeSymlink != 0 {
+		return summary, errors.New("spool export requires a real output parent directory")
+	}
+	if err := validateParentMode(outputParent); err != nil {
 		return summary, err
 	}
 	if err := os.Mkdir(outputDir, 0o700); err != nil {
@@ -71,19 +84,27 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 	if err := os.Mkdir(filepath.Join(outputDir, "retained"), 0o700); err != nil {
 		return summary, err
 	}
+	if err := os.Mkdir(filepath.Join(outputDir, "quarantined"), 0o700); err != nil {
+		return summary, err
+	}
 	output, err := os.OpenFile(filepath.Join(outputDir, "pending.ndjson"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return summary, err
 	}
 	pendingHash := sha256.New()
-	summary.Format = "numbat-spool-v1"
 	err = db.View(func(tx *bolt.Tx) error {
 		meta, records := tx.Bucket(metadataBucket), tx.Bucket(recordsBucket)
-		summary.AckedThrough = binary.BigEndian.Uint64(meta.Get(ackedKey))
+		summary.Format = string(meta.Get(markerKey))
+		through := binary.BigEndian.Uint64(meta.Get(progressKey(meta)))
+		if bytes.Equal(meta.Get(markerKey), quarantineFormat) {
+			summary.SettledThrough = &through
+		} else {
+			summary.AckedThrough = &through
+		}
 		summary.Sequence = records.Sequence()
 		if retained := tx.Bucket(retainedBucket); retained != nil {
 			if err := retained.ForEach(func(k, value []byte) error {
-				if len(k) != 8 || binary.BigEndian.Uint64(k) > summary.AckedThrough ||
+				if len(k) != 8 || binary.BigEndian.Uint64(k) > through ||
 					len(value) == 0 || value[len(value)-1] != '\n' || bytes.Count(value, []byte{'\n'}) != 1 || !json.Valid(value[:len(value)-1]) {
 					return errors.New("invalid retained original")
 				}
@@ -103,9 +124,36 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 		if uint64(len(summary.Retained)) != count || summary.RetainedBytes != retainedBytes {
 			return errors.New("retained accounting does not match original bytes")
 		}
+		if quarantined := tx.Bucket(quarantineBucket); quarantined != nil {
+			if err := quarantined.ForEach(func(k, value []byte) error {
+				if len(k) != 8 || binary.BigEndian.Uint64(k) > through || len(value) < recordIDBytes+1 ||
+					QuarantineReason(value[recordIDBytes]).String() == "" || records.Get(k) != nil {
+					return errors.New("invalid quarantined record")
+				}
+				original := value[recordIDBytes+1:]
+				name := fmt.Sprintf("%020d.record", binary.BigEndian.Uint64(k))
+				if err := writeExportFile(filepath.Join(outputDir, "quarantined", name), original); err != nil {
+					return err
+				}
+				digest := sha256.Sum256(original)
+				summary.Quarantined = append(summary.Quarantined, ExportEntry{
+					Sequence: binary.BigEndian.Uint64(k), Bytes: len(original),
+					SHA256: hex.EncodeToString(digest[:]), File: filepath.Join("quarantined", name),
+					Reason: QuarantineReason(value[recordIDBytes]).String(),
+				})
+				summary.QuarantinedBytes += uint64(len(original))
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		count, size := quarantineTotals(meta)
+		if uint64(len(summary.Quarantined)) != count || summary.QuarantinedBytes != size {
+			return errors.New("quarantine accounting does not match original bytes")
+		}
 		var previous uint64
 		return records.ForEach(func(k, value []byte) error {
-			if len(k) != 8 || len(value) < recordIDBytes || binary.BigEndian.Uint64(k) <= summary.AckedThrough ||
+			if len(k) != 8 || len(value) < recordIDBytes || binary.BigEndian.Uint64(k) <= through ||
 				binary.BigEndian.Uint64(k) <= previous || binary.BigEndian.Uint64(k) > summary.Sequence {
 				return errors.New("invalid pending record")
 			}
@@ -129,6 +177,7 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 	}
 	summary.PendingSHA256 = hex.EncodeToString(pendingHash.Sum(nil))
 	summary.RetainedCount = len(summary.Retained)
+	summary.QuarantinedCount = len(summary.Quarantined)
 	manifest, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		return summary, err
@@ -136,7 +185,7 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 	if err := writeExportFile(filepath.Join(outputDir, "manifest.json"), append(manifest, '\n')); err != nil {
 		return summary, err
 	}
-	for _, dir := range []string{filepath.Join(outputDir, "retained"), outputDir, filepath.Dir(outputDir)} {
+	for _, dir := range []string{filepath.Join(outputDir, "retained"), filepath.Join(outputDir, "quarantined"), outputDir, filepath.Dir(outputDir)} {
 		if err := syncExportDirectory(dir); err != nil {
 			return summary, err
 		}
@@ -145,15 +194,19 @@ func (store Store) ExportOriginals(outputDir string) (summary ExportSummary, err
 }
 
 type ExportSummary struct {
-	Format        string        `json:"format"`
-	AckedThrough  uint64        `json:"acked_through"`
-	Sequence      uint64        `json:"sequence"`
-	PendingCount  uint64        `json:"pending_count"`
-	PendingBytes  uint64        `json:"pending_bytes"`
-	PendingSHA256 string        `json:"pending_sha256"`
-	RetainedCount int           `json:"retained_count"`
-	RetainedBytes uint64        `json:"retained_bytes"`
-	Retained      []ExportEntry `json:"retained"`
+	Format           string        `json:"format"`
+	AckedThrough     *uint64       `json:"acked_through,omitempty"`
+	SettledThrough   *uint64       `json:"settled_through,omitempty"`
+	Sequence         uint64        `json:"sequence"`
+	PendingCount     uint64        `json:"pending_count"`
+	PendingBytes     uint64        `json:"pending_bytes"`
+	PendingSHA256    string        `json:"pending_sha256"`
+	RetainedCount    int           `json:"retained_count"`
+	RetainedBytes    uint64        `json:"retained_bytes"`
+	Retained         []ExportEntry `json:"retained"`
+	QuarantinedCount int           `json:"quarantined_count"`
+	QuarantinedBytes uint64        `json:"quarantined_bytes"`
+	Quarantined      []ExportEntry `json:"quarantined"`
 }
 
 type ExportEntry struct {
@@ -161,6 +214,7 @@ type ExportEntry struct {
 	Bytes    int    `json:"bytes"`
 	SHA256   string `json:"sha256"`
 	File     string `json:"file"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 func writeExportFile(path string, data []byte) (err error) {

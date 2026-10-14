@@ -96,6 +96,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	inputPath := fs.String("input-file", "", "legacy append-only NDJSON file to ship")
 	spoolPath := fs.String("spool-file", "", "durable record queue to ship (use instead of --input-file)")
 	exportOriginals := fs.String("export-originals", "", "read-only export of a stopped copied spool into a new private directory")
+	spoolStatus := fs.Bool("spool-status", false, "read-only JSON spool status; exit 1 when local recovery needs attention")
 	statePath := fs.String("state-file", "", "delivery checkpoint (default <input-file>.ship-state)")
 	poll := fs.Duration("poll", defaultShipPoll, "interval between source polls")
 	maxBatchBytes := fs.Int64("max-batch-bytes", maxShipBatchBytes, "maximum uncompressed bytes per batch (1..4194304; larger single records are attempted alone)")
@@ -109,12 +110,13 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat ship (--spool-file PATH | --input-file PATH) --http-url URL [--state-file PATH] [--poll DUR] [HTTP options]")
 		fmt.Fprintln(stderr, "       numbat ship --spool-file COPIED-PATH --export-originals NEW-DIR")
+		fmt.Fprintln(stderr, "       numbat ship --spool-file PATH --spool-status")
 		fmt.Fprintln(stderr, "\nDrains a transactional numbat spool, or tails a legacy append-only NDJSON file,")
 		fmt.Fprintln(stderr, "to an HTTP endpoint. Spool records are acknowledged only after a successful POST.")
 		fmt.Fprintln(stderr, "Legacy file input uses a durable")
 		fmt.Fprintln(stderr, "checkpoint. Retained records up to 8 MiB are delivered at least once while the")
 		fmt.Fprintln(stderr, "input and rotated files remain available. Receivers must tolerate duplicates.")
-		fmt.Fprintln(stderr, "Representable command, prompt, and message records larger than 8 MiB or rejected with HTTP 413 are sent as bounded, marked records; unrepresentable records remain pending with an error.")
+		fmt.Fprintln(stderr, "Representable command, prompt, and message records larger than 8 MiB or rejected with HTTP 413 are sent as bounded, marked records. Permanently unshippable spool records are quarantined; legacy file records remain pending.")
 		printHTTPAuthEnvHelp(stderr, false)
 		fs.PrintDefaults()
 	}
@@ -135,6 +137,31 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ship: exactly one of --spool-file or --input-file is required")
 		fs.Usage()
 		return 2
+	}
+	if *spoolStatus {
+		var extra []string
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name != "spool-file" && f.Name != "spool-status" {
+				extra = append(extra, f.Name)
+			}
+		})
+		if !spoolSet || len(extra) != 0 {
+			fmt.Fprintln(stderr, "ship: --spool-status requires only --spool-file")
+			return 2
+		}
+		status, err := spool.New(*spoolPath).Status()
+		if err != nil {
+			fmt.Fprintf(stderr, "ship: %v\n", err)
+			return 1
+		}
+		if err := json.NewEncoder(stdout).Encode(status); err != nil {
+			fmt.Fprintf(stderr, "ship: report spool status: %v\n", err)
+			return 1
+		}
+		if status.NeedsAttention {
+			return 1
+		}
+		return 0
 	}
 	if *exportOriginals != "" {
 		if !spoolSet {
@@ -255,6 +282,14 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stderr, "ship: spool retains %d accepted oversized originals (%d bytes) locally\n", count, retainedBytes)
+		status, err := store.Status()
+		if err != nil {
+			fmt.Fprintf(stderr, "ship: inspect quarantine: %v\n", err)
+			return 1
+		}
+		if status.QuarantinedRecords > 0 {
+			fmt.Fprintf(stderr, "ship: ATTENTION: %d quarantined records (%d bytes) require recovery; not delivered\n", status.QuarantinedRecords, status.QuarantinedBytes)
+		}
 		return runSpoolShipLoop(ctx, store, *poll, int(*maxBatchBytes), factory, stderr)
 	}
 
@@ -373,9 +408,18 @@ func shipBoundedSpoolRecord(ctx context.Context, store spool.Store, batch spool.
 	}
 	original := batch.Records[0]
 	if err := store.CheckRetain(len(original)); err != nil {
+		if errors.Is(err, spool.ErrRetentionFull) {
+			return quarantineSpoolRecord(ctx, store, batch, spool.QuarantineRetentionFull, stderr)
+		}
 		return err
 	}
 	if err := shipBoundedHTTP(ctx, factory, original); err != nil {
+		if errors.Is(err, errShipUnrepresentable) {
+			return quarantineSpoolRecord(ctx, store, batch, spool.QuarantineUnrepresentable, stderr)
+		}
+		if status, ok := output.HTTPStatusCode(err); ok && status == http.StatusRequestEntityTooLarge {
+			return quarantineSpoolRecord(ctx, store, batch, spool.QuarantineHTTP413, stderr)
+		}
 		return fmt.Errorf("bounded spool representation rejected; original remains queued: %w", err)
 	}
 	count, retainedBytes, err := store.AckRepresented(batch)
@@ -383,6 +427,17 @@ func shipBoundedSpoolRecord(ctx context.Context, store spool.Store, batch spool.
 		return fmt.Errorf("retain accepted spool original and acknowledge: %w", err)
 	}
 	fmt.Fprintf(stderr, "ship: accepted bounded spool representation; retained full original locally (%d records, %d bytes)\n", count, retainedBytes)
+	return nil
+}
+
+func quarantineSpoolRecord(ctx context.Context, store spool.Store, batch spool.Batch, reason spool.QuarantineReason, stderr io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := store.Quarantine(batch, reason); err != nil {
+		return fmt.Errorf("preserve unshippable record: %w", err)
+	}
+	fmt.Fprintf(stderr, "ship: ATTENTION: quarantined %d-byte record (%s); not delivered; inspect --spool-status and export originals for recovery\n", len(batch.Records[0]), reason)
 	return nil
 }
 

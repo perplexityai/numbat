@@ -238,11 +238,16 @@ retention tooling.
 
 If the host has no external forwarder, select spool-only output. Run
 `numbat ship --spool-file PATH` as a supervised process. Failed HTTP delivery
-keeps the queued records. Successful delivery removes only the delivered
-prefix. See [cli.md](cli.md#ship) for the complete contract.
+keeps the queued records. Successful delivery removes the delivered prefix;
+permanently unshippable individual records are preserved in a separate local
+quarantine before later records proceed. Quarantine is not delivery.
+Monitor `numbat ship --spool-file PATH --spool-status` separately from the
+delivery queue and recover any quarantined originals. See [cli.md](cli.md#ship)
+for retry classification, storage limits, export, and compatibility.
 
 `numbat ship` also accepts a legacy file through `--input-file`. Legacy records
-larger than 8 MiB or individually rejected with HTTP `413` are logged and skipped.
-Spool records rejected with `413` remain queued and pause delivery.
+larger than 8 MiB or individually rejected with HTTP `413` use supported bounded
+representations; unrepresentable valid records remain pending and pause legacy
+delivery. Spool records exhaust bounded retries before entering quarantine.
 Use one local durable output with `ship`. Direct HTTP on the same hook sends a
 second copy.

@@ -122,3 +122,59 @@ func assertSpoolRecords(t *testing.T, store spool.Store, want ...string) {
 		}
 	}
 }
+
+// A zero file-size limit makes any database WriteAt fail with EFBIG, even when
+// preallocated/free pages could otherwise absorb the quarantine transaction.
+// This is a write-failure test, not a simulation of filesystem free space.
+func TestQuarantineAtFileWriteLimitDoesNotCommit(t *testing.T) {
+	const helper = "NUMBAT_QUARANTINE_FILESIZE_HELPER"
+	if os.Getenv(helper) == "1" {
+		store := spool.New(os.Getenv(spoolFileSizePath))
+		batch, err := store.Peek(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signal.Ignore(syscall.SIGXFSZ)
+		limit, err := strconv.ParseUint(os.Getenv(spoolFileSizeLimit), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: limit, Max: limit}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Quarantine(batch, spool.QuarantineUnrepresentable); err != nil {
+			reportFileSizeHelper("quarantine-failed:", err)
+		}
+		t.Fatal("quarantine unexpectedly committed")
+	}
+	path := filepath.Join(t.TempDir(), "records.spool")
+	store := spool.New(path)
+	record := append([]byte("{\"payload\":\""), bytes.Repeat([]byte("x"), 4<<20)...)
+	record = append(record, []byte("\"}\n")...)
+	if err := store.Put(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put([]byte(recordAfter)); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestQuarantineAtFileWriteLimitDoesNotCommit$")
+	cmd.Env = append(os.Environ(), helper+"=1", spoolFileSizePath+"="+path,
+		spoolFileSizeLimit+"=0")
+	out, err := cmd.CombinedOutput()
+	if err == nil || !bytes.Contains(out, []byte("quarantine-failed:")) {
+		t.Fatalf("child did not report a failed quarantine: %v, %s", err, out)
+	}
+	assertSpoolRecords(t, store, string(record), recordAfter)
+	status, err := store.Status()
+	if err != nil || status.QuarantinedRecords != 0 || status.Format != "numbat-spool-v1" {
+		t.Fatalf("failed transaction partially committed: %+v, %v", status, err)
+	}
+	batch, err := store.Peek(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Quarantine(batch, spool.QuarantineUnrepresentable); err != nil {
+		t.Fatalf("recovery after removing file limit: %v", err)
+	}
+	assertSpoolRecords(t, store, recordAfter)
+}

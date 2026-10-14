@@ -184,7 +184,7 @@ func TestBoundedSpoolAcknowledgesOnlyAcceptedRepresentation(t *testing.T) {
 			}))
 			defer server.Close()
 			sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL), io.Discard)
-			if !sent || (err == nil) != accept {
+			if !sent || err != nil {
 				t.Fatalf("sent=%v err=%v accept=%v", sent, err, accept)
 			}
 			pending, err := store.Peek(maxShipBatchBytes)
@@ -197,8 +197,12 @@ func TestBoundedSpoolAcknowledgesOnlyAcceptedRepresentation(t *testing.T) {
 			}
 			if !accept {
 				if attempts.Load() != 6 || represented.Load() != 5 || count != 0 || size != 0 ||
-					len(pending.Records) != 1 || !bytes.Equal(pending.Records[0], original) {
+					len(pending.Records) != 0 {
 					t.Fatal("rejected representation lost the original or exceeded retry bound")
+				}
+				status, err := store.Status()
+				if err != nil || status.QuarantinedRecords != 1 || status.QuarantinedBytes != uint64(len(original)) {
+					t.Fatalf("quarantine status: %+v, %v", status, err)
 				}
 				return
 			}

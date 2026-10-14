@@ -149,7 +149,7 @@ func TestShipSpoolBatchSplits413AndAcknowledgesOnlyAcceptedPrefix(t *testing.T) 
 	}
 }
 
-func TestShipSpoolBatchRetainsSingleRecordRejectedWith413(t *testing.T) {
+func TestShipSpoolBatchQuarantinesSingleRecordRejectedWith413(t *testing.T) {
 	store := spool.New(filepath.Join(t.TempDir(), "records.spool"))
 	first, second := []byte("{\"n\":1}\n"), []byte("{\"n\":2}\n")
 	for _, record := range [][]byte{first, second} {
@@ -164,10 +164,14 @@ func TestShipSpoolBatchRetainsSingleRecordRejectedWith413(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL), io.Discard); !sent || err == nil || !strings.Contains(err.Error(), "original remains queued") {
-		t.Fatalf("rejected delivery = (%v, %v), want retained-record error", sent, err)
+	if sent, err := shipSpoolBatch(context.Background(), store, maxShipBatchBytes, newSinkFactory(server.URL), io.Discard); !sent || err != nil {
+		t.Fatalf("quarantine progress = (%v, %v)", sent, err)
 	}
-	assertQueuedRecords(t, store, first, second)
+	assertQueuedRecords(t, store, second)
+	status, err := store.Status()
+	if err != nil || status.QuarantinedRecords != 1 || status.QuarantinedBytes != uint64(len(first)) {
+		t.Fatalf("quarantined original = %+v, %v", status, err)
+	}
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("requests = %d, want full batch then singleton", got)
 	}

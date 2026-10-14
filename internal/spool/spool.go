@@ -31,14 +31,18 @@ var (
 	// operation timeout. A long-running shipper can retry this error.
 	ErrBusy     = bolterrors.ErrTimeout
 	errNotSpool = errors.New("not a numbat spool")
+	// ErrRetentionFull means an accepted representation could not be retained.
+	ErrRetentionFull = errors.New("retained original capacity exhausted")
 
 	metadataBucket   = []byte("numbat.spool.meta")
 	recordsBucket    = []byte("numbat.spool.records")
 	retainedBucket   = []byte("numbat.spool.retained-originals")
 	markerKey        = []byte("format")
 	markerValue      = []byte("numbat-spool-v1")
+	quarantineFormat = []byte("numbat-spool-v2")
 	generationKey    = []byte("generation")
 	ackedKey         = []byte("acked-through")
+	settledKey       = []byte("settled-through")
 	retainedCountKey = []byte("retained-count")
 	retainedBytesKey = []byte("retained-bytes")
 )
@@ -54,6 +58,7 @@ type Batch struct {
 	Records    [][]byte
 	generation [generationBytes]byte
 	boundary   [recordIDBytes]byte
+	firstID    uint64
 	lastID     uint64
 	fileInfo   os.FileInfo
 }
@@ -108,6 +113,9 @@ func (store Store) Peek(maxBytes int) (batch Batch, err error) {
 					break
 				}
 				batch.Records = append(batch.Records, bytes.Clone(record))
+				if batch.firstID == 0 {
+					batch.firstID = binary.BigEndian.Uint64(k)
+				}
 				copy(batch.boundary[:], value[:recordIDBytes])
 				batch.lastID = binary.BigEndian.Uint64(k)
 				size += len(record)
@@ -135,7 +143,15 @@ func (store Store) Ack(batch Batch) error {
 			if !bytes.Equal(metadata.Get(generationKey), batch.generation[:]) {
 				return errors.New("acknowledgment belongs to a replaced store")
 			}
-			acked := binary.BigEndian.Uint64(metadata.Get(ackedKey))
+			// A batch observed before quarantine must never turn a quarantined
+			// record into a successful delivery on a stale acknowledgment.
+			if quarantined := tx.Bucket(quarantineBucket); quarantined != nil {
+				k, _ := quarantined.Cursor().Seek(key(batch.firstID))
+				if k != nil && binary.BigEndian.Uint64(k) <= batch.lastID {
+					return errors.New("acknowledgment includes a quarantined record")
+				}
+			}
+			acked := binary.BigEndian.Uint64(metadata.Get(progressKey(metadata)))
 			if acked >= batch.lastID {
 				return nil
 			}
@@ -158,7 +174,7 @@ func (store Store) Ack(batch Batch) error {
 					return err
 				}
 			}
-			return metadata.Put(ackedKey, key(batch.lastID))
+			return metadata.Put(progressKey(metadata), key(batch.lastID))
 		})
 	})
 }
@@ -181,7 +197,7 @@ func (store Store) AckRepresented(batch Batch) (count, totalBytes uint64, err er
 			if !bytes.Equal(metadata.Get(generationKey), batch.generation[:]) {
 				return errors.New("acknowledgment belongs to a replaced store")
 			}
-			if binary.BigEndian.Uint64(metadata.Get(ackedKey)) >= batch.lastID {
+			if binary.BigEndian.Uint64(metadata.Get(progressKey(metadata))) >= batch.lastID {
 				return errors.New("represented record already acknowledged without retention")
 			}
 			value := records.Get(key(batch.lastID))
@@ -190,7 +206,7 @@ func (store Store) AckRepresented(batch Batch) (count, totalBytes uint64, err er
 			}
 			count, totalBytes = retainedTotals(metadata)
 			if count >= maxRetainedRecords || uint64(len(batch.Records[0])) > maxRetainedBytes-totalBytes {
-				return fmt.Errorf("retained original limit reached: %d records, %d bytes", count, totalBytes)
+				return fmt.Errorf("%w: %d records, %d bytes", ErrRetentionFull, count, totalBytes)
 			}
 			retained, err := tx.CreateBucketIfNotExists(retainedBucket)
 			if err != nil {
@@ -210,7 +226,7 @@ func (store Store) AckRepresented(batch Batch) (count, totalBytes uint64, err er
 			if err := records.Delete(key(batch.lastID)); err != nil {
 				return err
 			}
-			return metadata.Put(ackedKey, key(batch.lastID))
+			return metadata.Put(progressKey(metadata), key(batch.lastID))
 		})
 	})
 	return count, totalBytes, err
@@ -239,7 +255,7 @@ func (store Store) CheckRetain(recordBytes int) error {
 		return err
 	}
 	if count >= maxRetainedRecords || uint64(recordBytes) > maxRetainedBytes-bytes {
-		return fmt.Errorf("spool: retained original limit reached: %d records, %d bytes", count, bytes)
+		return fmt.Errorf("spool: %w: %d records, %d bytes", ErrRetentionFull, count, bytes)
 	}
 	return nil
 }
@@ -252,6 +268,15 @@ func retainedTotals(metadata *bolt.Bucket) (count, bytes uint64) {
 		bytes = binary.BigEndian.Uint64(raw)
 	}
 	return count, bytes
+}
+
+// v2 distinguishes local disposition from remote acceptance: settled-through
+// includes quarantined records; acked-through is only used by v1 stores.
+func progressKey(metadata *bolt.Bucket) []byte {
+	if bytes.Equal(metadata.Get(markerKey), quarantineFormat) {
+		return settledKey
+	}
+	return ackedKey
 }
 
 func (store Store) withDB(fn func(*bolt.DB, os.FileInfo) error) (err error) {
@@ -420,13 +445,18 @@ func initializeStore(tx *bolt.Tx) error {
 func validateStore(tx *bolt.Tx) error {
 	metadata := tx.Bucket(metadataBucket)
 	records := tx.Bucket(recordsBucket)
-	if metadata == nil || records == nil || !bytes.Equal(metadata.Get(markerKey), markerValue) {
+	if metadata == nil || records == nil {
 		return errNotSpool
 	}
-	if len(metadata.Get(generationKey)) != generationBytes || len(metadata.Get(ackedKey)) != 8 {
+	v2 := bytes.Equal(metadata.Get(markerKey), quarantineFormat)
+	if !v2 && !bytes.Equal(metadata.Get(markerKey), markerValue) {
+		return errNotSpool
+	}
+	if len(metadata.Get(generationKey)) != generationBytes || len(metadata.Get(progressKey(metadata))) != 8 ||
+		(v2 && metadata.Get(ackedKey) != nil) {
 		return fmt.Errorf("%w: invalid metadata", errNotSpool)
 	}
-	if binary.BigEndian.Uint64(metadata.Get(ackedKey)) > records.Sequence() {
+	if binary.BigEndian.Uint64(metadata.Get(progressKey(metadata))) > records.Sequence() {
 		return fmt.Errorf("%w: invalid acknowledged sequence", errNotSpool)
 	}
 	if (len(metadata.Get(retainedCountKey)) != 0 && len(metadata.Get(retainedCountKey)) != 8) ||
@@ -438,8 +468,12 @@ func validateStore(tx *bolt.Tx) error {
 		(retainedCount > 0 && tx.Bucket(retainedBucket) == nil) {
 		return fmt.Errorf("%w: invalid retained originals", errNotSpool)
 	}
+	if err := validateQuarantine(tx, v2); err != nil {
+		return fmt.Errorf("%w: %v", errNotSpool, err)
+	}
 	return tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
-		if bytes.Equal(name, metadataBucket) || bytes.Equal(name, recordsBucket) || bytes.Equal(name, retainedBucket) {
+		if bytes.Equal(name, metadataBucket) || bytes.Equal(name, recordsBucket) || bytes.Equal(name, retainedBucket) ||
+			(v2 && bytes.Equal(name, quarantineBucket)) {
 			return nil
 		}
 		return fmt.Errorf("%w: unexpected bucket %q", errNotSpool, name)

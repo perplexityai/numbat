@@ -80,8 +80,10 @@ numbat ship \
 ```
 
 The hook commits complete records without waiting for the network. `ship`
-removes records only after successful HTTP delivery. An endpoint outage keeps
-the undelivered records. numbat does not delete those records to manage storage.
+removes accepted records after successful HTTP delivery. An endpoint outage keeps
+the undelivered records. Permanently unshippable individual records move atomically
+to a separate local quarantine before later records proceed; they are not marked
+delivered. numbat does not delete these originals to manage storage.
 Supervise the `ship` process and monitor the spool filesystem.
 
 `ship --input-file` remains available for legacy file output. Prefer an
@@ -89,9 +91,14 @@ existing fleet forwarder when one is already available. Representable event
 commands, full prompt/message content, and finding observed commands receive
 bounded, marked delivery after HTTP `413`; exact file originals remain subject
 to file retention. Spool originals accepted in bounded form remain in the local
-retained bucket until an operator archives them. Unrepresentable valid records
-remain pending and block later records. See [cli.md](cli.md#ship) for read-only
-export, capacity recovery, and the old-spool rollback boundary. Do not combine
+retained bucket until an operator archives them. Unrepresentable valid legacy
+records remain pending and block later records. Spool records that exhaust bounded
+delivery, or cannot reserve retained-original capacity, are quarantined.
+Quarantine is bounded; when it cannot preserve the original, delivery pauses.
+Monitor `numbat ship --spool-file PATH --spool-status` through an independent
+health channel: exit `1` flags outstanding quarantine or full retained capacity,
+or a failed status read. See [cli.md](cli.md#ship) for read-only export, separate
+quarantine retry, capacity recovery, and the v2 spool rollback boundary. Do not combine
 direct HTTP with a later `ship` path unless the receiver expects a second copy.
 
 On Linux and Windows, every `ship` restart after a rotation has been drained
