@@ -94,6 +94,12 @@ remain pending and block later records. See [cli.md](cli.md#ship) for read-only
 export, capacity recovery, and the old-spool rollback boundary. Do not combine
 direct HTTP with a later `ship` path unless the receiver expects a second copy.
 
+On Linux and Windows, every `ship` restart after a rotation has been drained
+re-delivers the active file and retained rotations, even without new input.
+These platforms have no stable filesystem volume identity in the checkpoint;
+replay is preferred to trusting potentially reused file identities. Allow for
+the repeated traffic and deduplicate stable record identifiers at the receiver.
+
 ## Choose an install scope
 
 Hook scope answers two questions: who controls the configuration, and which
