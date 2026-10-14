@@ -522,6 +522,14 @@ Changing the endpoint or losing valid legacy state replays retained records.
 An ambiguous HTTP result can also cause a repeated spool batch. Receivers must
 tolerate duplicates and use stable record identifiers where present.
 
+Legacy checkpoints verify the committed record prefix when reopening an
+input. Their drained-file cache retains at most 1,024 identities. At capacity
+it prunes identities whose retained files are gone. If the live cache is still
+full, shipping stops with a diagnostic until already-drained segments are
+archived; it does not skip undelivered input. Without a stable filesystem
+volume identity, restarting discards this cache and replays retained history
+rather than trusting potentially reused file identities.
+
 `ship` never truncates or rotates a legacy input. Retention remains the
 operator's responsibility. A complete malformed line within the 32 MiB read
 bound, such as records glued together by an interrupted append, is logged and

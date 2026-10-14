@@ -547,7 +547,10 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			}
 			if batch.rotated {
 				if cursor.rotationEOFID == batch.fileID && cursor.rotationEOFOffset == cursor.checkpoint.Offset {
-					drained := appendShipFileID(cursor.checkpoint.DrainedFileIDs, batch.drainedID)
+					drained, err := appendShipFileID(inputPath, cursor.checkpoint.DrainedFileIDs, batch.drainedID)
+					if err != nil {
+						return cursor, fmt.Errorf("retain drained input %s: %w", inputPath, err)
+					}
 					nextID, err := nextRotatedShipFileID(inputPath, drained, batch.modTime)
 					if err != nil {
 						return cursor, fmt.Errorf("find next rotated input %s: %w", inputPath, err)
@@ -1033,7 +1036,7 @@ func validShipCheckpoint(cp shipCheckpoint, destination string) bool {
 			return false
 		}
 	}
-	if len(cp.DrainedFileIDs) > 1024 {
+	if len(cp.DrainedFileIDs) > maxShipDrainedFiles {
 		return false
 	}
 	seenFileIDs := make(map[string]struct{}, len(cp.DrainedFileIDs))

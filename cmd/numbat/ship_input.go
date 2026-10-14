@@ -11,10 +11,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const maxShipDrainedFiles = 1024
 
 // resumeOldestUndrainedRotated anchors the cursor to the oldest retained
 // segment after the checkpoint can no longer identify the next input.
@@ -58,11 +61,55 @@ func isShipRecordFile(f *os.File) (bool, error) {
 	return true, nil
 }
 
-func appendShipFileID(ids []string, id string) []string {
+func appendShipFileID(inputPath string, ids []string, id string) ([]string, error) {
 	if id == "" || containsShipFileID(ids, id) {
-		return append([]string(nil), ids...)
+		return append([]string(nil), ids...), nil
 	}
-	return append(append([]string(nil), ids...), id)
+	if len(ids) >= maxShipDrainedFiles {
+		var err error
+		ids, err = retainedShipFileIDs(inputPath, ids)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) >= maxShipDrainedFiles {
+			return nil, fmt.Errorf("retained rotation cache exceeds %d files; archive drained segments before continuing", maxShipDrainedFiles)
+		}
+	}
+	return append(append([]string(nil), ids...), id), nil
+}
+
+// Prune only identities whose retained files are gone. Evicting a still-live
+// file could cycle through equal-timestamp rotations and starve active input.
+func retainedShipFileIDs(inputPath string, ids []string) ([]string, error) {
+	dir, base := filepath.Dir(inputPath), filepath.Base(inputPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var retained []string
+	for _, entry := range entries {
+		if entry.Name() == base || !strings.HasPrefix(entry.Name(), base) ||
+			entry.IsDir() || entry.Type()&os.ModeSymlink != 0 ||
+			(entry.Type() != 0 && !entry.Type().IsRegular()) {
+			continue
+		}
+		file, err := openShipInput(filepath.Join(dir, entry.Name()))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		id, err := shipDrainedFileID(file)
+		_ = file.Close()
+		if err != nil {
+			return nil, err
+		}
+		if containsShipFileID(ids, id) && !containsShipFileID(retained, id) {
+			retained = append(retained, id)
+		}
+	}
+	return retained, nil
 }
 
 func containsShipFileID(ids []string, id string) bool {
