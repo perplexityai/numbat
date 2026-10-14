@@ -495,6 +495,13 @@ to the active file. Keep rotations uncompressed until the state reaches the new
 active file; a segment deleted during an outage cannot be recovered.
 Changing the endpoint or losing valid state replays retained records. Receivers
 must tolerate duplicates, using stable record identifiers where present.
+Checkpoints verify the committed record prefix when reopening an input.
+The drained-file cache retains at most 1,024 identities. At capacity it prunes
+identities whose retained files are gone. If the live cache is still full,
+shipping stops with a diagnostic until already-drained segments are archived;
+it does not skip undelivered input. Without a stable filesystem
+volume identity, restarting discards this cache and replays retained history
+rather than trusting potentially reused file identities.
 
 Use `--max-batch-bytes 900000` for a receiver or proxy configured with a 1 MB
 request limit, leaving room for headers and other request overhead. For
