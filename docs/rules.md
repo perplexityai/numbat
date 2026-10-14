@@ -202,16 +202,23 @@ uses `0`, and `tags` uses an empty list.
 | `event.exit_code` | int|null | `event.file_path` | string |
 | `event.git_branch` | string | `event.mcp_server` | string |
 | `event.mcp_tool` | string | `event.model` | string |
-| `event.model_provider` | string | `event.project_path` | string |
-| `event.tags` | list(string) | `event.session_id` | string |
-| `event.source_agent` | string | `event.source_type` | string |
-| `event.sub_agent` | string | `event.timestamp` | string |
-| `event.tool_call_id` | string | `event.tool_name` | string |
-| `event.url` | string |  |  |
+| `event.model_provider` | string | `event.parent_session_id` | string |
+| `event.project_path` | string | `event.session_id` | string |
+| `event.session_tree_id` | string | `event.source_agent` | string |
+| `event.source_type` | string | `event.sub_agent` | string |
+| `event.sub_agent_id` | string | `event.tags` | list(string) |
+| `event.timestamp` | string | `event.tool_call_id` | string |
+| `event.tool_name` | string | `event.url` | string |
 
-The [event schema](schema/v0.3.0/event-record.schema.json) defines closed values
+The [event schema](schema/v0.4.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and
 `confidence`.
+
+For sub-agent rules, use `session_id` for the active thread and
+`sub_agent_id` for stable child identity. `sub_agent` is display context and
+may be shared by concurrent children. Tree and parent joins are available only
+when the source reports `session_tree_id` or `parent_session_id`; see the [event
+model](event-model.md#session-and-sub-agent-identity).
 
 Use `event.exit_code != null`, not `has(event.exit_code)`. The key is always
 present even when the value is null.
@@ -221,9 +228,10 @@ syntax such as `event.command`.
 
 ### Event-type fields
 
-Context fields such as source, timestamp, project, session, actor, model,
-branch, entrypoint, sub-agent, preview, tags, and confidence are valid on every
-event type. Full `content` fields are valid only on conversation events.
+Context fields such as source, timestamp, project, session, parent/tree,
+actor, model, branch, entrypoint, sub-agent, preview, tags, and confidence are
+valid on every event type. Full `content` fields are valid only on conversation
+events.
 Non-empty action fields follow this compatibility table:
 
 | Event type | Allowed action fields |
@@ -494,7 +502,7 @@ numbat rules test \
 
 Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
-See the [event schema](schema/v0.3.0/event-record.schema.json) for required
+See the [event schema](schema/v0.4.0/event-record.schema.json) for required
 fields.
 
 ## Sequence rules

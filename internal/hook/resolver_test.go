@@ -28,6 +28,33 @@ func TestResolverTimestamp(t *testing.T) {
 	}
 }
 
+func TestResolverCodexSubagentIdentity(t *testing.T) {
+	r := newResolver(AgentCodex, map[string]any{
+		"session_id": "tree-1",
+		"agent_id":   "child-1",
+		"agent_type": "default",
+	})
+	if r.sessionID() != "child-1" || r.sessionTreeID() != "tree-1" || r.subAgentID() != "child-1" || r.subAgent() != "default" {
+		t.Fatalf("Codex context = session %q tree %q id %q role %q", r.sessionID(), r.sessionTreeID(), r.subAgentID(), r.subAgent())
+	}
+
+	main := newResolver(AgentCodex, map[string]any{
+		"session_id": "main-1",
+		"agent_id":   "main-1",
+	})
+	if main.sessionID() != "main-1" || main.sessionTreeID() != "" || main.subAgentID() != "" || main.subAgent() != "" {
+		t.Fatalf("Codex main context = session %q tree %q id %q role %q", main.sessionID(), main.sessionTreeID(), main.subAgentID(), main.subAgent())
+	}
+
+	claude := newResolver(AgentClaude, map[string]any{
+		"session_id": "session-1",
+		"agent_id":   "legacy-child",
+	})
+	if claude.sessionID() != "session-1" || claude.sessionTreeID() != "" || claude.subAgentID() != "" || claude.subAgent() != "legacy-child" {
+		t.Fatalf("non-Codex semantics changed: session %q tree %q id %q role %q", claude.sessionID(), claude.sessionTreeID(), claude.subAgentID(), claude.subAgent())
+	}
+}
+
 // TestResolverIntFromRejectsFractional is the Regression: a
 // fractional exit_code / duration_ms / diff_bytes must NOT be truncated into a
 // fabricated integer. A fractional value yields ok=false (field absent); an

@@ -82,9 +82,12 @@ type EnforceDecision struct {
 	SourceAgent     string
 	SourceType      string
 	SessionID       string
+	SessionTreeID   string
+	ParentSessionID string
 	Model           string
 	ModelProvider   string
 	SubAgent        string
+	SubAgentID      string
 	ToolName        string
 	ToolCallID      string
 }
@@ -266,9 +269,12 @@ func (d *EnforceDecision) recordMatch(ev model.Event, r rule.Rule, findingID str
 	d.SourceAgent = ev.SourceAgent
 	d.SourceType = ev.SourceType
 	d.SessionID = ev.SessionID
+	d.SessionTreeID = ev.SessionTreeID
+	d.ParentSessionID = ev.ParentSessionID
 	d.Model = ev.Model
 	d.ModelProvider = ev.ModelProvider
 	d.SubAgent = ev.SubAgent
+	d.SubAgentID = ev.SubAgentID
 	d.ToolName = ev.ToolName
 	d.ToolCallID = ev.ToolCallID
 }

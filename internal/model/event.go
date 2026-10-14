@@ -11,9 +11,9 @@ import (
 	"strings"
 )
 
-// SchemaVersion is the version of the event and finding schema. It is stamped
+// SchemaVersion is the version of the emitted record schema. It is stamped
 // on every emitted record so receivers can route and migrate deterministically.
-const SchemaVersion = "0.3.0"
+const SchemaVersion = "0.4.0"
 
 // ToolName is the identifier emitted in records and reports.
 const ToolName = "numbat"
@@ -236,7 +236,14 @@ type Event struct {
 	// them with a deterministic fallback rather than discarding the event.
 	Timestamp   string `json:"timestamp,omitempty"`
 	ProjectPath string `json:"project_path,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
+
+	// SessionID identifies the active session or thread. SessionTreeID is a
+	// separate source-provided id shared by related threads, and ParentSessionID
+	// is the explicitly reported immediate parent. Neither relationship is
+	// inferred when the source omits it.
+	SessionID       string `json:"session_id,omitempty"`
+	SessionTreeID   string `json:"session_tree_id,omitempty"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 
 	Actor     string    `json:"actor,omitempty"`
 	EventType EventType `json:"event_type"`
@@ -288,11 +295,12 @@ type Event struct {
 	Entrypoint string `json:"entrypoint,omitempty"`
 	CLIVersion string `json:"cli_version,omitempty"`
 
-	// SubAgent names the active named subagent/agent persona when the source
-	// records one. It is the typed home for config.agent markers and live
-	// subagent session boundaries, so a reviewer can pivot on the persona without
-	// parsing ContentPreview.
-	SubAgent string `json:"sub_agent,omitempty"`
+	// SubAgent is source-provided display context such as a role, profile, or
+	// path; it is not a stable identity contract. SubAgentID is the source's
+	// stable opaque child identity and may equal SessionID when that child thread
+	// is active.
+	SubAgent   string `json:"sub_agent,omitempty"`
+	SubAgentID string `json:"sub_agent_id,omitempty"`
 
 	// ContentPreview is a bounded observed excerpt, redacted on every output path.
 	ContentPreview          string `json:"content_preview,omitempty"`
@@ -340,6 +348,8 @@ func (e Event) celView() map[string]any {
 		"timestamp":                 e.Timestamp,
 		"project_path":              e.ProjectPath,
 		"session_id":                e.SessionID,
+		"session_tree_id":           e.SessionTreeID,
+		"parent_session_id":         e.ParentSessionID,
 		"actor":                     e.Actor,
 		"event_type":                string(e.EventType),
 		"tool_name":                 e.ToolName,
@@ -363,6 +373,7 @@ func (e Event) celView() map[string]any {
 		"entrypoint":                e.Entrypoint,
 		"cli_version":               e.CLIVersion,
 		"sub_agent":                 e.SubAgent,
+		"sub_agent_id":              e.SubAgentID,
 		"content_preview":           e.ContentPreview,
 		"content_preview_truncated": e.ContentPreviewTruncated,
 		"content":                   e.contentForAnalysis(),

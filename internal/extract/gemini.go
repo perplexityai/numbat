@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactGeminiChat is the Evidence.ArtifactType for Gemini CLI session
@@ -398,6 +399,7 @@ func classifyGeminiTool(ev *model.Event, fc *geminiFunctionCall) bool {
 		// MCP-qualified name splits into the typed server/tool fields so a rule or
 		// SIEM can pivot without re-parsing the flattened name.
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(fc.Args)
 		if server, tool, ok := splitMCPName(fc.Name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
 		}

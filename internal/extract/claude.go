@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactClaudeJSONL is the Evidence.ArtifactType for Claude Code session
@@ -717,6 +718,7 @@ func classifyTool(ev *model.Event, name string, input map[string]json.RawMessage
 		// typed server/tool fields so a rule or SIEM can pivot on either without
 		// re-parsing the flattened name.
 		ev.EventType = model.EventToolCall
+		ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(input)
 		if server, tool, ok := splitMCPName(name); ok {
 			ev.MCPServer, ev.MCPTool = server, tool
 		}

@@ -21,19 +21,22 @@ func sampleMatch() rule.Match {
 			Tags:     []string{"secret_file_read"},
 		},
 		Event: model.Event{
-			EventID:     "u1#1",
-			CaseID:      "case-1",
-			SourceAgent: model.AgentClaudeCode,
-			SourceType:  model.SourceArtifact,
-			Timestamp:   "2026-06-02T10:00:01Z",
-			SessionID:   "s-1",
-			Model:       "claude-sonnet-4",
-			SubAgent:    "code-reviewer",
-			ProjectPath: "/home/dev/secret-proj",
-			EventType:   model.EventFileRead,
-			FilePath:    "/home/dev/secret-proj/.env",
-			Tags:        []string{"agent_activity"},
-			Confidence:  model.ConfidenceHigh,
+			EventID:         "u1#1",
+			CaseID:          "case-1",
+			SourceAgent:     model.AgentClaudeCode,
+			SourceType:      model.SourceArtifact,
+			Timestamp:       "2026-06-02T10:00:01Z",
+			SessionID:       "child-1",
+			SessionTreeID:   "tree-1",
+			ParentSessionID: "parent-1",
+			Model:           "claude-sonnet-4",
+			SubAgent:        "code-reviewer",
+			SubAgentID:      "child-1",
+			ProjectPath:     "/home/dev/secret-proj",
+			EventType:       model.EventFileRead,
+			FilePath:        "/home/dev/secret-proj/.env",
+			Tags:            []string{"agent_activity"},
+			Confidence:      model.ConfidenceHigh,
 			Evidence: model.Evidence{
 				ArtifactType: "claude_jsonl",
 				LocalPath:    "/cases/session.jsonl",
@@ -55,10 +58,10 @@ func TestFromMatchShape(t *testing.T) {
 	if f.RuleID != "secrets.agent_read_env" || f.RuleVersion != "1.0" || f.Severity != model.SeverityHigh {
 		t.Errorf("rule fields wrong: %+v", f)
 	}
-	if f.CaseID != "case-1" || f.SessionID != "s-1" || f.SourceAgent != model.AgentClaudeCode || f.SourceType != model.SourceArtifact {
+	if f.CaseID != "case-1" || f.SessionID != "child-1" || f.SessionTreeID != "tree-1" || f.ParentSessionID != "parent-1" || f.SourceAgent != model.AgentClaudeCode || f.SourceType != model.SourceArtifact {
 		t.Errorf("identity fields wrong: %+v", f)
 	}
-	if f.Model != "claude-sonnet-4" || f.SubAgent != "code-reviewer" {
+	if f.Model != "claude-sonnet-4" || f.SubAgent != "code-reviewer" || f.SubAgentID != "child-1" {
 		t.Errorf("context fields wrong: %+v", f)
 	}
 	if f.Timestamp != "2026-06-02T10:00:01Z" {

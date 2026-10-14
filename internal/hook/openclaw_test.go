@@ -168,7 +168,7 @@ func TestMapOpenClawTools(t *testing.T) {
 			name: "browser navigation",
 			lc:   LifecyclePreTool,
 			payload: map[string]any{
-				"tool_name": "browser", "tool_input": map[string]any{"targetUrl": "https://example.com/path"},
+				"tool_name": "browser", "tool_input": map[string]any{"action": "navigate", "targetUrl": "https://example.com/path"},
 			},
 			want: model.EventNetworkIndicator, value: "https://example.com/path",
 		},
