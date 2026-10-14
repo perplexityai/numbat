@@ -21,8 +21,10 @@ func TestShipOversizedRecordDoesNotWedgeDrain(t *testing.T) {
 	rec := func(id string) string {
 		return fmt.Sprintf(`{"record_type":"event","event_id":%q}`, id) + "\n"
 	}
-	oversized := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","command":%q}`,
-		strings.Repeat("x", maxShipRecordBytes+1024)) + "\n"
+	oversized := string(shipTestEnvelope(t, map[string]any{
+		"record_type": "event", "event_type": "command.exec", "event_id": "oversized",
+		"evidence": map[string]string{"artifact_type": "hook"}, "command": strings.Repeat("x", maxShipRecordBytes+1024),
+	}))
 	appendRaw(t, inputPath, []byte(rec("before-1")+rec("before-2")+oversized+rec("after-1")+rec("after-2")))
 	info, err := os.Stat(inputPath)
 	if err != nil {
@@ -90,7 +92,10 @@ func TestShipOversizedRecordPersistsTailGuard(t *testing.T) {
 	inputPath := filepath.Join(dir, "records.ndjson")
 	statePath := filepath.Join(dir, "records.ship-state")
 
-	record := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","command":%q}`, strings.Repeat("x", maxShipRecordBytes+1024)) + "\n"
+	record := string(shipTestEnvelope(t, map[string]any{
+		"record_type": "event", "event_type": "command.exec", "event_id": "oversized",
+		"evidence": map[string]string{"artifact_type": "hook"}, "command": strings.Repeat("x", maxShipRecordBytes+1024),
+	}))
 	appendRaw(t, inputPath, []byte(record))
 
 	sink := newFlakySink()
@@ -331,8 +336,10 @@ func TestShipBoundedNoticeRoutedToWriter(t *testing.T) {
 	rec := func(id string) string {
 		return fmt.Sprintf(`{"record_type":"event","event_id":%q}`, id) + "\n"
 	}
-	oversized := fmt.Sprintf(`{"record_type":"event","event_id":"oversized","command":%q}`,
-		strings.Repeat("x", maxShipRecordBytes+1024)) + "\n"
+	oversized := string(shipTestEnvelope(t, map[string]any{
+		"record_type": "event", "event_type": "command.exec", "event_id": "oversized",
+		"evidence": map[string]string{"artifact_type": "hook"}, "command": strings.Repeat("x", maxShipRecordBytes+1024),
+	}))
 	appendRaw(t, inputPath, []byte(rec("before")+oversized+rec("after")))
 
 	sink := newFlakySink()

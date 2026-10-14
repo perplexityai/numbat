@@ -11,8 +11,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
 )
 
@@ -69,9 +71,21 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oversized source: %w", err)
 	}
+	version, err := requiredShipString(fields, "schema_version")
+	if err != nil {
+		return nil, err
+	}
+	switch version {
+	case "0.2.0", "0.3.0", "0.4.0":
+	default:
+		return nil, errors.New("oversized source has unsupported schema_version")
+	}
 	var recordType string
 	if err := json.Unmarshal(fields["record_type"], &recordType); err != nil {
 		return nil, errors.New("oversized source has no record_type")
+	}
+	if err := validateBoundedShipEnvelope(fields, recordType); err != nil {
+		return nil, err
 	}
 	var field, idField string
 	var contentField bool
@@ -150,16 +164,8 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 				return nil, fmt.Errorf("oversized source evidence: %w", err)
 			}
 		}
-		if raw, present := fields["schema_version"]; present {
-			var schemaVersion string
-			if err := json.Unmarshal(raw, &schemaVersion); err != nil || schemaVersion == "" {
-				return nil, errors.New("oversized event has invalid schema_version")
-			}
-			if schemaVersion == "0.4.0" {
-				if _, err := requiredShipString(evidence, "artifact_type"); err != nil {
-					return nil, err
-				}
-			}
+		if _, err := requiredShipString(evidence, "artifact_type"); err != nil {
+			return nil, err
 		}
 		if _, collision := evidence["transport"]; collision {
 			return nil, errors.New("oversized source already has evidence.transport")
@@ -170,6 +176,15 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 		var refs []json.RawMessage
 		if err := json.Unmarshal(fields["evidence_refs"], &refs); err != nil || len(refs) == 0 {
 			return nil, errors.New("oversized finding has no evidence_refs")
+		}
+		for _, raw := range refs {
+			evidence, err := uniqueJSONObject(raw)
+			if err != nil {
+				return nil, errors.New("oversized finding has invalid evidence_refs")
+			}
+			if _, err := requiredShipString(evidence, "artifact_type"); err != nil {
+				return nil, err
+			}
 		}
 		var first map[string]json.RawMessage
 		first, err = uniqueJSONObject(refs[0])
@@ -206,6 +221,9 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 	if contentField {
 		fields["content_truncated"] = json.RawMessage("true")
 	}
+	// Only the shortened representation uses this wire version. The original
+	// remains byte-identical for acknowledgment, hashing, retention and export.
+	fields["schema_version"] = json.RawMessage(`"0.5.0"`)
 	bounded, err := json.Marshal(fields)
 	if err != nil {
 		return nil, err
@@ -215,6 +233,80 @@ func boundedShipRecord(original []byte, prefixBytes int) ([]byte, error) {
 		return nil, fmt.Errorf("oversized %s still exceeds %d-byte bounded transport limit: %w", recordType, maxBoundedShipRecordBytes, errBoundedRecordTooLarge)
 	}
 	return bounded, nil
+}
+
+// Validate the required envelope before assigning a new representation version.
+// Missing identity or provenance is never supplied by the shipper.
+func validateBoundedShipEnvelope(fields map[string]json.RawMessage, recordType string) error {
+	for _, field := range []struct {
+		key   string
+		valid func(string) bool
+	}{
+		{"source_agent", model.IsValidSourceAgent},
+		{"source_type", model.IsValidSourceType},
+		{"confidence", model.IsValidConfidence},
+	} {
+		value, err := requiredShipString(fields, field.key)
+		if err != nil || !field.valid(value) {
+			return fmt.Errorf("oversized source has invalid %s", field.key)
+		}
+	}
+	if _, err := requiredShipString(fields, "run_id"); err != nil {
+		return err
+	}
+	endpoint, err := uniqueJSONObject(fields["endpoint"])
+	if err != nil {
+		return errors.New("oversized source has invalid endpoint")
+	}
+	for _, key := range []string{"hostname", "os", "arch", "username", "uid"} {
+		var value *string
+		if err := json.Unmarshal(endpoint[key], &value); err != nil || value == nil ||
+			((key == "os" || key == "arch") && *value == "") {
+			return fmt.Errorf("oversized source endpoint has invalid %s", key)
+		}
+	}
+	if recordType == "event" {
+		eventType, err := requiredShipString(fields, "event_type")
+		if err != nil || !model.IsValidEventType(model.EventType(eventType)) {
+			return errors.New("oversized source has invalid event_type")
+		}
+		return nil
+	}
+	if recordType != "finding" {
+		return fmt.Errorf("oversized %q record cannot be represented without changing identity", recordType)
+	}
+	for _, key := range []string{"rule_id", "rule_version", "title"} {
+		if _, err := requiredShipString(fields, key); err != nil {
+			return err
+		}
+	}
+	detectedAt, err := requiredShipString(fields, "detected_at")
+	if err != nil {
+		return err
+	}
+	if _, err := time.Parse(time.RFC3339Nano, detectedAt); err != nil {
+		return errors.New("oversized finding has invalid detected_at")
+	}
+	severity, err := requiredShipString(fields, "severity")
+	if err != nil || !model.IsValidSeverity(severity) {
+		return errors.New("oversized finding has invalid severity")
+	}
+	var redacted *bool
+	if err := json.Unmarshal(fields["redacted"], &redacted); err != nil || redacted == nil {
+		return errors.New("oversized finding has invalid redacted")
+	}
+	var ids []string
+	if err := json.Unmarshal(fields["cited_event_ids"], &ids); err != nil || len(ids) == 0 {
+		return errors.New("oversized finding has invalid cited_event_ids")
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			return errors.New("oversized finding has invalid cited_event_ids")
+		}
+		seen[id] = true
+	}
+	return nil
 }
 
 func requiredShipString(fields map[string]json.RawMessage, key string) (string, error) {

@@ -546,6 +546,13 @@ If no representation is accepted, the original remains pending and blocks later
 records. A spool retains the exact original after a bounded representation is
 accepted, in addition to acknowledging its FIFO position.
 
+Bounded representations use `schema_version: "0.5.0"`; unchanged records and
+retained originals keep their original version. Receivers must route this
+mixed-version stream and support the [bounded transport schema](schema/v0.5.0/README.md)
+before enabling delivery. The fallback supports versioned `0.2.0`, `0.3.0`,
+and `0.4.0` originals with evidence provenance. Unversioned or unknown-version
+oversized records remain pending rather than receiving invented metadata.
+
 For legacy files, `ship` checkpoints every accepted prefix before attempting
 the remaining suffix. A bounded representation advances the checkpoint using
 the original source bytes, which remain recoverable only while the input and

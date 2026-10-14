@@ -184,6 +184,35 @@ func TestFileSinkAppendSerializesConcurrentWriters(t *testing.T) {
 	}
 }
 
+// A records file left without a trailing newline by an older numbat's short
+// append must be closed off before the next record, so the two never land on the
+// same line and ingestion does not reject the glued result.
+func TestFileSinkAppendRepairsMissingNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.ndjson")
+	fragment := `{"record_type":"event","event_id":"frag"`
+	if err := os.WriteFile(path, []byte(fragment), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewFileSinkAppend(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := `{"record_type":"event","event_id":"whole"}` + "\n"
+	if _, err := sink.Write([]byte(record)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fragment + "\n" + record; string(b) != want {
+		t.Fatalf("file = %q, want the fragment and record on separate lines", b)
+	}
+}
+
 func TestFileSinkTruncatesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.ndjson")

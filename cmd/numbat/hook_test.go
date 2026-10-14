@@ -790,6 +790,54 @@ func TestHookInstallWiresEmitAndOutputFlags(t *testing.T) {
 	}
 }
 
+func TestHookInstallRejectsSpoolStateCollisionBeforeWriting(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	statePath := filepath.Join(home, ".numbat", "state.db")
+	tests := []struct {
+		name      string
+		spoolPath string
+		collision bool
+	}{
+		{name: "default state path", spoolPath: statePath, collision: true},
+		{name: "runtime-expanded state path", spoolPath: "~/.numbat/state.db", collision: true},
+		{name: "separate spool path", spoolPath: filepath.Join(home, ".numbat", "records.spool")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settingsPath := filepath.Join(home, strings.ReplaceAll(tt.name, " ", "-"), "settings.json")
+			original := []byte("{\"permissions\":{\"allow\":[\"Read\"]}}\n")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settingsPath, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, stderr, code := runCLI("hook", "install", "--agent", "claude", "--settings", settingsPath,
+				"--output", "spool", "--spool-file", tt.spoolPath)
+			if !tt.collision {
+				if code != 0 {
+					t.Fatalf("install exit = %d, stderr=%q", code, stderr)
+				}
+				for _, command := range claudeInstalledCommands(t, settingsPath) {
+					if !strings.Contains(command, tt.spoolPath) {
+						t.Fatalf("installed command = %q, want spool path %q", command, tt.spoolPath)
+					}
+				}
+				return
+			}
+			if code != 2 || !strings.Contains(stderr, "--spool-file and --state-db must name different files") {
+				t.Fatalf("install exit = %d, stderr=%q, want state/spool collision error", code, stderr)
+			}
+			if got, err := os.ReadFile(settingsPath); err != nil || !bytes.Equal(got, original) {
+				t.Fatalf("settings after rejected install = %q, err=%v; want original %q", got, err, original)
+			}
+		})
+	}
+}
+
 func TestHookInstallWiresCustomRules(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	rulesDir := filepath.Join(t.TempDir(), "custom rules")
@@ -870,6 +918,51 @@ func TestInstallRuntimeArgsKeepsRuntimeOutputPaths(t *testing.T) {
 		if !slices.Contains(args, path) {
 			t.Errorf("runtime args %q do not preserve %q", args, path)
 		}
+	}
+}
+
+func TestInstallRuntimeArgsRejectsRelativeExpandedOutputPaths(t *testing.T) {
+	t.Setenv("REL", ".numbat")
+	for _, tt := range []struct {
+		name string
+		cfg  installRuntimeConfig
+		flag string
+	}{
+		{name: "file", cfg: installRuntimeConfig{file: "$REL/live.ndjson"}, flag: "--output-file"},
+		{name: "spool", cfg: installRuntimeConfig{modes: []string{"spool"}, spool: "$REL/state.db"}, flag: "--spool-file"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := installRuntimeArgs(tt.cfg, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), tt.flag+" must resolve to an absolute path") {
+				t.Fatalf("installRuntimeArgs error = %v, want absolute-path error for %s", err, tt.flag)
+			}
+		})
+	}
+}
+
+func TestInstallRuntimeArgsFreezesAbsoluteExpandedOutputPaths(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NUMBAT_LOG_ROOT", root)
+	for _, tt := range []struct {
+		name string
+		cfg  installRuntimeConfig
+		want string
+	}{
+		{name: "file", cfg: installRuntimeConfig{file: "$NUMBAT_LOG_ROOT/live.ndjson"}, want: filepath.Join(root, "live.ndjson")},
+		{name: "spool", cfg: installRuntimeConfig{modes: []string{"spool"}, spool: "$NUMBAT_LOG_ROOT/live.spool"}, want: filepath.Join(root, "live.spool")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := installRuntimeArgs(tt.cfg, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(args, "$NUMBAT_LOG_ROOT/live.ndjson") || slices.Contains(args, "$NUMBAT_LOG_ROOT/live.spool") {
+				t.Fatalf("runtime args retain mutable environment path: %q", args)
+			}
+			if !slices.Contains(args, tt.want) {
+				t.Fatalf("runtime args = %q, want destination %q", args, tt.want)
+			}
+		})
 	}
 }
 

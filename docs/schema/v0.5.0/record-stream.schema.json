@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat bounded transport representation",
+  "description": "A shortened event or finding sent by ship. Ordinary records retain their original schema version.",
+  "oneOf": [
+    { "$ref": "event-record.schema.json" },
+    { "$ref": "finding-record.schema.json" }
+  ]
+}
