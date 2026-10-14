@@ -77,6 +77,12 @@ shipper where one already runs. Configure
 the hook with file output only; combining direct HTTP with `ship` sends the same
 records through both paths.
 
+On Linux and Windows, every `ship` restart after a rotation has been drained
+re-delivers the active file and retained rotations, even without new input.
+These platforms have no stable filesystem volume identity in the checkpoint;
+replay is preferred to trusting potentially reused file identities. Allow for
+the repeated traffic and deduplicate stable record identifiers at the receiver.
+
 ## Choose an install scope
 
 Hook scope answers two questions: who controls the configuration, and which

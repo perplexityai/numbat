@@ -500,8 +500,11 @@ The drained-file cache retains at most 1,024 identities. At capacity it prunes
 identities whose retained files are gone. If the live cache is still full,
 shipping stops with a diagnostic until already-drained segments are archived;
 it does not skip undelivered input. Without a stable filesystem
-volume identity, restarting discards this cache and replays retained history
-rather than trusting potentially reused file identities.
+volume identity, restarting discards this cache rather than trusting potentially
+reused file identities. On Linux and Windows, every restart after a rotation
+has been drained re-delivers the active file and retained rotations, even when
+no new records have arrived. Size receiver capacity for this replay as well as
+new records; stable record identifiers support deduplication.
 
 Use `--max-batch-bytes 900000` for a receiver or proxy configured with a 1 MB
 request limit, leaving room for headers and other request overhead. For
