@@ -80,6 +80,8 @@ during rule replay.
 and capture truncation flags. Message byte metadata without `content` is valid
 only when that list includes `content`. Reading a listed body during rule replay
 produces a scoped evaluation error, not an empty-body match.
+The same marker identifies shared tool bodies exported only on the first event
+when one call expands into multiple file events.
 
 On findings, `timestamp` is the matched event's activity time (the completing
 event for a sequence) and may be absent when that event has no valid timestamp.

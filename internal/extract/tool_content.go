@@ -143,7 +143,7 @@ func retainCodexToolContent(events []model.Event, kind string, raw, native json.
 		captured.SetToolInput(source[field])
 	}
 	for i := range events {
-		events[i].CopyToolContentFrom(captured)
+		events[i].CopyToolContentFrom(captured, i == 0)
 	}
 }
 

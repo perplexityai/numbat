@@ -349,25 +349,6 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 		}
 	}()
 
-	// A recorded result is a completion, including an empty or null result.
-	recordAttrs := newAttrs(nil, rec.attributes)
-	if _, ok := recordAttrs.m[attrGenAIToolCallResult]; ok {
-		ev.EventType = model.EventToolResult
-		ev.Actor = model.ActorTool
-		if server, tool, ok := splitMCPName(name); ok {
-			ev.MCPServer, ev.MCPTool = server, tool
-		}
-		if isShellToolName(name) {
-			ev.EventType = model.EventCommandResult
-			ev.Command = firstNonEmpty(a.str(attrCommand, attrProcessCommandLine, attrProcessCommand), toolCommandArg(a))
-			applyCommandResultMetadata(ev, a)
-		}
-		if errored(a, rec) {
-			ev.Tags = append(ev.Tags, model.TagToolError)
-		}
-		return
-	}
-
 	rawURL := a.str(attrURLFull, attrURL, attrHTTPURL)
 	if name == mcpFetchToolName {
 		args := jsonObject(a.str(attrGenAIToolCallArgs, attrToolCallArgs))
@@ -391,6 +372,26 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 
 	if path := a.str(attrFilePath, attrCodePath); path != "" {
 		classifyFile(ev, a, name, path)
+		if errored(a, rec) {
+			ev.Tags = append(ev.Tags, model.TagToolError)
+		}
+		return
+	}
+
+	// Keep typed file/network activity above even when it carries a result.
+	// Other recorded results are completions, including empty or null results.
+	recordAttrs := newAttrs(nil, rec.attributes)
+	if _, ok := recordAttrs.m[attrGenAIToolCallResult]; ok {
+		ev.EventType = model.EventToolResult
+		ev.Actor = model.ActorTool
+		if server, tool, ok := splitMCPName(name); ok {
+			ev.MCPServer, ev.MCPTool = server, tool
+		}
+		if isShellToolName(name) {
+			ev.EventType = model.EventCommandResult
+			ev.Command = firstNonEmpty(a.str(attrCommand, attrProcessCommandLine, attrProcessCommand), toolCommandArg(a))
+			applyCommandResultMetadata(ev, a)
+		}
 		if errored(a, rec) {
 			ev.Tags = append(ev.Tags, model.TagToolError)
 		}

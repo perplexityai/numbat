@@ -81,6 +81,11 @@ structured results and non-text blocks instead of extracting only text previews.
 It does not follow paths or URLs found in content, execute tools, decode image
 content, or retrieve files that an agent chose to offload.
 
+When one call expands into multiple file events, only the first exports the
+shared payload. Other events keep byte counts and `content_omitted`; local rules
+still inspect the original on every event. Use tool-call IDs and evidence
+locations to correlate them.
+
 | Source | Captured representation |
 | --- | --- |
 | Claude artifacts | Tool-use input and result blocks; source-native `toolUseResult` is retained alongside a single attributable result. |

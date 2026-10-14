@@ -313,7 +313,7 @@ type Event struct {
 	ContentBytes     int    `json:"content_bytes,omitempty"`
 	ContentTruncated bool   `json:"content_truncated,omitempty"`
 
-	// ContentOmitted names bodies withheld to fit the record output size limit.
+	// ContentOmitted names bodies withheld from output.
 	// Original byte counts and capture truncation flags remain unchanged.
 	ContentOmitted []string `json:"content_omitted,omitempty"`
 
@@ -328,6 +328,7 @@ type Event struct {
 	ToolResultTruncated bool   `json:"tool_result_truncated,omitempty"`
 	toolInput           toolPayload
 	toolResult          toolPayload
+	sharedToolContent   bool
 
 	analysisContent          string
 	analysisContentBytes     int
@@ -441,6 +442,7 @@ func (e Event) ContentTruncatedForAnalysis() bool { return e.contentTruncatedFor
 func (e Event) WithoutAnalysisContent() Event {
 	e.toolInput = toolPayload{}
 	e.toolResult = toolPayload{}
+	e.sharedToolContent = false
 	e.analysisContent = ""
 	e.analysisContentBytes = 0
 	e.analysisContentTruncated = false

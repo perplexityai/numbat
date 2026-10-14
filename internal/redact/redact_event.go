@@ -23,6 +23,7 @@ import (
 // event sink and the timeline renderer instead of duplicating the field list at
 // each call site.
 func Event(ev model.Event) model.Event {
+	ev = ev.WithoutSharedToolContent()
 	ev.ToolInputBytes, ev.ToolInputTruncated = ev.ToolInputBytesForAnalysis(), ev.ToolInputTruncatedForAnalysis()
 	ev.ToolResultBytes, ev.ToolResultTruncated = ev.ToolResultBytesForAnalysis(), ev.ToolResultTruncatedForAnalysis()
 	ev = ev.WithoutAnalysisContent()
@@ -49,6 +50,7 @@ func Event(ev model.Event) model.Event {
 // body is still redacted, while its byte count describes the mapped text before
 // Numbat's content bound and output redaction were applied.
 func EventWithContent(ev model.Event) model.Event {
+	ev = ev.WithoutSharedToolContent()
 	input, result := ev.ToolInputForAnalysis(), ev.ToolResultForAnalysis()
 	inputBytes, resultBytes := ev.ToolInputBytesForAnalysis(), ev.ToolResultBytesForAnalysis()
 	inputTruncated, resultTruncated := ev.ToolInputTruncatedForAnalysis(), ev.ToolResultTruncatedForAnalysis()
@@ -132,6 +134,7 @@ func payload(text string, truncated bool) (string, bool) {
 // EventWithRawContent is the explicit unredacted event projection. Raw here
 // means source-provided mapped content, not a byte-for-byte source transcript.
 func EventWithRawContent(ev model.Event) model.Event {
+	ev = ev.WithoutSharedToolContent()
 	ev.Content, ev.ContentBytes, ev.ContentTruncated = ev.ContentForAnalysis(), ev.ContentBytesForAnalysis(), ev.ContentTruncatedForAnalysis()
 	ev.ToolInput, ev.ToolInputBytes, ev.ToolInputTruncated = ev.ToolInputForAnalysis(), ev.ToolInputBytesForAnalysis(), ev.ToolInputTruncatedForAnalysis()
 	ev.ToolResult, ev.ToolResultBytes, ev.ToolResultTruncated = ev.ToolResultForAnalysis(), ev.ToolResultBytesForAnalysis(), ev.ToolResultTruncatedForAnalysis()

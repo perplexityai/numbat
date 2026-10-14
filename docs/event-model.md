@@ -108,6 +108,8 @@ JSON payload is omitted with a marker in full mode because it cannot safely be
 redacted structurally. Raw mode can contain a flagged incomplete JSON prefix.
 `--content-scope messages` omits tool bodies even in full/raw mode, preserving
 their byte counts and actual truncation flags without changing local rule input.
+`content_omitted` names bodies withheld by the output limit or exported only on
+the first event of a multi-file call; their capture metadata remains unchanged.
 
 The conversation-only meaning of `content` is unchanged. See
 [content capture](content-capture.md) for output choices and source limitations.

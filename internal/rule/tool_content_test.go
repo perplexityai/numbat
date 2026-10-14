@@ -2,12 +2,65 @@ package rule
 
 import (
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/redact"
 )
+
+func TestSharedToolContentKeepsLocalRulesAndSafeReplay(t *testing.T) {
+	positive := mustEngine(t, Rule{
+		ID: "test.shared", Severity: model.SeverityHigh,
+		Expr: `event.tool_input.contains("PRIVATE_CANARY") && event.tool_result.contains("RESULT_CANARY")`,
+	})
+	negative := mustEngine(t, Rule{
+		ID: "test.shared_negative", Severity: model.SeverityHigh,
+		Expr: `!event.tool_input.contains("PRIVATE_CANARY")`,
+	})
+	ev := model.Event{
+		SchemaVersion: model.SchemaVersion, EventID: "file-2",
+		SourceAgent: model.AgentCodex, SourceType: model.SourceArtifact,
+		EventType: model.EventFileWrite, Confidence: model.ConfidenceMedium,
+		Evidence: model.Evidence{ArtifactType: "test"},
+	}
+	var source model.Event
+	source.SetToolInput(map[string]string{"password": "PRIVATE_CANARY"})
+	// A malformed JSON-shaped string must not trigger redaction or invent
+	// capture truncation when this event does not export the shared body.
+	source.SetToolResult(`{"result":"RESULT_CANARY"`)
+	ev.CopyToolContentFrom(source, false)
+	original := ev
+	for _, project := range []func(model.Event) model.Event{
+		redact.Event, redact.EventWithContent, redact.EventWithRawContent,
+		func(e model.Event) model.Event { return redact.EventWithMessageContent(e, false) },
+		func(e model.Event) model.Event { return redact.EventWithMessageContent(e, true) },
+	} {
+		out := project(ev)
+		if err := out.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if out.ToolInputForAnalysis() != "" || out.ToolResultForAnalysis() != "" ||
+			out.ToolInputBytes != source.ToolInputBytesForAnalysis() || out.ToolResultBytes != source.ToolResultBytesForAnalysis() ||
+			out.ToolInputTruncated || out.ToolResultTruncated || !slices.Equal(out.ContentOmitted, []string{"tool_input", "tool_result"}) {
+			t.Fatal("shared output lost omission or capture metadata")
+		}
+		if again := project(out); !reflect.DeepEqual(again, out) {
+			t.Fatal("reprojection changed an omitted body")
+		}
+		if matches, err := positive.Eval(ev); err != nil || len(matches) != 1 {
+			t.Fatalf("local rule lost original content: matches=%d err=%v", len(matches), err)
+		}
+		if matches, err := negative.Eval(out); err == nil || len(matches) != 0 {
+			t.Fatal("shared-body replay became a clean negative")
+		}
+		if !reflect.DeepEqual(ev, original) {
+			t.Fatal("projection mutated local input")
+		}
+	}
+}
 
 func TestOmittedContentDoesNotBecomeCleanNegative(t *testing.T) {
 	for _, field := range []string{"content", "tool_input", "tool_result"} {

@@ -441,7 +441,7 @@ func (e OpenClawExtractor) emitNativeApplyPatch(res *Result, src Source, sha str
 	captured.SetToolInput(args)
 	emit := func(change *codexPatchChange, sub int) {
 		ev := e.baseSub(src, sha, st, line, block, sub)
-		ev.CopyToolContentFrom(captured)
+		ev.CopyToolContentFrom(captured, sub == 0)
 		ev.Actor = model.ActorAssistant
 		ev.Confidence = model.ConfidenceMedium
 		ev.ToolName = c.Name

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -62,12 +63,34 @@ func (e *Event) SetToolResult(value any) {
 	e.toolResult = captureToolPayload(value)
 }
 
-// CopyToolContentFrom shares immutable retained payloads when one source call
-// expands into several normalized actions, avoiding a body copy per file.
-func (e *Event) CopyToolContentFrom(source Event) {
+// CopyToolContentFrom shares immutable payloads across normalized actions.
+// Only the first action includes them in output; all actions retain rule input.
+func (e *Event) CopyToolContentFrom(source Event, includeInOutput bool) {
 	e.toolInput, e.toolResult = source.toolInput, source.toolResult
 	e.ToolInput, e.ToolInputBytes, e.ToolInputTruncated = source.ToolInput, source.ToolInputBytes, source.ToolInputTruncated
 	e.ToolResult, e.ToolResultBytes, e.ToolResultTruncated = source.ToolResult, source.ToolResultBytes, source.ToolResultTruncated
+	e.sharedToolContent = !includeInOutput
+}
+
+// WithoutSharedToolContent omits duplicate bodies from an output copy while
+// preserving capture metadata and making missing evidence explicit on replay.
+func (e Event) WithoutSharedToolContent() Event {
+	if !e.sharedToolContent {
+		return e
+	}
+	e.ContentOmitted = slices.Clone(e.ContentOmitted)
+	if e.ToolInputForAnalysis() != "" && !slices.Contains(e.ContentOmitted, "tool_input") {
+		e.ContentOmitted = append(e.ContentOmitted, "tool_input")
+	}
+	if e.ToolResultForAnalysis() != "" && !slices.Contains(e.ContentOmitted, "tool_result") {
+		e.ContentOmitted = append(e.ContentOmitted, "tool_result")
+	}
+	e.ToolInputBytes, e.ToolInputTruncated = e.ToolInputBytesForAnalysis(), e.ToolInputTruncatedForAnalysis()
+	e.ToolResultBytes, e.ToolResultTruncated = e.ToolResultBytesForAnalysis(), e.ToolResultTruncatedForAnalysis()
+	e.ToolInput, e.ToolResult = "", ""
+	e.toolInput, e.toolResult = toolPayload{}, toolPayload{}
+	e.sharedToolContent = false
+	return e
 }
 
 func (e Event) ToolInputForAnalysis() string {

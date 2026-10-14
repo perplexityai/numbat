@@ -199,8 +199,9 @@ can inspect the truncation flags without reading the body. Content rules use
 the bounded CEL evaluation budget. Output redaction never changes local rule
 input; redacted exports cannot reconstruct original values during replay.
 
-`event.content_omitted` lists bodies removed by the record output limit. Reading
-a listed body during replay also produces a scoped evaluation error.
+`event.content_omitted` lists bodies withheld by the output limit or shared with
+another event from the same call. Reading a listed body during replay also
+produces a scoped evaluation error.
 
 ### Event fields
 

@@ -152,7 +152,7 @@
       "maxItems": 3,
       "uniqueItems": true,
       "items": { "enum": ["content", "tool_input", "tool_result"] },
-      "description": "Bodies omitted to fit the record output limit; original byte counts and capture truncation flags are unchanged."
+      "description": "Bodies withheld by the output limit or shared with another event from the same call; original byte counts and capture truncation flags are unchanged."
     },
     "tool_input": { "type": "string", "description": "Source tool arguments encoded as JSON; may be a marked fragment when truncated." },
     "tool_input_bytes": { "type": "integer", "minimum": 0 },
