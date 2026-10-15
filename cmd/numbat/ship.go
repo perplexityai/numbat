@@ -58,6 +58,9 @@ type shipCursor struct {
 	resetReason       string
 	rotationEOFID     string
 	rotationEOFOffset int64
+	// unstableRuns counts consecutive polls whose span changed under the
+	// reader; it bounds the log line to the first of a streak.
+	unstableRuns int
 }
 
 type shipRead struct {
@@ -71,6 +74,10 @@ type shipRead struct {
 	reset            bool
 	skippedOversized bool
 	guard            []byte
+	// unstable reports that the consumed span changed under the reader
+	// (a record rolled back after a short write); nothing may be delivered or
+	// acknowledged from this read.
+	unstable bool
 }
 
 type shipSource struct {
@@ -308,6 +315,20 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			cursor.pending = false
 			continue
 		}
+		if batch.unstable {
+			// The span changed while it was being read; poll again rather
+			// than deliver bytes that are no longer on disk. A changing file
+			// is not stably at EOF either, so drop any rotation-EOF latch
+			// and do not credit a drained segment.
+			cursor.rotationEOFID = ""
+			cursor.rotationEOFOffset = 0
+			cursor.unstableRuns++
+			if cursor.unstableRuns == 1 {
+				fmt.Fprintf(stderr, "ship: %s changed at offset %d while it was being read; retrying next poll\n", inputPath, cursor.checkpoint.Offset)
+			}
+			return cursor, nil
+		}
+		cursor.unstableRuns = 0
 		if cursor.checkpoint.Offset == 0 && cursor.checkpoint.GuardBytes == 0 && len(batch.blob) > 0 && !batch.rotated {
 			cursor.checkpoint = newPendingShipCheckpoint(cursor.checkpoint.DestinationSHA256, batch.fileID, batch.blob)
 			cursor.pending = true
@@ -416,13 +437,18 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		return shipRead{}, err
 	}
 
-	br := bufio.NewReader(source.file)
+	br := bufio.NewReader(shipBatchReader{file: source.file})
 	var buf bytes.Buffer
 	var consumed int64
 	var skipped bool
 	var skippedGuard []byte
+	// consumedSum fingerprints exactly the bytes counted in consumed: the
+	// retained records, or the single oversized record that is skipped.
+	consumedSum := sha256.New()
+	lineSum := sha256.New()
 	for buf.Len() == 0 || int64(buf.Len()) < maxBytes {
-		line, readErr := readShipLine(br, maxShipRecordBytes)
+		lineSum.Reset()
+		line, readErr := readShipLine(br, maxShipRecordBytes, lineSum)
 		if errors.Is(readErr, errShipRecordTooLarge) {
 			// A batch with delivered bytes must stay contiguous for its guard
 			// fingerprint, and a record without a terminating newline may still
@@ -431,6 +457,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				break
 			}
 			consumed += line.consumed
+			consumedSum = lineSum
 			skipped = true
 			skippedGuard = line.tail
 			break
@@ -440,6 +467,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				break
 			}
 			_, _ = buf.Write(line.bytes)
+			_, _ = consumedSum.Write(line.bytes)
 			consumed += line.consumed
 		}
 		if readErr != nil {
@@ -447,6 +475,18 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				break
 			}
 			return shipRead{}, readErr
+		}
+	}
+	// The writer appends and rolls back each record under a lock this reader
+	// does not take, so confirm the consumed span still holds the bytes that
+	// were read before any of it is delivered or skipped.
+	if consumed > 0 {
+		stable, err := shipBatchStillOnDisk(source.file, checkpoint.Offset, consumed, consumedSum.Sum(nil))
+		if err != nil {
+			return shipRead{}, err
+		}
+		if !stable {
+			return shipRead{fileID: source.fileID, activeFileID: source.activeFileID, modTime: info.ModTime(), rotated: source.rotated, unstable: true}, nil
 		}
 	}
 	// This gate must stay in sync with the only reader of drainedID: the
@@ -470,6 +510,23 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		skippedOversized: skipped,
 		guard:            skippedGuard,
 	}, nil
+}
+
+// shipTestAfterRead, when set by a test, runs after each read of the input
+// file so a test can change the file between the two reads of one batch,
+// the way a hook that rolls back a short write and then appends does.
+var shipTestAfterRead func(n int)
+
+type shipBatchReader struct {
+	file *os.File
+}
+
+func (r shipBatchReader) Read(p []byte) (int, error) {
+	n, err := r.file.Read(p)
+	if shipTestAfterRead != nil {
+		shipTestAfterRead(n)
+	}
+	return n, err
 }
 
 func openShipSource(path string, checkpoint shipCheckpoint) (shipSource, error) {

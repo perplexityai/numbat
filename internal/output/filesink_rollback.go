@@ -41,6 +41,12 @@ func writeWholeOrRollback(f *os.File, p []byte) (int, error) {
 	// the check and the truncate, so the rollback guarantee covers only
 	// writers that take the lock. Numbat's own shipper does not truncate the
 	// file, and no external rotation was observed on the devboxes.
+	//
+	// The shipper reads without this lock, so it can buffer the prefix of a
+	// write that is rolled back here and later see the record that replaces
+	// it at the same offset. readShipBatch (cmd/numbat) re-reads every
+	// consumed span before delivery and retries when it changed, which keeps
+	// such a rolled-back tail out of the delivered stream.
 	if after, serr := f.Stat(); serr != nil || after.Size() <= before {
 		return n, err
 	}

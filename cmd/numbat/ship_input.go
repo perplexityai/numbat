@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"time"
@@ -36,7 +38,7 @@ func isShipRecordFile(f *os.File) (bool, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return false, err
 	}
-	line, err := readShipLine(bufio.NewReader(f), maxShipRecordBytes)
+	line, err := readShipLine(bufio.NewReader(f), maxShipRecordBytes, nil)
 	if errors.Is(err, errShipRecordTooLarge) {
 		return line.complete, nil
 	}
@@ -164,11 +166,17 @@ type shipLineRead struct {
 	complete bool
 }
 
-func readShipLine(br *bufio.Reader, maxBytes int) (shipLineRead, error) {
+// readShipLine reads one record. When sum is non-nil every consumed byte,
+// including those of an oversized record that is not retained, is written to
+// it so the caller can later confirm the bytes it consumed are still on disk.
+func readShipLine(br *bufio.Reader, maxBytes int, sum hash.Hash) (shipLineRead, error) {
 	var out shipLineRead
 	for {
 		fragment, err := br.ReadSlice('\n')
 		out.consumed += int64(len(fragment))
+		if sum != nil {
+			_, _ = sum.Write(fragment)
+		}
 		if len(out.bytes)+len(fragment) > maxBytes {
 			// Keep counting through the newline without retaining the full record.
 			out.tail = appendShipTail(out.tail, out.bytes)
@@ -177,6 +185,9 @@ func readShipLine(br *bufio.Reader, maxBytes int) (shipLineRead, error) {
 			for errors.Is(err, bufio.ErrBufferFull) {
 				fragment, err = br.ReadSlice('\n')
 				out.consumed += int64(len(fragment))
+				if sum != nil {
+					_, _ = sum.Write(fragment)
+				}
 				out.tail = appendShipTail(out.tail, fragment)
 			}
 			out.complete = err == nil
@@ -204,4 +215,37 @@ func appendShipTail(tail, p []byte) []byte {
 		tail = tail[:len(tail)-overflow]
 	}
 	return append(tail, p...)
+}
+
+// shipBatchStillOnDisk re-reads the consumed span and reports whether it still
+// holds the bytes the batch was built from. The hook appends and rolls back
+// records under its own write lock, which the shipper does not share, so a
+// snapshot that spans two read calls can combine the prefix of a record that
+// was later rolled back with the record that replaced it. A span that changed
+// is not delivered; the next poll reads it again.
+func shipBatchStillOnDisk(f *os.File, offset, consumed int64, want []byte) (bool, error) {
+	if consumed <= 0 {
+		return true, nil
+	}
+	sum := sha256.New()
+	buf := make([]byte, 64<<10)
+	remaining := consumed
+	for remaining > 0 {
+		chunk := buf
+		if remaining < int64(len(chunk)) {
+			chunk = chunk[:remaining]
+		}
+		n, err := f.ReadAt(chunk, offset+consumed-remaining)
+		if n > 0 {
+			_, _ = sum.Write(chunk[:n])
+			remaining -= int64(n)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return bytes.Equal(sum.Sum(nil), want), nil
 }
