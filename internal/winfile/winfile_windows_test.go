@@ -175,14 +175,16 @@ func TestTruncateSameFileUnderLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	// Swap another file over the path while g stays open, the way a
-	// rotation would; a same-path delete+create would hit delete-pending
-	// semantics instead.
-	replacement := filepath.Join(t.TempDir(), "replacement")
-	if err := os.WriteFile(replacement, []byte("other\n"), 0o600); err != nil {
+	// Rename the file away and create a new one at the path while g stays
+	// open, the way an external rotation would. MoveFileEx cannot supersede
+	// a target another handle holds open (ERROR_ACCESS_DENIED, even with
+	// FILE_SHARE_DELETE), and a same-path delete+create would hit
+	// delete-pending semantics, so rename-away is the reachable case.
+	rotated := filepath.Join(t.TempDir(), "records.ndjson.1")
+	if err := os.Rename(path, rotated); err != nil {
 		t.Fatal(err)
 	}
-	if err := Replace(replacement, path); err != nil {
+	if err := os.WriteFile(path, []byte("other\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := TruncateSameFile(g, 0); !errors.Is(err, ErrFileReplaced) {
