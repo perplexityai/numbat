@@ -39,5 +39,9 @@ func writeFileLocked(f *os.File, p []byte) (int, error) {
 	defer func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	}()
-	return f.Write(p)
+	return writeWholeOrRollback(f, p)
+}
+
+func truncateForRollback(f *os.File, size int64) error {
+	return f.Truncate(size)
 }

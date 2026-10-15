@@ -29,6 +29,7 @@ type flakySink struct {
 	attempts atomic.Int64
 	mu       sync.Mutex
 	accepted map[string]int
+	lines    [][]byte
 }
 
 func newFlakySink() *flakySink {
@@ -44,10 +45,19 @@ func newFlakySink() *flakySink {
 		for _, id := range eventIDs(body) {
 			f.accepted[id]++
 		}
+		for _, line := range bytes.Split(bytes.TrimSuffix(body, []byte("\n")), []byte("\n")) {
+			f.lines = append(f.lines, append([]byte(nil), line...))
+		}
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
 	return f
+}
+
+func (f *flakySink) deliveredLines() [][]byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]byte(nil), f.lines...)
 }
 
 func (f *flakySink) uniqueDelivered() int {
@@ -662,7 +672,7 @@ func TestShipOversizedBatchLineStillShips(t *testing.T) {
 }
 
 func TestShipBoundsOversizedRecord(t *testing.T) {
-	line, err := readShipLine(bufio.NewReader(strings.NewReader("12345\n")), 4)
+	line, err := readShipLine(bufio.NewReader(strings.NewReader("12345\n")), 4, nil)
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("readShipLine error=%v, want size-limit error", err)
 	}
@@ -670,7 +680,7 @@ func TestShipBoundsOversizedRecord(t *testing.T) {
 		t.Fatalf("oversized line=%+v", line)
 	}
 
-	partial, err := readShipLine(bufio.NewReader(strings.NewReader("12345")), 4)
+	partial, err := readShipLine(bufio.NewReader(strings.NewReader("12345")), 4, nil)
 	if !errors.Is(err, errShipRecordTooLarge) || partial.complete {
 		t.Fatalf("partial oversized line=%+v err=%v", partial, err)
 	}
@@ -699,6 +709,245 @@ func TestShipLeavesPartialTrailingLine(t *testing.T) {
 	want := int64(len(complete) + len(partial) + len("}\n"))
 	if err != nil || cursor.checkpoint.Offset != want || sink.uniqueDelivered() != 2 {
 		t.Fatalf("completed drain offset=%d/%d delivered=%d err=%v", cursor.checkpoint.Offset, want, sink.uniqueDelivered(), err)
+	}
+}
+
+func TestShipUnstableRotatedSegmentDoesNotAdvance(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+	writeSpool(t, inputPath, "old", 100)
+
+	sink := newFlakySink()
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+	cursor := newTestShipCursor()
+	sink.healthy.Store(false)
+	cursor, err := drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
+	if err == nil || cursor.checkpoint.Offset != 0 || cursor.checkpoint.FileID == "" {
+		t.Fatalf("outage state offset=%d file_id=%q err=%v", cursor.checkpoint.Offset, cursor.checkpoint.FileID, err)
+	}
+	rotatedID := cursor.checkpoint.FileID
+	if err := os.Rename(inputPath, inputPath+".1"); err != nil {
+		t.Fatal(err)
+	}
+	writeSpool(t, inputPath, "new", 10)
+
+	oldData, err := os.ReadFile(inputPath + ".1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep := bytes.LastIndexByte(oldData[:4096-200], '\n') + 1
+	kept := bytes.Count(oldData[:keep], []byte("\n"))
+	late := []byte(`{"record_type":"event","event_id":"late-1"}` + "\n")
+	reads := 0
+	shipTestAfterRead = func(n int) {
+		reads++
+		if reads != 1 {
+			return
+		}
+		if err := os.Truncate(inputPath+".1", int64(keep)); err != nil {
+			t.Fatal(err)
+		}
+		appendRaw(t, inputPath+".1", late)
+	}
+	defer func() { shipTestAfterRead = nil }()
+
+	sink.healthy.Store(true)
+	attemptsBefore := sink.attempts.Load()
+	cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads < 2 {
+		t.Fatalf("test setup: batch took %d reads, want the paused two-read interleaving", reads)
+	}
+	shipTestAfterRead = nil
+	if got := sink.attempts.Load() - attemptsBefore; got != 0 || cursor.checkpoint.Offset != 0 || cursor.checkpoint.FileID != rotatedID {
+		t.Fatalf("unstable rotated read advanced: attempts=%d offset=%d file_id=%q want %q", got, cursor.checkpoint.Offset, cursor.checkpoint.FileID, rotatedID)
+	}
+	if cursor.rotationEOFID != "" || len(cursor.checkpoint.DrainedFileIDs) != 0 {
+		t.Fatalf("unstable rotated read latched EOF: rotationEOFID=%q drained=%v", cursor.rotationEOFID, cursor.checkpoint.DrainedFileIDs)
+	}
+	for i := 0; i < 3; i++ {
+		cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
+		if err != nil {
+			t.Fatalf("recovery pass %d: %v", i+1, err)
+		}
+	}
+	if got, want := sink.uniqueDelivered(), kept+1+10; got != want {
+		t.Fatalf("delivered=%d, want %d (kept old + late + 10 new)", got, want)
+	}
+	var sawLate bool
+	for _, line := range sink.deliveredLines() {
+		if !json.Valid(line) {
+			t.Fatalf("delivered invalid record %q", line)
+		}
+		if bytes.Equal(line, bytes.TrimSuffix(late, []byte("\n"))) {
+			sawLate = true
+		}
+	}
+	if !sawLate {
+		t.Fatal("late record from the rotated segment not delivered intact")
+	}
+}
+
+func TestShipPausedReaderDoesNotSkipMixedOversizedRecord(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+
+	const bufSize = 4096
+	full := []byte(`{"record_type":"event","event_id":"rolled-back","message":"` + strings.Repeat("a", 2*bufSize) + `"}` + "\n")
+	prefix := full[:bufSize+300] // the hook got this far before ENOSPC
+	oversized := []byte(`{"record_type":"event","event_id":"oversized","pad":"` + strings.Repeat("b", maxShipRecordBytes+1024) + `"}` + "\n")
+	after := []byte(`{"record_type":"event","event_id":"after"}` + "\n")
+	appendRaw(t, inputPath, prefix)
+
+	reads := 0
+	shipTestAfterRead = func(n int) {
+		reads++
+		if reads != 1 {
+			return
+		}
+		if err := os.Truncate(inputPath, 0); err != nil {
+			t.Fatal(err)
+		}
+		appendRaw(t, inputPath, oversized)
+		appendRaw(t, inputPath, after)
+	}
+	defer func() { shipTestAfterRead = nil }()
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+
+	var stderr bytes.Buffer
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads < 2 {
+		t.Fatalf("test setup: batch took %d reads, want the paused two-read interleaving", reads)
+	}
+	shipTestAfterRead = nil
+	if sink.attempts.Load() != 0 || cursor.checkpoint.Offset != 0 {
+		t.Fatalf("unstable oversized read acknowledged: attempts=%d offset=%d", sink.attempts.Load(), cursor.checkpoint.Offset)
+	}
+	if !strings.Contains(stderr.String(), "changed at offset 0 while it was being read") {
+		t.Fatalf("unstable read not logged, stderr=%q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "skipp") {
+		t.Fatalf("oversized record skipped on an unstable read, stderr=%q", stderr.String())
+	}
+	stderr.Reset()
+	cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.uniqueDelivered(); got != 1 {
+		t.Fatalf("delivered %d records, want 1 (the record after the skipped oversized one)", got)
+	}
+	for _, line := range sink.deliveredLines() {
+		if !json.Valid(line) || bytes.Contains(line, []byte("rolled-back")) || bytes.Contains(line, []byte("oversized")) {
+			t.Fatalf("delivered unexpected record %.120q", line)
+		}
+	}
+	if want := int64(len(oversized) + len(after)); cursor.checkpoint.Offset != want {
+		t.Fatalf("checkpoint offset=%d, want %d", cursor.checkpoint.Offset, want)
+	}
+}
+
+func TestShipPausedReaderDoesNotMixRolledBackRecord(t *testing.T) {
+	for name, successorPad := range map[string]int{"short": 700, "larger-than-guard": shipGuardBytes + 1024} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			inputPath := filepath.Join(dir, "records.ndjson")
+			statePath := filepath.Join(dir, "records.ship-state")
+
+			const bufSize = 4096
+			const prefixLen = 300
+			var pre []byte
+			for i := 0; ; i++ {
+				line := []byte(fmt.Sprintf(`{"record_type":"event","event_id":"pre-%03d","pad":"%s"}`+"\n", i, strings.Repeat("x", 40)))
+				if len(pre)+len(line) > bufSize-prefixLen {
+					break
+				}
+				pre = append(pre, line...)
+			}
+			full := []byte(`{"record_type":"event","event_id":"rolled-back","message":"` + strings.Repeat("a", 2*bufSize) + `"}` + "\n")
+			prefix := full[:bufSize-len(pre)] // the hook got this far before ENOSPC
+			successor := []byte(`{"record_type":"event","event_id":"successor","message":"` + strings.Repeat("b", successorPad) + `"}` + "\n")
+			if forged := append(append([]byte{}, prefix...), successor[len(prefix):]...); !json.Valid(forged) {
+				t.Fatalf("test setup: forged line is not valid JSON: %.120q", forged)
+			}
+			appendRaw(t, inputPath, pre)
+			appendRaw(t, inputPath, prefix)
+
+			reads := 0
+			shipTestAfterRead = func(n int) {
+				reads++
+				if reads != 1 {
+					return
+				}
+				if err := os.Truncate(inputPath, int64(len(pre))); err != nil {
+					t.Fatal(err)
+				}
+				appendRaw(t, inputPath, successor)
+			}
+			defer func() { shipTestAfterRead = nil }()
+
+			sink := newFlakySink()
+			sink.healthy.Store(true)
+			defer sink.srv.Close()
+			factory := newSinkFactory(sink.srv.URL)
+
+			var stderr bytes.Buffer
+			cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, &stderr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reads < 2 {
+				t.Fatalf("test setup: batch took %d reads, want the paused two-read interleaving", reads)
+			}
+			shipTestAfterRead = nil
+			if sink.attempts.Load() != 0 || cursor.checkpoint.Offset != 0 {
+				t.Fatalf("unstable read delivered: attempts=%d offset=%d", sink.attempts.Load(), cursor.checkpoint.Offset)
+			}
+			if !strings.Contains(stderr.String(), "changed at offset 0 while it was being read") {
+				t.Fatalf("unstable read not logged, stderr=%q", stderr.String())
+			}
+			cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRecords := bytes.Count(pre, []byte("\n")) + 1
+			if got := sink.uniqueDelivered(); got != wantRecords {
+				t.Fatalf("delivered %d records, want %d (prefill + successor)", got, wantRecords)
+			}
+			var sawSuccessor bool
+			for _, line := range sink.deliveredLines() {
+				if !json.Valid(line) {
+					t.Fatalf("delivered invalid record %q", line)
+				}
+				if bytes.Contains(line, []byte("rolled-back")) {
+					t.Fatalf("delivered bytes of the rolled-back record: %.120q", line)
+				}
+				if bytes.Equal(line, bytes.TrimSuffix(successor, []byte("\n"))) {
+					sawSuccessor = true
+				}
+			}
+			if !sawSuccessor {
+				t.Fatalf("successor record not delivered intact")
+			}
+			if want := int64(len(pre) + len(successor)); cursor.checkpoint.Offset != want {
+				t.Fatalf("checkpoint offset=%d, want %d", cursor.checkpoint.Offset, want)
+			}
+		})
 	}
 }
 

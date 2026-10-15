@@ -24,5 +24,9 @@ func writeFileLocked(f *os.File, p []byte) (n int, err error) {
 	defer func() {
 		err = errors.Join(err, winfile.Unlock(f))
 	}()
-	return f.Write(p)
+	return writeWholeOrRollback(f, p)
+}
+
+func truncateForRollback(f *os.File, size int64) error {
+	return winfile.TruncateSameFile(f, size)
 }
