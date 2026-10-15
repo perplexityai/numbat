@@ -114,6 +114,29 @@ func Unlock(f *os.File) error {
 	)
 }
 
+var ErrFileReplaced = errors.New("file replaced under its path")
+
+func TruncateSameFile(f *os.File, size int64) error {
+	var want windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &want); err != nil {
+		return err
+	}
+	g, err := open(f.Name(), windows.GENERIC_WRITE, windows.OPEN_EXISTING)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = g.Close() }()
+	var got windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(g.Fd()), &got); err != nil {
+		return err
+	}
+	if got.VolumeSerialNumber != want.VolumeSerialNumber ||
+		got.FileIndexHigh != want.FileIndexHigh || got.FileIndexLow != want.FileIndexLow {
+		return ErrFileReplaced
+	}
+	return g.Truncate(size)
+}
+
 // Replace atomically moves from over to, flushing the move before returning.
 func Replace(from, to string) error {
 	return move(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
