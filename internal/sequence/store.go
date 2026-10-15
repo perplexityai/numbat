@@ -53,7 +53,7 @@ const (
 	maxStoredSessionBytes = 16 << 20
 	// Bump sequenceProjectionRevision when projection or enforcement filtering
 	// changes the meaning of persisted verdict masks.
-	sequenceProjectionRevision = "sequence-projection-v4"
+	sequenceProjectionRevision = "sequence-projection-v5"
 )
 
 // NewStore binds a window store for one compiled rule set onto the shared

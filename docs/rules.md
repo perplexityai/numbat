@@ -423,12 +423,15 @@ module-qualified forms. Ambient preference and command-resolution state are not
 inferred.
 
 For a shell-derived match, blocking has a narrower eligibility boundary than
-detection: the complete shell program must be one static simple command or one
-static POSIX pipeline. Supported transparent launchers are allowed only when
-their final child command is also in that subset. Multiple statements, control
-flow, same-script functions, inline child interpreters, `eval` or
-`Invoke-Expression`, substitutions, runtime-dependent values, PowerShell or CMD
-pipelines, previews, parser diagnostics, and truncated projections remain
+detection: every command in the shell program must be static. POSIX simple
+commands joined by lists, pipelines, subshells, groups, conditionals, loops,
+negation, or background syntax are eligible; PowerShell and CMD input must be
+one simple command. Supported transparent launchers are allowed only when
+their final child command is also in that subset. Heredocs, redirects attached
+to compound statements, substitutions or expansions in loop words and `case`
+words, same-script functions, inline child interpreters, `eval` or
+`Invoke-Expression`, runtime-dependent values, PowerShell or CMD pipelines,
+previews, parser diagnostics, and truncated projections make the whole input
 detection-only. A rule may still use `shell_commands` alongside structured
 fields such as `event.file_path`; a matching commandless structured event does
 not require a shell projection. See [Enforcement](enforcement.md).
