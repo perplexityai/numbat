@@ -713,14 +713,6 @@ func TestShipLeavesPartialTrailingLine(t *testing.T) {
 	}
 }
 
-// TestShipPausedReaderDoesNotMixRolledBackRecord reproduces the exp5
-// interleaving: the reader's first read ends inside a record the hook is
-// writing, the hook's write then fails short and is rolled back, another
-// record is appended at the same offset, and the reader's second read
-// continues from its stale position. Without verification the shipper
-// delivers the prefix of the rolled-back record glued to the tail of its
-// successor and checkpoints past both. The large case makes the successor
-// longer than the 4 KiB checkpoint guard, so the guard alone cannot catch it.
 func TestShipUnstableRotatedSegmentDoesNotAdvance(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -806,6 +798,91 @@ func TestShipUnstableRotatedSegmentDoesNotAdvance(t *testing.T) {
 	}
 }
 
+// TestShipPausedReaderDoesNotSkipMixedOversizedRecord is the oversized-skip
+// leg of the same interleaving: the record that lands after the rollback is
+// larger than maxShipRecordBytes, so the reader's stale continuation forms an
+// oversized line out of the rolled-back prefix and the successor's tail.
+// Skipped bytes are never delivered, so the mix cannot fabricate a record;
+// the skip must still wait for a stable read instead of acknowledging bytes
+// the reader did not see on disk.
+func TestShipPausedReaderDoesNotSkipMixedOversizedRecord(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := filepath.Join(dir, "records.ship-state")
+
+	const bufSize = 4096
+	full := []byte(`{"record_type":"event","event_id":"rolled-back","message":"` + strings.Repeat("a", 2*bufSize) + `"}` + "\n")
+	prefix := full[:bufSize+300] // the hook got this far before ENOSPC
+	oversized := []byte(`{"record_type":"event","event_id":"oversized","pad":"` + strings.Repeat("b", maxShipRecordBytes+1024) + `"}` + "\n")
+	after := []byte(`{"record_type":"event","event_id":"after"}` + "\n")
+	appendRaw(t, inputPath, prefix)
+
+	reads := 0
+	shipTestAfterRead = func(n int) {
+		reads++
+		if reads != 1 {
+			return
+		}
+		if err := os.Truncate(inputPath, 0); err != nil {
+			t.Fatal(err)
+		}
+		appendRaw(t, inputPath, oversized)
+		appendRaw(t, inputPath, after)
+	}
+	defer func() { shipTestAfterRead = nil }()
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+
+	var stderr bytes.Buffer
+	cursor, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads < 2 {
+		t.Fatalf("test setup: batch took %d reads, want the paused two-read interleaving", reads)
+	}
+	shipTestAfterRead = nil
+	// Without verification this poll skips len(oversized) bytes it never
+	// read as they are on disk and checkpoints past them.
+	if sink.attempts.Load() != 0 || cursor.checkpoint.Offset != 0 {
+		t.Fatalf("unstable oversized read acknowledged: attempts=%d offset=%d", sink.attempts.Load(), cursor.checkpoint.Offset)
+	}
+	if !strings.Contains(stderr.String(), "changed at offset 0 while it was being read") {
+		t.Fatalf("unstable read not logged, stderr=%q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "skipp") {
+		t.Fatalf("oversized record skipped on an unstable read, stderr=%q", stderr.String())
+	}
+	stderr.Reset()
+	cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.uniqueDelivered(); got != 1 {
+		t.Fatalf("delivered %d records, want 1 (the record after the skipped oversized one)", got)
+	}
+	for _, line := range sink.deliveredLines() {
+		if !json.Valid(line) || bytes.Contains(line, []byte("rolled-back")) || bytes.Contains(line, []byte("oversized")) {
+			t.Fatalf("delivered unexpected record %.120q", line)
+		}
+	}
+	if want := int64(len(oversized) + len(after)); cursor.checkpoint.Offset != want {
+		t.Fatalf("checkpoint offset=%d, want %d", cursor.checkpoint.Offset, want)
+	}
+}
+
+// TestShipPausedReaderDoesNotMixRolledBackRecord reproduces the exp5
+// interleaving: the reader's first read ends inside a record the hook is
+// writing, the hook's write then fails short and is rolled back, another
+// record is appended at the same offset, and the reader's second read
+// continues from its stale position. Without verification the shipper
+// delivers the prefix of the rolled-back record glued to the tail of its
+// successor and checkpoints past both. The large case makes the successor
+// longer than the 4 KiB checkpoint guard, so the guard alone cannot catch it.
 func TestShipPausedReaderDoesNotMixRolledBackRecord(t *testing.T) {
 	for name, successorPad := range map[string]int{"short": 700, "larger-than-guard": shipGuardBytes + 1024} {
 		t.Run(name, func(t *testing.T) {
