@@ -133,3 +133,62 @@ func TestExtendedPathSupportsDeepFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The records sink appends through a handle without FILE_WRITE_DATA so writes
+// stay pinned to EOF; rolling back a failed append must still be able to
+// shrink the file while the exclusive lock is held, and the next append must
+// land at the new end rather than after a hole.
+func TestTruncateSameFileUnderLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "records.ndjson")
+	f, err := OpenOutput(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("{\"a\":1}\n{\"b\":")); err != nil {
+		t.Fatal(err)
+	}
+	if err := LockExclusive(f); err != nil {
+		t.Fatal(err)
+	}
+	if err := TruncateSameFile(f, 8); err != nil {
+		_ = Unlock(f)
+		t.Fatalf("TruncateSameFile under lock: %v", err)
+	}
+	if err := Unlock(f); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("{\"c\":3}\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "{\"a\":1}\n{\"c\":3}\n"; string(got) != want {
+		t.Fatalf("file = %q, want %q", got, want)
+	}
+
+	// A different file under the same path must not be truncated.
+	g, err := OpenOutput(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	// Swap another file over the path while g stays open, the way a
+	// rotation would; a same-path delete+create would hit delete-pending
+	// semantics instead.
+	replacement := filepath.Join(t.TempDir(), "replacement")
+	if err := os.WriteFile(replacement, []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Replace(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := TruncateSameFile(g, 0); !errors.Is(err, ErrFileReplaced) {
+		t.Fatalf("TruncateSameFile on replaced path: err = %v, want ErrFileReplaced", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "other\n" {
+		t.Fatalf("replacement file modified: %q", b)
+	}
+}

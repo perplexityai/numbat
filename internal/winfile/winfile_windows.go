@@ -114,6 +114,38 @@ func Unlock(f *os.File) error {
 	)
 }
 
+// ErrFileReplaced reports that the path no longer names the file behind the
+// handle, so an operation that must target that exact file was skipped.
+var ErrFileReplaced = errors.New("file replaced under its path")
+
+// TruncateSameFile shrinks the file behind f to size without using f's own
+// access rights. The append handle from OpenOutput carries FILE_APPEND_DATA but
+// not FILE_WRITE_DATA, which Ftruncate (SetFileInformationByHandle with
+// FileEndOfFileInfo) requires, so the file is reopened by
+// path with GENERIC_WRITE only, checked to be the same file object (volume
+// serial and file index), truncated, and closed. The append handle keeps its
+// EOF pinning. Callers hold LockExclusive on f for the duration.
+func TruncateSameFile(f *os.File, size int64) error {
+	var want windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &want); err != nil {
+		return err
+	}
+	g, err := open(f.Name(), windows.GENERIC_WRITE, windows.OPEN_EXISTING)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = g.Close() }()
+	var got windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(g.Fd()), &got); err != nil {
+		return err
+	}
+	if got.VolumeSerialNumber != want.VolumeSerialNumber ||
+		got.FileIndexHigh != want.FileIndexHigh || got.FileIndexLow != want.FileIndexLow {
+		return ErrFileReplaced
+	}
+	return g.Truncate(size)
+}
+
 // Replace atomically moves from over to, flushing the move before returning.
 func Replace(from, to string) error {
 	return move(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
