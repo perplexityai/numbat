@@ -58,6 +58,7 @@ type shipCursor struct {
 	resetReason       string
 	rotationEOFID     string
 	rotationEOFOffset int64
+	unstableRuns      int
 }
 
 type shipRead struct {
@@ -71,6 +72,7 @@ type shipRead struct {
 	reset            bool
 	skippedOversized bool
 	guard            []byte
+	unstable         bool
 }
 
 type shipSource struct {
@@ -308,6 +310,16 @@ func drainAvailable(ctx context.Context, inputPath, statePath string, cursor shi
 			cursor.pending = false
 			continue
 		}
+		if batch.unstable {
+			cursor.rotationEOFID = ""
+			cursor.rotationEOFOffset = 0
+			cursor.unstableRuns++
+			if cursor.unstableRuns == 1 {
+				fmt.Fprintf(stderr, "ship: %s changed at offset %d while it was being read; retrying next poll\n", inputPath, cursor.checkpoint.Offset)
+			}
+			return cursor, nil
+		}
+		cursor.unstableRuns = 0
 		if cursor.checkpoint.Offset == 0 && cursor.checkpoint.GuardBytes == 0 && len(batch.blob) > 0 && !batch.rotated {
 			cursor.checkpoint = newPendingShipCheckpoint(cursor.checkpoint.DestinationSHA256, batch.fileID, batch.blob)
 			cursor.pending = true
@@ -416,13 +428,16 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		return shipRead{}, err
 	}
 
-	br := bufio.NewReader(source.file)
+	br := bufio.NewReader(shipBatchReader{file: source.file})
 	var buf bytes.Buffer
 	var consumed int64
 	var skipped bool
 	var skippedGuard []byte
+	consumedSum := sha256.New()
+	lineSum := sha256.New()
 	for buf.Len() == 0 || int64(buf.Len()) < maxBytes {
-		line, readErr := readShipLine(br, maxShipRecordBytes)
+		lineSum.Reset()
+		line, readErr := readShipLine(br, maxShipRecordBytes, lineSum)
 		if errors.Is(readErr, errShipRecordTooLarge) {
 			// A batch with delivered bytes must stay contiguous for its guard
 			// fingerprint, and a record without a terminating newline may still
@@ -431,6 +446,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				break
 			}
 			consumed += line.consumed
+			consumedSum = lineSum
 			skipped = true
 			skippedGuard = line.tail
 			break
@@ -440,6 +456,7 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				break
 			}
 			_, _ = buf.Write(line.bytes)
+			_, _ = consumedSum.Write(line.bytes)
 			consumed += line.consumed
 		}
 		if readErr != nil {
@@ -447,6 +464,15 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 				break
 			}
 			return shipRead{}, readErr
+		}
+	}
+	if consumed > 0 {
+		stable, err := shipBatchStillOnDisk(source.file, checkpoint.Offset, consumed, consumedSum.Sum(nil))
+		if err != nil {
+			return shipRead{}, err
+		}
+		if !stable {
+			return shipRead{fileID: source.fileID, activeFileID: source.activeFileID, modTime: info.ModTime(), rotated: source.rotated, unstable: true}, nil
 		}
 	}
 	// This gate must stay in sync with the only reader of drainedID: the
@@ -470,6 +496,20 @@ func readShipBatch(path string, checkpoint shipCheckpoint, maxBytes int64) (ship
 		skippedOversized: skipped,
 		guard:            skippedGuard,
 	}, nil
+}
+
+var shipTestAfterRead func(n int)
+
+type shipBatchReader struct {
+	file *os.File
+}
+
+func (r shipBatchReader) Read(p []byte) (int, error) {
+	n, err := r.file.Read(p)
+	if shipTestAfterRead != nil {
+		shipTestAfterRead(n)
+	}
+	return n, err
 }
 
 func openShipSource(path string, checkpoint shipCheckpoint) (shipSource, error) {
