@@ -388,6 +388,7 @@ func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) 
 	}
 	param, ok := part.(*syntax.ParamExp)
 	if !ok || param.Param == nil || shellManagedNames[param.Param.Value] || param.Excl || param.Length || param.Width || param.IsSet || param.Flags != nil ||
+		param.Split != syntax.OptUnset || param.GlobSubst != syntax.OptUnset || param.RcExpand != syntax.OptUnset ||
 		param.NestedParam != nil || param.Index != nil || param.Slice != nil || param.Repl != nil ||
 		len(param.Modifiers) != 0 || param.Names != 0 || param.Exp != nil {
 		return nil

@@ -607,7 +607,9 @@ Sequence matching is conservative:
 `scan`, `collect`, and `rules test` keep sequence windows in memory. One-shot
 hook callbacks persist their bounded window in `$HOME/.numbat/state.db`
 (`--state-db` overrides the path). A change to the loaded sequence-rule set
-that affects matching, enforcement, or rule version invalidates old windows. If
+that affects matching, enforcement, or rule version invalidates old windows.
+Parser and projection updates also invalidate old verdicts; the current
+projection revision is `sequence-projection-v9`. If
 the state cannot be opened, correlation fails open with a warning.
 
 An enforced sequence may block only the action matching its final step.

@@ -52,8 +52,8 @@ var bucketSequence = []byte("sequence")
 const (
 	maxStoredSessionBytes = 16 << 20
 	// Bump sequenceProjectionRevision when projection or enforcement filtering
-	// changes the meaning of persisted verdict masks.
-	sequenceProjectionRevision = "sequence-projection-v7"
+	// changes the meaning of persisted verdict masks, including parser updates.
+	sequenceProjectionRevision = "sequence-projection-v9"
 )
 
 // NewStore binds a window store for one compiled rule set onto the shared
