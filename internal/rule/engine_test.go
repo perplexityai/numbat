@@ -613,6 +613,9 @@ func TestEngineLimitsEnforcementToStaticShellSubset(t *testing.T) {
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `case x in x) wipefs -a /dev/sda ;; esac`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `for x in '*'; do wipefs -a /dev/sda; done`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `case a in *) wipefs -a /dev/sda ;; esac`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `w=wipefs; $w -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `w=wipefs; "$w" -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `w=dd; w=wipefs; ${w} -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `if false; then :; elif true; then wipefs -a /dev/sda; else :; fi`},
 		{EventType: model.EventCommandExec, ToolName: "bash", Command: `until true; do :; done; wipefs -a /dev/sda`},
 		{EventType: model.EventCommandExec, ToolName: "PowerShell", Command: `Stop-Process -Name target -Force`},
@@ -718,6 +721,17 @@ wipefs -a /dev/sda`},
 		matches, err := eng.Eval(event)
 		if err != nil || len(matches) != 0 {
 			t.Errorf("Eval(%q) = (%+v, %v), want no projected wipefs", event.Command, matches, err)
+		}
+	}
+
+	for _, event := range []model.Event{
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `_=echo; $_ wipefs -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `RANDOM=wipefs; $RANDOM -a /dev/sda`},
+		{EventType: model.EventCommandExec, ToolName: "bash", Command: `SECONDS=wipefs; $SECONDS -a /dev/sda`},
+	} {
+		matches, err := eng.Eval(event)
+		if err == nil || !strings.Contains(err.Error(), "dynamic command executable") || len(matches) != 0 {
+			t.Errorf("Eval(%q) = (%+v, %v), want unresolved executable", event.Command, matches, err)
 		}
 	}
 }

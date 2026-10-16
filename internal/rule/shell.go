@@ -164,6 +164,8 @@ type shellAnalyzer struct {
 	activePowerShellFunctions map[string]bool
 	powerShellWhatIf          powerShellWhatIfState
 	enforcementUnsafe         bool
+	previousStatements        map[*syntax.Stmt]*syntax.Stmt
+	resolveNames              bool
 	statementCounter          int64
 	pipelineCounter           int64
 	halt                      bool
@@ -277,7 +279,164 @@ func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, dept
 	if !posixEnforcementShapeSafe(file) {
 		a.enforcementUnsafe = true
 	}
+	outerPrevious, outerResolve := a.previousStatements, a.resolveNames
+	a.previousStatements = previousStatements(file)
+	a.resolveNames = a.staticNamesResolvable(source, file)
 	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers)
+	a.previousStatements, a.resolveNames = outerPrevious, outerResolve
+}
+
+func previousStatements(root syntax.Node) map[*syntax.Stmt]*syntax.Stmt {
+	previous := make(map[*syntax.Stmt]*syntax.Stmt)
+	record := func(stmts []*syntax.Stmt) {
+		for i := 1; i < len(stmts); i++ {
+			previous[stmts[i]] = stmts[i-1]
+		}
+	}
+	syntax.Walk(root, func(node syntax.Node) bool {
+		switch node := node.(type) {
+		case *syntax.File:
+			record(node.Stmts)
+		case *syntax.Block:
+			record(node.Stmts)
+		case *syntax.Subshell:
+			record(node.Stmts)
+		case *syntax.IfClause:
+			record(node.Cond)
+			record(node.Then)
+		case *syntax.WhileClause:
+			record(node.Cond)
+			record(node.Do)
+		case *syntax.ForClause:
+			record(node.Do)
+		case *syntax.CaseItem:
+			record(node.Stmts)
+		}
+		return true
+	})
+	return previous
+}
+
+func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) bool {
+	if strings.Contains(source, "IFS") {
+		return false
+	}
+	resolvable := true
+	syntax.Walk(root, func(node syntax.Node) bool {
+		if !resolvable {
+			return false
+		}
+		switch node := node.(type) {
+		case *syntax.DeclClause, *syntax.ArithmCmd, *syntax.ArithmExp, *syntax.LetClause, *syntax.CStyleLoop, *syntax.CoprocClause:
+			resolvable = false
+		case *syntax.Redirect:
+			if node.N != nil && strings.HasPrefix(node.N.Value, "{") {
+				resolvable = false
+			}
+		case *syntax.ParamExp:
+			if node.Exp != nil && (node.Exp.Op == syntax.AssignUnset || node.Exp.Op == syntax.AssignUnsetOrNull) {
+				resolvable = false
+			}
+		case *syntax.Stmt:
+			call, ok := node.Cmd.(*syntax.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			args := call.Args
+			if resolved := a.resolveExecutable(node, args[0]); resolved != nil {
+				args = append([]*syntax.Word{resolved}, args[1:]...)
+			}
+			for len(args) > 0 {
+				name, ok := commandName(args)
+				if !ok {
+					resolvable = false
+					return false
+				}
+				switch commandProgram(name) {
+				case "command", "builtin", "exec", "-":
+					args = args[1:]
+					for len(args) > 0 {
+						if value, ok := staticWord(args[0]); !ok || !strings.HasPrefix(value, "-") {
+							break
+						}
+						args = args[1:]
+					}
+					continue
+				case "trap", "eval", "source", ".", "unset", "readonly", "declare", "typeset", "local", "nameref",
+					"export", "set", "shopt", "enable", "alias", "emulate", "setopt", "print":
+					resolvable = false
+				}
+				return true
+			}
+		}
+		return true
+	})
+	return resolvable
+}
+
+func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) *syntax.Word {
+	if word == nil || len(word.Parts) != 1 {
+		return nil
+	}
+	part := word.Parts[0]
+	quoted, dblQuoted := part.(*syntax.DblQuoted)
+	if dblQuoted {
+		if len(quoted.Parts) != 1 {
+			return nil
+		}
+		part = quoted.Parts[0]
+	}
+	param, ok := part.(*syntax.ParamExp)
+	if !ok || param.Param == nil || shellManagedNames[param.Param.Value] || param.Excl || param.Length || param.Width || param.IsSet || param.Flags != nil ||
+		param.NestedParam != nil || param.Index != nil || param.Slice != nil || param.Repl != nil ||
+		len(param.Modifiers) != 0 || param.Names != 0 || param.Exp != nil {
+		return nil
+	}
+	previous := a.previousStatements[stmt]
+	if previous == nil || previous.Background || previous.Coprocess || previous.Negated || len(previous.Redirs) != 0 {
+		return nil
+	}
+	call, ok := previous.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 0 || len(call.Assigns) != 1 {
+		return nil
+	}
+	assignment := call.Assigns[0]
+	if assignment.Name == nil || assignment.Name.Value != param.Param.Value || assignment.Naked || assignment.Append ||
+		assignment.Index != nil || assignment.Array != nil || assignment.Value == nil {
+		return nil
+	}
+	for _, valuePart := range assignment.Value.Parts {
+		switch valuePart := valuePart.(type) {
+		case *syntax.Lit:
+			if strings.ContainsRune(valuePart.Value, '\\') {
+				return nil
+			}
+		case *syntax.SglQuoted:
+			if valuePart.Dollar {
+				return nil
+			}
+		case *syntax.DblQuoted:
+			if valuePart.Dollar {
+				return nil
+			}
+		}
+	}
+	value, ok := staticWord(assignment.Value)
+	if !ok || value == "" || strings.ContainsAny(value, " \t\n*?[{~=") {
+		return nil
+	}
+	var resolved syntax.WordPart = &syntax.Lit{ValuePos: word.Pos(), ValueEnd: word.End(), Value: value}
+	if dblQuoted {
+		resolved = &syntax.DblQuoted{Left: quoted.Left, Right: quoted.Right, Parts: []syntax.WordPart{resolved}}
+	}
+	return &syntax.Word{Parts: []syntax.WordPart{resolved}}
+}
+
+var shellManagedNames = map[string]bool{
+	"_": true, "RANDOM": true, "SRANDOM": true, "SECONDS": true, "LINENO": true,
+	"EPOCHSECONDS": true, "EPOCHREALTIME": true, "HISTCMD": true, "BASHPID": true,
+	"BASH_COMMAND": true, "FUNCNAME": true, "BASH_SOURCE": true, "BASH_LINENO": true,
+	"BASH_ARGV": true, "BASH_ARGC": true, "GROUPS": true, "DIRSTACK": true, "PIPESTATUS": true,
 }
 
 func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functions map[string]*syntax.Stmt, activeFunctions map[string]bool, wrappers []ShellWrapper) {
@@ -322,12 +481,18 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				}
 				return true
 			}
-			command, add, err := projectPOSIXCommand(source, call.Args, call.Assigns, node.Redirs, wrappers, ctx)
+			callArgs := call.Args
+			if a.resolveNames && len(callArgs) > 0 {
+				if resolved := a.resolveExecutable(node, callArgs[0]); resolved != nil {
+					callArgs = append([]*syntax.Word{resolved}, callArgs[1:]...)
+				}
+			}
+			command, add, err := projectPOSIXCommand(source, callArgs, call.Assigns, node.Redirs, wrappers, ctx)
 			if err != nil {
 				a.report(err)
 				return true
 			}
-			if name, ok := commandName(call.Args); ok && functions[name] != nil {
+			if name, ok := commandName(callArgs); ok && functions[name] != nil {
 				command.FunctionCall = true
 				command.Recursive = activeFunctions[name]
 			}
@@ -335,7 +500,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				return false
 			}
 
-			args := call.Args
+			args := callArgs
 			commandWrappers := cloneWrappers(wrappers)
 			allowShellBuiltins := !command.FunctionCall
 			for !command.FunctionCall {
@@ -406,7 +571,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				}
 			}
 			if command.FunctionCall {
-				if name, ok := commandName(call.Args); ok {
+				if name, ok := commandName(callArgs); ok {
 					if body := functions[name]; body != nil && depth < maxCommandExpansionDepth && !activeFunctions[name] {
 						activeFunctions[name] = true
 						a.walk(source, body, depth+1, functions, activeFunctions, commandWrappers)

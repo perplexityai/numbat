@@ -402,11 +402,18 @@ syntax whose final value depends on runtime state. Use `arguments` instead of
 ### Analysis boundary
 
 The parser identifies only statically visible commands. It does not execute
-code, expand variables, or read referenced scripts. Comments and quoted
-examples do not become commands. Data-only literal here-docs stay inert; a
-here-doc supplied to an interpreter such as `sh` is executable input and is
-parsed. Supported static wrappers, inline scripts, substitutions, redirects,
-and shell functions are projected when their meaning can be established.
+code or read referenced scripts. A POSIX command name given by one plain
+variable (`$g`, `"$g"`, `${g}`) resolves only when the immediately preceding
+statement in the same list is a single static scalar assignment to that
+variable and the script contains nothing that can change variables behind the
+analyzer's back, such as `trap`, `eval`, `source`, `declare`, `export`,
+`readonly`, `set`, `IFS`, or arithmetic assignment; this list is not
+exhaustive and inline child scripts do not inherit assignments.
+Other variables stay unexpanded. Comments and quoted examples do
+not become commands. Data-only literal here-docs stay inert; a here-doc
+supplied to an interpreter such as `sh` is executable input and is parsed.
+Supported static wrappers, inline scripts, substitutions, redirects, and
+shell functions are projected when their meaning can be established.
 
 Known `tool_name` values select POSIX shell, PowerShell, or `cmd.exe` parsing;
 otherwise numbat infers the dialect from command syntax. Set `tool_name` in a
