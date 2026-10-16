@@ -144,6 +144,7 @@ Common CEL operations include:
 | List range | `items.slice(start, end)` |
 | Integer indexes | `lists.range(n).exists(i, ...)` |
 | Missing nullable value | `event.exit_code == null` |
+| Path spelling | `canonical_path(event.file_path).matches("^/etc/sudoers$")` |
 
 `matches` uses RE2 regular expressions. CEL string literals require their own
 escaping; for example, a literal dot is written as `"\\.env"`.
@@ -157,6 +158,21 @@ outcome, not a second invocation.
 Long-running commands may produce multiple `command.result` updates with the
 same `tool_call_id`. A missing `exit_code` means the source did not report one;
 it does not imply success.
+
+`canonical_path` is a lexical comparison helper. It removes `.` and `..`
+segments and repeated slashes, and strips `/proc/<pid>/root` and
+`/proc/<pid>/task/<tid>/root` prefixes (including `self` and `thread-self`),
+repeating both steps until the spelling is stable. The first segment of a
+relative spelling such as `~` or `$HOME` is kept, so `~/../~/.ssh` does not
+become `~/.ssh`; an option prefix such as `--file=/` is kept and the rest is
+cleaned as an absolute path. A spelling with no `/`, or one that still contains
+`$` or a backtick after its first segment, is returned unchanged, because an
+unexpanded value may span any number of directories. It does not expand
+variables, distinguish quoted from unquoted operands, resolve a relative path
+against the working directory, or follow symlinks. It has no Windows
+semantics: any slash-prefixed string gets POSIX cleaning, and drive letters
+and backslashes pass through unchanged. Use `command.arguments` when quoting
+or expansion matters.
 
 Do not add `tool.call` as a catch-all branch to a command rule. Generic tool
 calls have no `event.command`; write a separate tool rule only when the generic

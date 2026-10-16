@@ -1,5 +1,5 @@
 id: persistence.ssh_authorized_keys
-version: "1.2"
+version: "1.3"
 enabled: true
 title: SSH authorized_keys modification
 description: |-
@@ -9,7 +9,7 @@ severity: critical
 expr: |-
   event.event_type == "file.write" &&
   (
-    event.file_path.matches("(?i)^(~|\\$HOME|\\$env:(USERPROFILE|HOME)|%USERPROFILE%|/home/[^/]+|/Users/[^/]+|/root|/var/root|/private/var/root|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?$") ||
-    event.file_path.matches("(?i)^([A-Z]:/ProgramData|\\$env:ProgramData|%ProgramData%)/ssh/administrators_authorized_keys$")
+    canonical_path(event.file_path).matches("(?i)^(~|\\$HOME|\\$env:(USERPROFILE|HOME)|%USERPROFILE%|/home/[^/]+|/Users/[^/]+|/root|/var/root|/private/var/root|[A-Z]:/Users/[^/]+)/\\.ssh/authorized_keys2?$") ||
+    canonical_path(event.file_path).matches("(?i)^([A-Z]:/ProgramData|\\$env:ProgramData|%ProgramData%)/ssh/administrators_authorized_keys$")
   )
 tags: [attack.t1098.004]
