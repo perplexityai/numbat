@@ -179,6 +179,7 @@ func TestMuseStatusReportsPartialInstall(t *testing.T) {
 }
 
 func TestMuseUserSettingsPathHonorsXDGConfigHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	home := t.TempDir()
 	if got, want := MuseUserSettingsPath(home), filepath.Join(home, ".config", "muse", "settings.json"); got != want {
 		t.Fatalf("MuseUserSettingsPath (no XDG) = %q, want %q", got, want)

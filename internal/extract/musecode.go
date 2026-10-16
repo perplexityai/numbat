@@ -145,8 +145,8 @@ type museEvent struct {
 	Results []museToolResult `json:"results"`
 }
 
-// museToolCall is one tool invocation requested by the model. Args is a JSON
-// *string*, not an object, matching the same live-hook tool_input encoding.
+// museToolCall is one tool invocation requested by the model. The transcript
+// stores Args as a JSON-encoded string; live-hook tool_input can be an object.
 type museToolCall struct {
 	CallID string  `json:"call_id"`
 	Name   string  `json:"name"`

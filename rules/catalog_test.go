@@ -420,7 +420,7 @@ func TestPersistenceRules(t *testing.T) {
 		{"agent memory write", write("/repo/.agents/memory/notes.md"), "persistence.agent_memory_write"},
 		{"agent memory redirect", cmd("printf 'ignore previous instructions' > .agents/memory/notes.md"), "persistence.agent_memory_write"},
 		{"agent memory tee", cmd("printf x | tee .agents/memory/notes.md"), "persistence.agent_memory_write"},
-		{"agent memory sed in-place edit", cmd("sed -i '1i malicious' .agents/memory/notes.md"), "persistence.agent_memory_write"},
+		{"agent memory sed operands are not inferred", cmd("sed -i '1i note' .agents/memory/notes.md"), ""},
 		{"copy over agent memory", cmd("cp /tmp/notes.md .agents/memory/notes.md"), "persistence.agent_memory_write"},
 		{"agent memory nested file write", write("/repo/.agents/memory/team/notes.md"), "persistence.agent_memory_write"},
 		{"agent memory directory itself untouched", write("/repo/.agents/memory"), ""},
@@ -463,6 +463,52 @@ func TestPersistenceRules(t *testing.T) {
 		{"quoted echo append example untouched", cmd(`echo "echo key >> ~/.ssh/authorized_keys"`), ""},
 		{"quoted PowerShell append example untouched", cmd(`echo "Add-Content $HOME\.ssh\authorized_keys $key"`), ""},
 	})
+}
+
+func TestAgentMemoryWriteTargets(t *testing.T) {
+	eng := builtinEngine(t)
+	runCases(t, eng, []ruleCase{
+		{"normalized file target", write("/repo/.agents/./memory/topic/../MEMORY.md"), "persistence.agent_memory_write"},
+		{"normalized redirect target", cmd("printf x > ./.agents/./memory/MEMORY.md"), "persistence.agent_memory_write"},
+		{"normalized copy target", cmd("cp /tmp/note .agents/./memory/note.md"), "persistence.agent_memory_write"},
+		{"tee append target", cmd("tee -a .agents/memory/note.md"), "persistence.agent_memory_write"},
+		{"tee explicit operands", cmd("tee -- .agents/memory/note.md"), "persistence.agent_memory_write"},
+		{"copy explicit operands", cmd("cp -- /tmp/note .agents/memory/note.md"), "persistence.agent_memory_write"},
+		{"move target", cmd("mv /tmp/note .agents/memory/note.md"), "persistence.agent_memory_write"},
+		{"install target", cmd("install /tmp/note .agents/memory/note.md"), "persistence.agent_memory_write"},
+		{"file target outside memory", write("/repo/.agents/memory/../../README.md"), ""},
+		{"redirect target outside memory", cmd("printf x > .agents/memory/../../README.md"), ""},
+		{"tee target outside memory", cmd("tee .agents/memory/../../README.md"), ""},
+		{"copy target outside memory", cmd("cp /tmp/note .agents/memory/../../README.md"), ""},
+		{"literal dollar directory does not hide an escape", cmd("printf x > '.agents/memory/$DIR/../../README.md'"), ""},
+		{"symbolic prefix does not hide an escape", write("/repo/$DIR/../.agents/memory/../../README.md"), ""},
+		{"dynamic tee options are not inferred", cmd("tee $OPTIONS .agents/memory/MEMORY.md"), ""},
+		{"dynamic copy options are not inferred", cmd("cp $OPTIONS /tmp/note .agents/memory/MEMORY.md"), ""},
+		{"dynamic redirect is not inferred", cmd("printf x > .agents/memory/$NAME.md"), ""},
+		{"shadowed writer is not inferred", cmd("tee() { printf safe; }; tee .agents/memory/MEMORY.md"), ""},
+		{"sed replacement is not a target", cmd("sed -i 's#x#/tmp/.agents/memory/note.md#' README.md"), ""},
+		{"sed expression option is not a target", cmd("sed -i README.md -e 's#x#/tmp/.agents/memory/note.md#'"), ""},
+		{"tee executable is not a target", cmd("/repo/.agents/memory/tee /tmp/note"), ""},
+		{"tee input is not a target", cmd("tee /tmp/note < .agents/memory/MEMORY.md"), ""},
+		{"copy source with target directory", cmd("cp -t /tmp .agents/memory/MEMORY.md"), ""},
+		{"copy backup suffix is not a target", cmd("cp /tmp/note /tmp/other --suffix=/.agents/memory/note"), ""},
+		{"copy missing source", cmd("cp -- .agents/memory/note.md"), ""},
+		{"tee unknown option", cmd("tee --output-error=/.agents/memory/note"), ""},
+		{"memory name boundary", write("/repo/.agents/memory-backup/MEMORY.md"), ""},
+		{"unrelated directory", write("/repo/other.agents/memory/MEMORY.md"), ""},
+		{"literal backslash is not a separator", cmd(`printf x > '.agents\memory\note.md'`), ""},
+		{"mixed separators are not inferred", cmd(`printf x > '.agents/memory\notes.md'`), ""},
+		{"memory directory case matters", write("/repo/.AGENTS/memory/MEMORY.md"), ""},
+		{"PowerShell alias operands are not inferred", model.Event{
+			EventType: model.EventCommandExec, ToolName: "powershell",
+			Command: "cp /tmp/note .agents/memory/note.md",
+		}, ""},
+	})
+	for _, agent := range []string{model.AgentMuseCode, model.AgentClaudeCode, model.AgentCodex} {
+		event := write("/repo/.agents/memory/MEMORY.md")
+		event.SourceAgent = agent
+		runCases(t, eng, []ruleCase{{agent, event, "persistence.agent_memory_write"}})
+	}
 }
 
 func TestPersistencePrivilegedAccountChange(t *testing.T) {

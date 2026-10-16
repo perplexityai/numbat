@@ -24,17 +24,11 @@ const museSettingsBasename = "settings.json"
 
 // museHookEvents is the hook set numbat installs for Muse Code by default,
 // and the matcher/shape covered by the Muse 1.3.0 fixtures:
-//   - PermissionRequest is omitted. Five test conditions — bypass/trusted,
-//     default/trusted, default/untrusted with and without
-//     --user-input-auto-resolve, and finally a real interactive `muse` TUI
-//     session with no bypass flags at all — all showed it firing only for
-//     Muse's internal submit_reminder_decision bookkeeping tool, never for a
-//     real action. Installing it would add noise, not safety (a different
-//     reason than Junie's omission, same conclusion).
-//   - PreCompact, PostCompact, and Notification are bookkeeping-only,
-//     matching every other portable agent's installer.
-//   - PreLLMCall/PostLLMCall carry conversation content and are opt-in only;
-//     not installed by default.
+//   - PermissionRequest is omitted; PreToolUse is the supported pre-action
+//     enforcement point. The vendor also allows PermissionRequest to deny
+//     a tool call awaiting approval.
+//   - PreCompact, PostCompact, Notification, PreLLMCall, and PostLLMCall
+//     are not installed or mapped by numbat.
 var museHookEvents = []claudeHookEvent{
 	{settingsKey: "SessionStart", lifecycle: "session-start", matcher: "*", timeout: fastHookTimeoutSeconds},
 	{settingsKey: "UserPromptSubmit", lifecycle: "prompt-submit", matcher: "*", timeout: promptHookTimeoutSeconds},

@@ -695,10 +695,10 @@ func (r resolver) toolResponse() map[string]any {
 }
 
 // museToolResponse decodes Muse's tool_response (PostToolUse) or error
-// (PostToolUseFailure) field, which are JSON-encoded strings rather than
-// nested objects — the same shape class as Cursor's tool_output, handled the
-// same way. A field that is absent, empty, or not valid JSON yields nil so
-// exitCode/durationMs report an honest absence rather than a guessed value.
+// (PostToolUseFailure) field when supplied as a JSON-encoded string.
+// toolResponse handles object-valued tool_response directly. A field that is
+// absent, empty, or not valid JSON yields nil so exitCode/durationMs report
+// an honest absence rather than a guessed value.
 func (r resolver) museToolResponse() map[string]any {
 	fm := r.fieldMap()
 	for _, k := range []string{"tool_response", "error"} {

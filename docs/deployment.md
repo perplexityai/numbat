@@ -333,7 +333,7 @@ embedded absolute numbat path both exist inside that runtime.
 | Cursor | Cursor watches hook configuration and reloads it automatically. Verify it in Customize > Hooks and hook output; restart only if the new configuration does not appear. |
 | Gemini CLI | After an external user, project, or system settings deployment, start a new Gemini CLI process, then confirm the hook in `/hooks`. |
 | Windsurf / Devin Desktop | Dashboard hooks load when Devin Desktop starts; system-file hot reload is not documented. After external MDM deployment, restart the app for a deterministic rollout, then trigger a benign covered action. |
-| Muse Code | Hooks are discovered and validated once, at session startup; there is no `muse hooks` reload command, so a config change takes effect only in a new session. A fully valid file prints no confirming output, so verify with `hook status` rather than the session's own console output. |
+| Muse Code | [Hooks are loaded at session startup](https://meta-models.github.io/muse-code-sdk/next/guides/extend/hooks/); configuration changes take effect in a new session. Check startup diagnostics and use `hook status` to verify numbat-owned configuration on disk. Neither check proves hook execution: confirm delivery from a new session before relying on monitoring or enforcement. |
 
 ### What status proves
 
