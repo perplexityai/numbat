@@ -294,6 +294,23 @@ func TestStoreFingerprintInvalidatesStaleVerdicts(t *testing.T) {
 }
 
 func TestStoreProjectionRevisionInvalidatesEnforcementMasks(t *testing.T) {
+	for _, revision := range []string{"sequence-projection-v3", "sequence-projection-v4", "sequence-projection-v5", "sequence-projection-v6"} {
+		revision := revision
+		t.Run(revision, func(t *testing.T) {
+			observation := observeSeededProjection(t, revision)
+			if len(observation.Findings) != 0 || len(observation.EnforcementRules) != 0 {
+				t.Fatalf("stale projection state assembled a chain: %+v", observation)
+			}
+		})
+	}
+	observation := observeSeededProjection(t, sequenceProjectionRevision)
+	if len(observation.Findings) != 1 {
+		t.Fatalf("current projection state must assemble the chain, got %+v", observation)
+	}
+}
+
+func observeSeededProjection(t *testing.T, revision string) Observation {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
 	rules := compile(t, hookChainRule(nil))
 	first := secretRead("e1", "", nil)
@@ -303,7 +320,7 @@ func TestStoreProjectionRevisionInvalidatesEnforcementMasks(t *testing.T) {
 	defer db.Close()
 	st := newStore(t, db, rules, DefaultConfig())
 	raw, err := json.Marshal(storedSession{
-		RulesHash: fingerprintForProjection(rules, "sequence-projection-v3"),
+		RulesHash: fingerprintForProjection(rules, revision),
 		NextSeq:   1,
 		Entries: []storedEntry{{
 			Seq:              0,
@@ -328,9 +345,7 @@ func TestStoreProjectionRevisionInvalidatesEnforcementMasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(observation.Findings) != 0 || len(observation.EnforcementRules) != 0 {
-		t.Fatalf("stale projection state assembled a chain: %+v", observation)
-	}
+	return observation
 }
 
 func TestStoreWallClockWindowFailsClosedWithoutTimestamps(t *testing.T) {
