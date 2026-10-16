@@ -371,9 +371,11 @@ func (e MuseCodeExtractor) mapRunEvent(res *Result, src Source, sha string, st *
 				} else {
 					ev.SetToolInput(args)
 				}
-				ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(args)
 			}
 			classifyMuseTool(&ev, call.Name, args)
+			if ev.EventType == model.EventToolCall {
+				ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(args)
+			}
 			if call.CallID != "" {
 				st.noteToolCall(call.CallID, call.Name)
 			}
@@ -393,7 +395,6 @@ func (e MuseCodeExtractor) mapRunEvent(res *Result, src Source, sha string, st *
 			if result.Text != nil {
 				text = *result.Text
 				ev.SetToolResult(text)
-				ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(text)
 			}
 			e.classifyMuseResult(&ev, name, text)
 			res.Events = append(res.Events, ev)

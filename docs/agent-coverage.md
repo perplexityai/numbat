@@ -214,11 +214,10 @@ generated local TypeScript plugin, so it does not claim a first-class OpenCode
 `--managed` target until that loading path is verified. OpenClaw likewise
 documents per-state-directory plugin roots, not an administrator-managed plugin
 path; deploy its package and activation policy per Gateway service user. Muse
-Code documents a `managed_hooks_path` settings key (and a legacy
-`TBH_MANAGED_HOOKS_PATH` environment override), but numbat does not yet
-support `--managed` for it: the key's file-vs-directory shape and its
-precedence against user/project scope are unconfirmed, and numbat does not
-guess at a policy-file contract it has not verified. Other agents use
+Code documents a `managed_hooks_path` settings key pointing to a file whose
+hooks load before user and project hooks. numbat does not yet implement
+`--managed` for Muse; see its [vendor hook contract](https://meta-models.github.io/muse-code-sdk/next/guides/extend/hooks/).
+Other agents use
 user/project configuration or a vendor management plane; numbat does not
 invent a system path where the vendor has not defined one.
 
@@ -288,7 +287,7 @@ boundary.
 - Devin hooks: <https://docs.devin.ai/cli/extensibility/hooks/overview>
 - Hermes hooks: <https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks/>
 - Hermes native Windows paths: <https://hermes-agent.nousresearch.com/docs/user-guide/windows-native>
-- Muse Code hooks (internal Meta documentation; names file locations and the event list but not the field schema, response contract, or timeouts — those are empirical, from live capture): `https://dev.meta.ai/docs/muse-code/extending#hooks`
+- Muse Code hook configuration, handler fields, and deny response: <https://meta-models.github.io/muse-code-sdk/next/guides/extend/hooks/>
 - Muse Code session transcript format (third-party reverse-engineering, Apache-2.0, cross-checked against real files rather than trusted as-is): <https://github.com/specstoryai/getspecstory> — `specstory-cli/pkg/providers/musecode/MUSE-CODE-FORMAT.md`
 - Pi session format: <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md>
 - Pi extensions: <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md>

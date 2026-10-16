@@ -10,7 +10,7 @@ import (
 )
 
 // TestMuseUserInstallInjectsSchemaVersionAndPreservesForeignKeys covers the
-// one hard requirement Phase 0 confirmed against a real settings.json: Muse
+// schema requirement confirmed against Muse 1.3.0 settings.json: Muse
 // refuses to start without a top-level "schema_version": 1. numbat must add
 // it on a fresh install and never disturb it or any other foreign key.
 func TestMuseUserInstallInjectsSchemaVersionAndPreservesForeignKeys(t *testing.T) {
@@ -44,7 +44,7 @@ func TestMuseUserInstallInjectsSchemaVersionAndPreservesForeignKeys(t *testing.T
 		}
 	}
 	if _, ok := sf.hooks["PermissionRequest"]; ok {
-		t.Fatal("PermissionRequest must not be installed: Phase 0 showed it never gates a real Muse action")
+		t.Fatal("PermissionRequest must not be installed without a verified action-gating contract")
 	}
 
 	// Reinstall is idempotent: no duplicated groups, schema_version untouched.
@@ -124,7 +124,7 @@ func TestMuseUserInstallPreservesExistingSchemaVersionAndForeignHooks(t *testing
 	}
 }
 
-// TestMuseProjectHooksFileNeverGetsSchemaVersion matches Phase 0's finding
+// TestMuseProjectHooksFileNeverGetsSchemaVersion matches the vendor contract
 // that a project .muse/hooks.json only ever verified as a bare
 // {"hooks": {...}} file; numbat must not speculatively add an unverified key
 // there the way it does for the user-scope settings.json.
@@ -151,9 +151,7 @@ func TestMuseProjectHooksFileNeverGetsSchemaVersion(t *testing.T) {
 
 // TestMuseStatusReportsPartialInstall matches every other portable
 // installer's contract: removing one wired event is reported as partial, not
-// fully installed, since Phase 0 found a fully healthy hooks file prints no
-// confirming summary line, so numbat's own status check must be the source
-// of truth.
+// fully installed. It checks configuration completeness, not host execution.
 func TestMuseStatusReportsPartialInstall(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if _, err := InstallWithOptions(AgentMuse, path, "/opt/numbat", InstallOptions{}); err != nil {

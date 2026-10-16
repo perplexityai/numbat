@@ -24,6 +24,9 @@ func TestMusePreservesHookState(t *testing.T) {
 				if !Status(AgentMuse, path).Installed {
 					t.Fatal("complete install not recognized")
 				}
+				if status, err := StatusErr(AgentMuse, path); err != nil || !status.Installed {
+					t.Fatalf("public status rejected valid settings: %+v, %v", status, err)
+				}
 			}
 			if _, err := Uninstall(AgentMuse, path); err != nil {
 				t.Fatal(err)

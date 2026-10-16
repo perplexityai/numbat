@@ -23,7 +23,7 @@ import (
 const museSettingsBasename = "settings.json"
 
 // museHookEvents is the hook set numbat installs for Muse Code by default,
-// and the exact matcher/shape verified live in Phase 0 testing:
+// and the matcher/shape covered by the Muse 1.3.0 fixtures:
 //   - PermissionRequest is omitted. Five test conditions — bypass/trusted,
 //     default/trusted, default/untrusted with and without
 //     --user-input-auto-resolve, and finally a real interactive `muse` TUI
@@ -77,7 +77,7 @@ func museCommandWithArgs(binary, lifecycle string, runtimeArgs []string, enforce
 // any prior numbat group so a re-install is idempotent. Muse's command field
 // is a shell string (matching Kimi/Qwen/Devin), not Claude's execv-style
 // command+args array: Muse's own docs describe hooks as running "directly
-// through your shell," and every Phase 0 capture used a single command
+// through your shell," and the captured fixtures use a single command
 // string successfully.
 func applyMuseHooksWithArgs(sf settingsFile, binary string, runtimeArgs []string, enforce bool) {
 	for _, ev := range museHookEvents {
@@ -157,8 +157,7 @@ func uninstallMuse(path string) (InstallReport, error) {
 
 // museHookState reports whether every default event is wired (complete) and
 // whether any numbat hook is present at all (any). Muse gives no positive
-// confirmation of its own for a fully healthy hooks file (Phase 0 found only
-// warnings are ever printed, never a success line), so this completeness
+// confirmation of its own for a fully healthy hooks file, so this completeness
 // check — not Muse's own output — is what "hook status" relies on to tell a
 // full install apart from a partial one.
 func museHookState(sf settingsFile) (complete, any bool) {

@@ -1225,8 +1225,11 @@ func StatusManagedErr(agent, path string) (InstallReport, error) {
 // configReadable parses each agent's config format. Missing files are valid.
 func configReadable(agent, path string) error {
 	switch agent {
-	case AgentClaude, AgentCodex, AgentMuse:
+	case AgentClaude, AgentCodex:
 		_, err := readSettings(path)
+		return err
+	case AgentMuse:
+		_, err := readHookSettings(path, true)
 		return err
 	case AgentFactory:
 		return configReadableFactory(path)

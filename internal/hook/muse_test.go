@@ -51,7 +51,7 @@ func TestMuseParseAgent(t *testing.T) {
 }
 
 func TestMuseDenyAndEnforceContract(t *testing.T) {
-	// Phase 0 proved empirically (side-effect checks, not just message text)
+	// The author's Muse 1.3.0 host tests checked side effects and established
 	// that only exit 2 and Claude's exact hookSpecificOutput JSON block a
 	// Muse PreToolUse call; Gemini/Cursor/Pi/OpenClaw/Cline-shaped deny
 	// bodies, malformed JSON, a non-2 nonzero exit, and a killed hook all
@@ -268,8 +268,7 @@ func TestMusePostToolUseFailureIsToolError(t *testing.T) {
 // modeling numbat already uses for Kimi/Qwen: a subagent lifecycle boundary
 // is a session.start/session.end for the child's OWN session id, with
 // SubAgent naming which subagent it is. Full parent/child lineage
-// reconstruction is a separate, stateful concern (see
-// docs/notes/muse-contract.md) and is intentionally not attempted here.
+// reconstruction is a separate, stateful concern and is not attempted here.
 func TestMuseSubagentStartUsesChildSessionAndSubAgentID(t *testing.T) {
 	payload := map[string]any{
 		"hook_event_name":  "SubagentStart",

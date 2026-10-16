@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/redact"
 )
 
@@ -105,4 +106,20 @@ func TestMuseToolContentPresenceAndRedaction(t *testing.T) {
 func FuzzMuseExtract(f *testing.F) {
 	f.Add(museSessionFixture)
 	fuzzExtractor(f, MuseCodeExtractor{})
+}
+
+func TestMuseTypedToolContentRemainsOptIn(t *testing.T) {
+	res := museExtractFixture(t, "/muse/sessions/2026/09/18/sess-1/session.jsonl", museSessionFixture, false)
+	for _, ev := range res.Events {
+		switch ev.EventType {
+		case model.EventCommandExec, model.EventFileRead, model.EventFileWrite,
+			model.EventCommandResult, model.EventToolResult:
+			if ev.ContentPreview != "" {
+				t.Fatalf("typed tool or result gained a body preview: %s", ev.EventType)
+			}
+			if ev.ToolInputForAnalysis() == "" && ev.ToolResultForAnalysis() == "" {
+				t.Fatalf("typed tool content not retained for opt-in output: %s", ev.EventType)
+			}
+		}
+	}
 }

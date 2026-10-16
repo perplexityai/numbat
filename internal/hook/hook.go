@@ -2461,7 +2461,7 @@ func portableToolFamily(agent, name string) string {
 			return "web"
 		}
 	case AgentMuse:
-		// Only tool names actually captured in Phase 0 are mapped. Muse also
+		// Only tool names covered by captured fixtures are mapped. Muse also
 		// exposes edit_file, web_fetch, web_search, subagent_*, and internal
 		// bookkeeping tools (submit_reminder_decision) whose input shapes were
 		// never observed live; they stay generic tool.call rather than being
