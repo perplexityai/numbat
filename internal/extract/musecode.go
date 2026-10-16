@@ -228,10 +228,19 @@ func (e MuseCodeExtractor) mapLine(res *Result, src Source, sha string, st *muse
 	if record.PayloadType == "" {
 		var frame museRetainedFrame
 		if err := json.Unmarshal(raw, &frame); err == nil && frame.RetainedFrame != "" {
-			for _, child := range frame.Children {
+			for childIndex, child := range frame.Children {
 				var inner museRecord
 				if err := json.Unmarshal([]byte(child.RecordJSON), &inner); err == nil && inner.PayloadType != "" {
+					start := len(res.Events)
 					e.mapRecord(res, src, sha, st, streamID, line, inner)
+					for i := start; i < len(res.Events); i++ {
+						ev := &res.Events[i]
+						sum := sha256.Sum256(fmt.Appendf(nil, "%s:child:%d", ev.EventID, childIndex))
+						ev.EventID = "muse-" + hex.EncodeToString(sum[:8])
+						// record_json is a string, so its decoded fields are not
+						// addressable by a pointer into the source line.
+						ev.Evidence.JSONPointer = fmt.Sprintf("/children/%d/record_json", childIndex)
+					}
 				}
 			}
 			return

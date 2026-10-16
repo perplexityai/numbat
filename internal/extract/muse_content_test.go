@@ -7,6 +7,8 @@ import (
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/redact"
+	"github.com/perplexityai/numbat/internal/rule"
+	"github.com/perplexityai/numbat/internal/sequence"
 )
 
 func TestMuseRelocatedSessionPath(t *testing.T) {
@@ -121,5 +123,81 @@ func TestMuseTypedToolContentRemainsOptIn(t *testing.T) {
 				t.Fatalf("typed tool content not retained for opt-in output: %s", ev.EventType)
 			}
 		}
+	}
+}
+
+func TestMuseRetainedFrameIdentityAndEvidence(t *testing.T) {
+	records := []string{
+		`{"payload_type":"runtime.session","payload":{"kind":"run","event":{"kind":"assistant_tool_calls_committed","tool_calls":[{"call_id":"call-1","name":"bash","args":"{\"command\":\"echo first\"}"},{"call_id":"call-2","name":"bash","args":"{\"command\":\"echo second\"}"}]}}}`,
+		`{"payload_type":"runtime.session","payload":{"kind":"run","event":{"kind":"tool_result_batch_committed","results":[{"tool_call_id":"call-1","text":"{\"exit_code\":0}"},{"tool_call_id":"call-2","text":"{\"exit_code\":0}"}]}}}`,
+	}
+	frame, err := json.Marshal(map[string]any{
+		"retained_frame": "session_permission_transaction",
+		"children": []any{
+			map[string]string{"record_json": `{"payload_type":"runtime.session.permission_format_declared","payload":{}}`},
+			map[string]string{"record_json": records[0]},
+			map[string]string{"record_json": records[1]},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := rule.NewEngine([]rule.Source{{Name: "synthetic", Rules: []rule.Rule{{
+		ID: "test.muse_result", Title: "Command result follows call", Version: "1.0", Severity: model.SeverityLow,
+		Sequence: &rule.SequenceSpec{WithinEvents: 8, Steps: []rule.SequenceStep{
+			{Expr: `event.event_type == "command.exec"`},
+			{Expr: `event.event_type == "command.result"`},
+		}},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, body string
+		framed     bool
+	}{
+		{"ordinary", strings.Join(records, "\n"), false},
+		{"retained", string(frame), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/muse/sessions/2026/01/01/session-1/session.jsonl"
+			result := museExtractFixture(t, path, tc.body, false)
+			repeated := museExtractFixture(t, path, tc.body, false)
+			if len(result.Events) != 4 || len(result.Diagnostics) != 0 {
+				t.Fatalf("unexpected extraction: %+v", result)
+			}
+			lines := strings.Split(tc.body, "\n")
+			seen := map[string]bool{}
+			tracker := sequence.NewTracker(engine.SequenceRules(), sequence.DefaultConfig())
+			findings := 0
+			for i, event := range result.Events {
+				if seen[event.EventID] || event.EventID != repeated.Events[i].EventID {
+					t.Errorf("event %d has duplicate or unstable ID %q", i, event.EventID)
+				}
+				seen[event.EventID] = true
+				if err := event.Validate(); err != nil {
+					t.Fatal(err)
+				}
+				var document any
+				if err := json.Unmarshal([]byte(lines[event.Evidence.Line-1]), &document); err != nil {
+					t.Fatal(err)
+				}
+				value, err := resolveJSONPointer(document, event.Evidence.JSONPointer)
+				if err != nil {
+					t.Errorf("event %d source pointer %q: %v", i, event.Evidence.JSONPointer, err)
+				}
+				if tc.framed && value != records[i/2] {
+					t.Errorf("event %d does not cite its encoded child record", i)
+				}
+				observation, err := tracker.Observe(event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				findings += len(observation.Findings)
+			}
+			if findings != 1 {
+				t.Fatalf("command/result sequence findings = %d, want 1", findings)
+			}
+		})
 	}
 }
