@@ -15,8 +15,8 @@ import (
 // so this file only supplies Muse's own event list, path resolution, and the
 // one real per-scope difference: the user settings file requires a top-level
 // "schema_version": 1 or every muse command fails at startup; a project
-// hooks.json does not (see docs/notes/muse-contract.md for the empirical
-// basis of every choice here).
+// hooks.json does not. The hook shape and reserved hooks.state metadata are
+// documented at https://meta-models.github.io/muse-code-sdk/next/guides/extend/hooks/.
 
 // museSettingsBasename names Muse's user-scope config file. Only a path with
 // this exact basename gets the schema_version invariant.
@@ -102,7 +102,7 @@ func applyMuseHooksWithArgs(sf settingsFile, binary string, runtimeArgs []string
 // never claim JSONC support the way Devin's do.
 func installMuseWithArgs(path, binary string, runtimeArgs []string, enforce bool) (InstallReport, error) {
 	rep := InstallReport{Agent: AgentMuse, SettingsPath: path, Supported: true}
-	sf, err := readSettings(path)
+	sf, err := readHookSettings(path, true)
 	if err != nil {
 		return rep, err
 	}
@@ -135,7 +135,7 @@ func uninstallMuse(path string) (InstallReport, error) {
 		rep.Message = "no settings file; nothing to remove"
 		return rep, nil
 	}
-	sf, err := readSettings(path)
+	sf, err := readHookSettings(path, true)
 	if err != nil {
 		return rep, err
 	}
@@ -175,7 +175,7 @@ func museHookState(sf settingsFile) (complete, any bool) {
 // present, without modifying anything.
 func statusMuse(path string) InstallReport {
 	rep := InstallReport{Agent: AgentMuse, SettingsPath: path, Supported: true}
-	sf, err := readSettings(path)
+	sf, err := readHookSettings(path, true)
 	if err != nil {
 		rep.Message = err.Error()
 		return rep

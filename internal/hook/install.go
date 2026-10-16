@@ -165,8 +165,9 @@ func setJSONField(fields map[string]json.RawMessage, key string, value any) erro
 // editing. Unrelated top-level keys are preserved verbatim in values so a
 // round-trip never drops a user's configuration.
 type settingsFile struct {
-	values map[string]json.RawMessage
-	hooks  map[string][]hookGroup
+	values    map[string]json.RawMessage
+	hooks     map[string][]hookGroup
+	hookState json.RawMessage
 }
 
 // numbatHookMarker identifies owned entries independently of the binary name.
@@ -528,6 +529,11 @@ func slicesContain(items []string, want string) bool {
 // editing. A missing file is not an error: it yields an empty settings value so
 // install can create it.
 func readSettings(path string) (settingsFile, error) {
+	return readHookSettings(path, false)
+}
+
+// Muse reserves hooks.state for metadata rather than an event's hook groups.
+func readHookSettings(path string, preserveState bool) (settingsFile, error) {
 	sf := settingsFile{
 		values: map[string]json.RawMessage{},
 		hooks:  map[string][]hookGroup{},
@@ -545,9 +551,24 @@ func readSettings(path string) (settingsFile, error) {
 	if err := json.Unmarshal(data, &sf.values); err != nil {
 		return settingsFile{}, fmt.Errorf("parse %s: %w", path, err)
 	}
+	if sf.values == nil {
+		return settingsFile{}, fmt.Errorf("parse %s: expected a settings object", path)
+	}
 	if raw, ok := sf.values["hooks"]; ok {
-		if err := json.Unmarshal(raw, &sf.hooks); err != nil {
+		var hooks map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &hooks); err != nil {
 			return settingsFile{}, fmt.Errorf("parse hooks in %s: %w", path, err)
+		}
+		for key, value := range hooks {
+			if preserveState && key == "state" {
+				sf.hookState = value
+				continue
+			}
+			var groups []hookGroup
+			if err := json.Unmarshal(value, &groups); err != nil {
+				return settingsFile{}, fmt.Errorf("parse hooks in %s: %w", path, err)
+			}
+			sf.hooks[key] = groups
 		}
 	}
 	if sf.hooks == nil {
@@ -565,8 +586,15 @@ func (sf settingsFile) marshal() ([]byte, error) {
 			out[k] = v
 		}
 	}
-	if len(sf.hooks) > 0 {
-		data, err := json.Marshal(sf.hooks)
+	if len(sf.hooks) > 0 || len(sf.hookState) > 0 {
+		hooks := make(map[string]any, len(sf.hooks)+1)
+		for key, groups := range sf.hooks {
+			hooks[key] = groups
+		}
+		if len(sf.hookState) > 0 {
+			hooks["state"] = sf.hookState
+		}
+		data, err := json.Marshal(hooks)
 		if err != nil {
 			return nil, err
 		}

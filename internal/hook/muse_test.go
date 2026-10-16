@@ -9,7 +9,8 @@ import (
 )
 
 // Field shapes below are sanitized from real `muse exec` hook captures
-// (Muse Code 1.3.0), verified against docs/notes/muse-contract.md. Muse's
+// (Muse Code 1.3.0). The response contract is documented at
+// https://meta-models.github.io/muse-code-sdk/next/guides/extend/hooks/. Muse's
 // hook_event_name/session_id/tool_name/tool_input/tool_use_id/cwd naming is
 // byte-for-byte Claude Code's, so lifecycle resolution and most field
 // resolution are free; tool_response/error being JSON-encoded strings

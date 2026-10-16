@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/redact"
 )
 
 // artifactMuseSessionJSONL is the Evidence.ArtifactType for Muse Code session
@@ -63,7 +64,7 @@ const museRetainedFrameKind = "retained_frame"
 // The core envelope and event catalog matched exactly across that ~13-version
 // gap; the retained-frame wrapper above is the one addition found empirically
 // that the third-party document does not mention. Muse Code's own docs do not
-// publish this format (see docs/notes/muse-contract.md, not committed).
+// publish this format; the synthetic fixtures preserve the observed shapes.
 //
 // The zero value is ready to use. maxBytes overrides the artifact size cap and
 // exists for tests; production callers use the zero value.
@@ -154,15 +155,15 @@ type museEvent struct {
 // museToolCall is one tool invocation requested by the model. Args is a JSON
 // *string*, not an object, matching the same live-hook tool_input encoding.
 type museToolCall struct {
-	CallID string `json:"call_id"`
-	Name   string `json:"name"`
-	Args   string `json:"args"`
+	CallID string  `json:"call_id"`
+	Name   string  `json:"name"`
+	Args   *string `json:"args"`
 }
 
 // museToolResult is one tool outcome, matched to its call by ToolCallID.
 type museToolResult struct {
-	ToolCallID string `json:"tool_call_id"`
-	Text       string `json:"text"`
+	ToolCallID string  `json:"tool_call_id"`
+	Text       *string `json:"text"`
 }
 
 // museBashResult decodes a bash tool result's text, which is itself a
@@ -362,7 +363,17 @@ func (e MuseCodeExtractor) mapRunEvent(res *Result, src Source, sha string, st *
 			ev.ToolName = call.Name
 			ev.ToolCallID = call.CallID
 			ev.Evidence.JSONPointer = fmt.Sprintf("/payload/event/tool_calls/%d", i)
-			classifyMuseTool(&ev, call.Name, call.Args)
+			var args string
+			if call.Args != nil {
+				args = *call.Args
+				if json.Valid([]byte(args)) {
+					ev.SetToolInput(json.RawMessage(args))
+				} else {
+					ev.SetToolInput(args)
+				}
+				ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(args)
+			}
+			classifyMuseTool(&ev, call.Name, args)
 			if call.CallID != "" {
 				st.noteToolCall(call.CallID, call.Name)
 			}
@@ -378,7 +389,13 @@ func (e MuseCodeExtractor) mapRunEvent(res *Result, src Source, sha string, st *
 			ev.ToolName = name
 			ev.ToolCallID = result.ToolCallID
 			ev.Evidence.JSONPointer = fmt.Sprintf("/payload/event/results/%d", i)
-			e.classifyMuseResult(&ev, name, result.Text)
+			var text string
+			if result.Text != nil {
+				text = *result.Text
+				ev.SetToolResult(text)
+				ev.ContentPreview, ev.ContentPreviewTruncated = redact.ToolInputPreview(text)
+			}
+			e.classifyMuseResult(&ev, name, text)
 			res.Events = append(res.Events, ev)
 		}
 	}
@@ -491,17 +508,25 @@ func (MuseCodeExtractor) base(src Source, sha string, st *museState, line, sub i
 // still parsed, just without session/subagent attribution.
 func museFileContext(path string) (rootSessionID, subAgent, streamID string) {
 	parts := strings.Split(filepath.ToSlash(path), "/")
-	for i := 0; i+5 < len(parts); i++ {
+	for i := len(parts) - 6; i >= 0; i-- {
 		if parts[i] != "sessions" || parts[i+1] == "" || parts[i+2] == "" || parts[i+3] == "" || parts[i+4] == "" {
 			continue
 		}
-		rootSessionID = parts[i+4]
-		streamID = rootSessionID
+		if _, err := time.Parse("2006/01/02", strings.Join(parts[i+1:i+4], "/")); err != nil {
+			continue
+		}
+		child := ""
 		rest := parts[i+5:]
 		for len(rest) >= 3 && rest[0] == "subagent" && rest[1] != "" {
-			subAgent = rest[1]
-			streamID = subAgent
+			child = rest[1]
 			rest = rest[2:]
+		}
+		if len(rest) != 1 || rest[0] != "session.jsonl" {
+			continue
+		}
+		rootSessionID, subAgent, streamID = parts[i+4], child, parts[i+4]
+		if child != "" {
+			streamID = child
 		}
 		return rootSessionID, subAgent, streamID
 	}
