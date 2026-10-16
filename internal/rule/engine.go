@@ -117,6 +117,7 @@ func newEnv() (*cel.Env, error) {
 			ext.ParseStructTags(true),
 		),
 		ext.Lists(),
+		canonicalPathFunction(),
 		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable(shellCommandsVariable, cel.ListType(cel.ObjectType("rule.ShellCommand"))),
 	)
@@ -379,7 +380,10 @@ func validateRuleAST(ast *cel.Ast) error {
 func programExpr(env *cel.Env, ast *cel.Ast) (compiledExpression, error) {
 	usesContent := astReferencesEventField(ast, "content") ||
 		astReferencesEventField(ast, "content_bytes") ||
-		astReferencesEventField(ast, "content_truncated")
+		astReferencesEventField(ast, "content_truncated") ||
+		astReferencesEventField(ast, "tool_input") || astReferencesEventField(ast, "tool_result") ||
+		astReferencesEventField(ast, "tool_input_bytes") || astReferencesEventField(ast, "tool_result_bytes") ||
+		astReferencesEventField(ast, "tool_input_truncated") || astReferencesEventField(ast, "tool_result_truncated")
 	programOptions := []cel.ProgramOption{cel.EvalOptions(cel.OptOptimize)}
 	if usesContent {
 		programOptions = append(programOptions, cel.CostLimit(contentRuleCostLimit))

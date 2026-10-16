@@ -44,7 +44,7 @@ import (
 // maxRecordLine bounds one NDJSON input line, matching the fixture reader's
 // cap so a corrupt stream cannot exhaust memory.
 const (
-	maxRecordLine                 = 8 * 1024 * 1024
+	maxRecordLine                 = 64 * 1024 * 1024
 	maxEvidenceLine               = 16 * 1024 * 1024
 	maxJSONEvidenceBytes          = 64 * 1024 * 1024
 	maxResultWarnings             = 100

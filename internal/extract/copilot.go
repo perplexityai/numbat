@@ -171,6 +171,8 @@ func (st *copilotState) emitSessionEnd(res *Result, sha string, src Source) {
 // on separate lines, so call IDs correlate later command results and exit codes
 // without buffering.
 func (e CopilotExtractor) mapLine(res *Result, src Source, sha string, st *copilotState, line int, raw []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], raw) }()
 	var entry copilotEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		res.diag(src.Path, line, "malformed JSON line")
@@ -236,6 +238,7 @@ func (e CopilotExtractor) emitTool(res *Result, src Source, sha string, st *copi
 	}
 
 	if post {
+		ev.Evidence.JSONPointer = "" // The completion envelope includes result and error fields, not only echoed arguments.
 		// A result moment. Promote to command.result only when the call id was a
 		// recorded shell command; otherwise it is a generic tool.result.
 		ev.Actor = model.ActorTool
@@ -337,8 +340,9 @@ func copilotMessageRole(e *copilotEntry) (model.EventType, string, bool) {
 // is exactly the false-positive direction the locked precision rules forbid, so a
 // documented false negative (an unrecognized verb staying tool.call) is preferred.
 // The argument-field spellings (command/cmd, path/filePath/file_path, url/query)
-// likewise match the live mapper. Read content is never stored.
+// likewise match the live mapper. Full arguments are retained separately for content rules and explicit output.
 func classifyCopilotTool(ev *model.Event, name string, input map[string]json.RawMessage) {
+	ev.SetToolInput(input)
 	ev.ToolName = name
 	switch name {
 	case "ShellCommand", "run_shell_command", "Bash":

@@ -90,6 +90,7 @@ export default function (pi) {
     forward("post-tool", body(ctx, {
       tool_call_id: event.toolCallId, tool_name: event.toolName, tool_input: event.input,
       tool_result: event.details, is_error: event.isError,
+      tool_response: { content: event.content, details: event.details, isError: event.isError },
     }));
   });
   pi.on("message_end", async (event, ctx) => {

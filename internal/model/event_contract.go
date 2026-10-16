@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -48,11 +49,23 @@ var eventFields = map[EventType][]string{
 	EventNetworkIndicator: {"url", "tool_name", "mcp_server", "mcp_tool", "tool_call_id", "decision"},
 }
 
+func init() {
+	for _, kind := range []EventType{EventToolCall, EventToolResult, EventCommandExec, EventCommandResult, EventFileRead, EventFileWrite, EventFileDelete, EventNetworkIndicator, EventPermissionRequested, EventPermissionApproved, EventPermissionDenied} {
+		eventFields[kind] = append(eventFields[kind], "tool_input", "tool_input_bytes", "tool_input_truncated", "tool_result", "tool_result_bytes", "tool_result_truncated")
+	}
+}
+
 // valueBearingFields lets Validate detect fields set outside eventFields.
 var valueBearingFields = []struct {
 	name string
 	set  func(Event) bool
 }{
+	{"tool_input", func(e Event) bool { return e.ToolInputForAnalysis() != "" }},
+	{"tool_input_bytes", func(e Event) bool { return e.ToolInputBytesForAnalysis() != 0 }},
+	{"tool_input_truncated", func(e Event) bool { return e.ToolInputTruncatedForAnalysis() }},
+	{"tool_result", func(e Event) bool { return e.ToolResultForAnalysis() != "" }},
+	{"tool_result_bytes", func(e Event) bool { return e.ToolResultBytesForAnalysis() != 0 }},
+	{"tool_result_truncated", func(e Event) bool { return e.ToolResultTruncatedForAnalysis() }},
 	{"command", func(e Event) bool { return e.Command != "" }},
 	{"exit_code", func(e Event) bool { return e.ExitCode != nil }},
 	{"duration_ms", func(e Event) bool { return e.DurationMs != nil }},
@@ -157,7 +170,7 @@ func (e Event) Validate() error {
 	if e.Content != "" && e.ContentBytes == 0 {
 		return fmt.Errorf("event %s: content requires content_bytes", e.EventID)
 	}
-	if e.Content == "" && (e.ContentBytes != 0 || e.ContentTruncated) {
+	if e.Content == "" && (e.ContentBytes != 0 || e.ContentTruncated) && !slices.Contains(e.ContentOmitted, "content") {
 		return fmt.Errorf("event %s: content metadata requires content", e.EventID)
 	}
 	if e.analysisContent != "" && e.analysisContentBytes == 0 {
@@ -168,6 +181,40 @@ func (e Event) Validate() error {
 	}
 	if e.Content != "" && e.analysisContent != "" {
 		return fmt.Errorf("event %s: content has both emitted and analysis values", e.EventID)
+	}
+	if len(e.ContentOmitted) > 3 {
+		return fmt.Errorf("event %s: too many content_omitted fields", e.EventID)
+	}
+	for i, field := range e.ContentOmitted {
+		if !slices.Contains(allowed, field) || slices.Contains(e.ContentOmitted[:i], field) {
+			return fmt.Errorf("event %s: invalid content_omitted field %q", e.EventID, field)
+		}
+		var body string
+		switch field {
+		case "content":
+			body = e.ContentForAnalysis()
+		case "tool_input":
+			body = e.ToolInputForAnalysis()
+		case "tool_result":
+			body = e.ToolResultForAnalysis()
+		default:
+			return fmt.Errorf("event %s: invalid content_omitted field %q", e.EventID, field)
+		}
+		if body != "" {
+			return fmt.Errorf("event %s: content_omitted field %q has a body", e.EventID, field)
+		}
+	}
+	for _, payload := range []struct {
+		text      string
+		bytes     int
+		truncated bool
+	}{
+		{e.ToolInputForAnalysis(), e.ToolInputBytesForAnalysis(), e.ToolInputTruncatedForAnalysis()},
+		{e.ToolResultForAnalysis(), e.ToolResultBytesForAnalysis(), e.ToolResultTruncatedForAnalysis()},
+	} {
+		if len(payload.text) > ToolPayloadMaxBytes || payload.bytes < 0 {
+			return fmt.Errorf("event %s: invalid tool payload", e.EventID)
+		}
 	}
 	allow := make(map[string]struct{}, len(allowed))
 	for _, f := range allowed {

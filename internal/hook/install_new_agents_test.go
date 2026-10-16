@@ -20,7 +20,7 @@ func TestPiInstallLifecycleAndForeignCollision(t *testing.T) {
 		t.Fatalf("install/status = %+v / %+v", rep, Status(AgentPi, path))
 	}
 	body := readTestFile(t, path)
-	for _, want := range []string{piPluginMarker, `pi.on("tool_call"`, `pi.on("message_end"`, `pi.on("tool_result"`, "tool_result: event.details", "message_parts", `block?.type === "thinking"`, "!block.redacted", "event.message.responseModel", "event.message.provider", "event.message.timestamp", "INCLUDE_REASONING", "spawnSync", `--enforce`, `sessionManager?.getSessionId`} {
+	for _, want := range []string{piPluginMarker, `pi.on("tool_call"`, `pi.on("message_end"`, `pi.on("tool_result"`, "tool_result: event.details", "tool_response: { content: event.content, details: event.details, isError: event.isError }", "message_parts", `block?.type === "thinking"`, "!block.redacted", "event.message.responseModel", "event.message.provider", "event.message.timestamp", "INCLUDE_REASONING", "spawnSync", `--enforce`, `sessionManager?.getSessionId`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Pi extension missing %q", want)
 		}
@@ -296,6 +296,7 @@ func TestAmpInstallAndAuggieWrappers(t *testing.T) {
 		ampPluginMarker,
 		`amp.on("tool.call"`,
 		`tool_result: toolResultMetadata(event.output)`,
+		`tool_response: event.output`,
 		`assistant_text: finalAssistantText(event.messages)`,
 		"reject-and-continue",
 		"spawnSync",

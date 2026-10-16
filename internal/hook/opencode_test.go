@@ -579,8 +579,8 @@ func TestOpenCodePluginForwardsLiveShapeKeys(t *testing.T) {
 			t.Errorf("generated plugin missing live-shape forward %q:\n%s", key, src)
 		}
 	}
-	if strings.Contains(src, "output: output?.output") {
-		t.Error("generated plugin forwards unused raw tool output")
+	if !strings.Contains(src, "output: output?.output") {
+		t.Error("generated plugin drops tool output")
 	}
 }
 

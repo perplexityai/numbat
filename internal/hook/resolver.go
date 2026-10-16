@@ -417,15 +417,14 @@ func (r resolver) toolInputValue() any {
 		keys = []string{"tool_input", "toolInput", "toolArgs", "tool_args"}
 	}
 	for _, key := range keys {
-		switch v := r.fieldMap()[key].(type) {
-		case map[string]any:
-			return v
-		case string:
-			if v != "" {
-				return v
+		if value, ok := r.fieldMap()[key]; ok {
+			if value == nil {
+				return json.RawMessage("null")
 			}
+			return value
 		}
 	}
+
 	return nil
 }
 

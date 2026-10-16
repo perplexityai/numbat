@@ -194,6 +194,7 @@ export const NumbatPlugin = async ({ directory }) => {
         callID: input?.callID,
         args: input?.args,
         metadata: output?.metadata,
+        output: output?.output,
       }, directory));
     },
     event: async ({ event }) => {

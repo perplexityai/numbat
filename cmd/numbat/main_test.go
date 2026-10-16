@@ -32,7 +32,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(out, "numbat") || !strings.Contains(out, "schema 0.4.0") {
+	if !strings.Contains(out, "numbat") || !strings.Contains(out, "schema 0.5.0") {
 		t.Fatalf("version output = %q", out)
 	}
 }
@@ -91,7 +91,7 @@ func TestHelpDescribesOperationalBoundaries(t *testing.T) {
 		{
 			name: "ship delivery",
 			args: []string{"help", "ship"},
-			want: []string{"Retained records up to 8 MiB are delivered at least once", "Receivers must tolerate duplicates", "larger than 8 MiB"},
+			want: []string{"Retained records up to 64 MiB are delivered at least once", "Receivers must tolerate duplicates", "larger than 64 MiB"},
 		},
 		{
 			name: "hook enforcement",
@@ -408,7 +408,7 @@ func TestRulesTestNormalizesWindowsPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	in := strings.NewReader(`{"schema_version":"0.4.0","event_id":"e","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"C:\\repo\\.env","confidence":"high","evidence":{"artifact_type":"fixture","local_path":"fixture"}}` + "\n")
+	in := strings.NewReader(`{"schema_version":"0.5.0","event_id":"e","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"C:\\repo\\.env","confidence":"high","evidence":{"artifact_type":"fixture","local_path":"fixture"}}` + "\n")
 	var out bytes.Buffer
 	matched, _, err := evalFixture(eng, in, &out)
 	if err != nil {
@@ -516,7 +516,7 @@ func TestEvalFixtureRejectsInvalidEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	in := strings.NewReader(`{"schema_version":"0.4.0","event_id":"e","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","confidence":"high","evidence":{}}` + "\n")
+	in := strings.NewReader(`{"schema_version":"0.5.0","event_id":"e","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","confidence":"high","evidence":{}}` + "\n")
 	var out bytes.Buffer
 	_, _, err = evalFixture(eng, in, &out)
 	if err == nil || !strings.Contains(err.Error(), "fixture line 1") || !strings.Contains(err.Error(), "empty evidence.artifact_type") {

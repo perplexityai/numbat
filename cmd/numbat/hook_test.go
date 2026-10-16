@@ -253,16 +253,76 @@ func TestHookReasoningRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
-func TestHookInstallWiresFullContent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	_, errb, code := runCLI("hook", "install", "--agent", "claude", "--settings", path,
-		"--emit", "events", "--content", "full")
-	if code != 0 {
-		t.Fatalf("install exit = %d, stderr=%q", code, errb)
+func TestHookToolRulesSeeOriginalAcrossOutputModes(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	rulesDir := writeEnforceRuleFile(t, `id: test.tool_payload
+version: "1.0"
+enabled: true
+title: Synthetic tool payload
+severity: high
+expr: event.tool_input.contains("PRIVATE_CANARY") && event.tool_result.contains("RESULT_TAIL")
+`)
+	payload := `{"tool_name":"mcp__notes__save","tool_input":{"password":"PRIVATE_CANARY"},"tool_response":"` + strings.Repeat("x", 70000) + `RESULT_TAIL"}`
+	for _, mode := range []string{"preview", "full", "raw"} {
+		for _, scope := range []string{"all", "messages"} {
+			t.Run(mode+"/"+scope, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "records.ndjson")
+				out, errb, code := runCLIStdin(payload, "hook", "PostToolUse", "--agent", "claude",
+					"--emit", "all", "--content", mode, "--content-scope", scope, "--rules-dir", rulesDir, "--no-builtin-rules",
+					"--output", "file", "--output-file", path)
+				if code != 0 || strings.TrimSpace(out) != "{}" {
+					t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if countType(recordTypes(t, string(data)), "finding") != 1 {
+					t.Fatal("output policy changed local tool detection")
+				}
+				if strings.Contains(string(data), "PRIVATE_CANARY") != (mode == "raw" && scope == "all") {
+					t.Fatal("wrong output redaction policy")
+				}
+				for _, ev := range decodeEventRecords(t, string(data)) {
+					if ev.ToolInputBytes == 0 || ev.ToolResultBytes == 0 || ev.ToolInputTruncated || ev.ToolResultTruncated {
+						t.Fatal("output scope lost tool completeness metadata")
+					}
+					if scope == "messages" && (ev.ToolInput != "" || ev.ToolResult != "") {
+						t.Fatal("messages scope exposed tool bodies")
+					}
+				}
+			})
+		}
 	}
-	for _, command := range claudeInstalledCommands(t, path) {
-		if !strings.Contains(command, "--content=full") {
-			t.Fatalf("installed command missing full-content option: %q", command)
+}
+
+func TestHookInstallWiresFullContent(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	for _, mode := range []string{"full", "raw"} {
+		for _, scope := range []string{"", "all", "messages"} {
+			t.Run(mode+"/"+scope, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "settings.json")
+				args := []string{
+					"hook", "install", "--agent", "claude", "--settings", path,
+					"--emit", "events", "--content", mode,
+				}
+				if scope != "" {
+					args = append(args, "--content-scope", scope)
+				}
+				_, errb, code := runCLI(args...)
+				if code != 0 {
+					t.Fatalf("install exit = %d, stderr=%q", code, errb)
+				}
+				for _, command := range claudeInstalledCommands(t, path) {
+					if !strings.Contains(command, "--content="+mode) {
+						t.Fatalf("installed command missing full-content option: %q", command)
+					}
+					if strings.Contains(command, "--content-scope") != (scope == "messages") ||
+						(scope == "messages" && !strings.Contains(command, "--content-scope=messages")) {
+						t.Fatalf("installed command has wrong content scope: %q", command)
+					}
+				}
+			})
 		}
 	}
 }

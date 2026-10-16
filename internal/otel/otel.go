@@ -218,6 +218,7 @@ func mapRecord(resourceAttrs []keyValue, rec logRecord, eventID string) MapResul
 	if !classify(&ev, &a, rec) {
 		return MapResult{SourceAgent: sourceAgent}
 	}
+	retainToolContent(&ev, rec)
 	applyCommonContext(&ev, &a)
 	return MapResult{Event: ev, Mapped: true, SourceAgent: sourceAgent}
 }
@@ -371,6 +372,26 @@ func classifyTool(ev *model.Event, a *attrs, rec logRecord) {
 
 	if path := a.str(attrFilePath, attrCodePath); path != "" {
 		classifyFile(ev, a, name, path)
+		if errored(a, rec) {
+			ev.Tags = append(ev.Tags, model.TagToolError)
+		}
+		return
+	}
+
+	// Keep typed file/network activity above even when it carries a result.
+	// Other recorded results are completions, including empty or null results.
+	recordAttrs := newAttrs(nil, rec.attributes)
+	if _, ok := recordAttrs.m[attrGenAIToolCallResult]; ok {
+		ev.EventType = model.EventToolResult
+		ev.Actor = model.ActorTool
+		if server, tool, ok := splitMCPName(name); ok {
+			ev.MCPServer, ev.MCPTool = server, tool
+		}
+		if isShellToolName(name) {
+			ev.EventType = model.EventCommandResult
+			ev.Command = firstNonEmpty(a.str(attrCommand, attrProcessCommandLine, attrProcessCommand), toolCommandArg(a))
+			applyCommandResultMetadata(ev, a)
+		}
 		if errored(a, rec) {
 			ev.Tags = append(ev.Tags, model.TagToolError)
 		}

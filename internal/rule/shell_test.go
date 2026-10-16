@@ -466,6 +466,125 @@ func TestAnalyzeShellCommandsReportsUncertainInput(t *testing.T) {
 	}
 }
 
+func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
+	t.Parallel()
+	resolved := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"plain", `g=gh; $g repo fork octo/repo`, "$g"},
+		{"quoted", `g=gh; "$g" repo fork octo/repo`, `"$g"`},
+		{"braced", `g=gh; ${g} repo fork octo/repo`, "${g}"},
+		{"newline", "g=gh\n$g repo fork octo/repo", "$g"},
+		{"after other statement", `echo start; g=gh; $g repo fork octo/repo`, "$g"},
+		{"inside subshell", `(g=gh; $g repo fork octo/repo)`, "$g"},
+		{"inside block", `{ g=gh; $g repo fork octo/repo; }`, "$g"},
+		{"inside branch", `if true; then g=gh; $g repo fork octo/repo; fi`, "$g"},
+		{"path", `g=/usr/bin/gh; $g repo fork octo/repo`, "$g"},
+		{"single quoted value", `g='gh'; $g repo fork octo/repo`, "$g"},
+		{"double quoted value", `g="gh"; $g repo fork octo/repo`, "$g"},
+	}
+	for _, tt := range resolved {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			commands, usable, err := analyzeShellCommands(tt.source)
+			if err != nil || !usable {
+				t.Fatalf("analyze = (%#v, %v, %v)", commands, usable, err)
+			}
+			command := commandNamed(t, commands, "gh", 0)
+			if command.Arguments[0].Source != tt.want || command.Arguments[0].Expands {
+				t.Fatalf("executable argument = %#v, want source %q without expansion", command.Arguments[0], tt.want)
+			}
+			wantQuote := quoteNone
+			if strings.HasPrefix(tt.want, `"`) {
+				wantQuote = quoteDouble
+			}
+			if command.Arguments[0].Quote != wantQuote {
+				t.Fatalf("executable quote = %q, want %q", command.Arguments[0].Quote, wantQuote)
+			}
+			if len(command.Argv) != 4 || command.Argv[1] != "repo" || command.Argv[2] != "fork" {
+				t.Fatalf("argv = %#v", command.Argv)
+			}
+		})
+	}
+
+	unresolved := []struct {
+		name   string
+		source string
+	}{
+		{"unknown", `$g repo fork octo/repo`},
+		{"not adjacent", `g=gh; true; $g repo fork octo/repo`},
+		{"reassigned elsewhere", `g=gh; (g=echo); $g repo fork octo/repo`},
+		{"block", `{ g=gh; }; $g repo fork octo/repo`},
+		{"conditional", `g=gh && $g repo fork octo/repo`},
+		{"background", `g=echo; g=gh & $g repo fork octo/repo`},
+		{"other variable", `h=gh; $g repo fork octo/repo`},
+		{"two assignments", `h=x g=gh; $g repo fork octo/repo`},
+		{"redirected assignment", `g=gh >/dev/null; $g repo fork octo/repo`},
+		{"substitution", `g=$(which gh); $g repo fork octo/repo`},
+		{"expansion", `g=$GH; $g repo fork octo/repo`},
+		{"spaced value", `g="gh repo"; $g fork octo/repo`},
+		{"glob value", `g=g*; $g repo fork octo/repo`},
+		{"tilde value", `g=~/gh; $g repo fork octo/repo`},
+		{"brace value", `g={gh,echo}; $g repo fork octo/repo`},
+		{"ansi quoted value", `g=$'g\x68'; $g repo fork octo/repo`},
+		{"escaped value", `g=g\h; $g repo fork octo/repo`},
+		{"loop variable", `for g in gh; do $g repo fork octo/repo; done`},
+		{"append", `g=g; g+=h; $g repo fork octo/repo`},
+		{"array", `g=(gh); $g repo fork octo/repo`},
+		{"index", `g[0]=gh; $g repo fork octo/repo`},
+		{"modifier", `g=gh; ${g:-echo} repo fork octo/repo`},
+		{"prefix assignment", `g=gh :; $g repo fork octo/repo`},
+		{"inline child", `g=gh; bash -c '$g repo fork octo/repo'`},
+		{"export", `export g=gh; $g repo fork octo/repo`},
+		{"declare operand", `g=echo; declare "g=gh"; g=echo; $g repo fork octo/repo`},
+		{"readonly", `readonly g=gh; g=echo; $g repo fork octo/repo`},
+		{"nameref", `declare -n g=h; g=gh; $g repo fork octo/repo`},
+		{"local leak", `f() { local g=echo; }; f; g=gh; $g repo fork octo/repo`},
+		{"debug trap", `trap 'g=gh' DEBUG; g=echo; $g repo fork octo/repo`},
+		{"trap in function", `f() { trap 'g=gh' DEBUG; }; f; g=echo; $g repo fork octo/repo`},
+		{"eval", `eval 'readonly g=gh'; g=echo; $g repo fork octo/repo`},
+		{"sourced", `. ./env; g=echo; $g repo fork octo/repo`},
+		{"resolved writer", `u=unset; $u g; g=echo; $g repo fork octo/repo`},
+		{"dynamic writer", `true; $w g; g=echo; $g repo fork octo/repo`},
+		{"ifs", `IFS=h; g=gh; $g repo fork octo/repo`},
+		{"index arithmetic", `g=gh; a[g=7]=x; $g repo fork octo/repo`},
+		{"arithmetic command", `(( g = 1 )); g=echo; $g repo fork octo/repo`},
+		{"arithmetic expansion", `: $(( g = 1 )); g=echo; $g repo fork octo/repo`},
+		{"let", `let g=1; g=echo; $g repo fork octo/repo`},
+		{"default assignment", `: ${h:=echo}; g=gh; $g repo fork octo/repo`},
+		{"fd variable", `exec {g}>/dev/null; g=echo; $g repo fork octo/repo`},
+		{"coproc", `coproc g { cat; }; g=echo; $g repo fork octo/repo`},
+		{"arithmetic loop", `true; for ((g = 0; g < 1; g++)); do :; done; g=echo; $g repo fork octo/repo`},
+		{"keyword mode", `set -k; g=echo; $g repo fork octo/repo`},
+		{"underscore", `_=gh; $_ repo fork octo/repo`},
+		{"random", `RANDOM=gh; $RANDOM repo fork octo/repo`},
+		{"seconds", `SECONDS=gh; $SECONDS repo fork octo/repo`},
+		{"lineno", `LINENO=gh; $LINENO repo fork octo/repo`},
+		{"epoch", `EPOCHSECONDS=gh; $EPOCHSECONDS repo fork octo/repo`},
+		{"bashpid", `BASHPID=gh; $BASHPID repo fork octo/repo`},
+		{"funcname", `FUNCNAME=gh; $FUNCNAME repo fork octo/repo`},
+		{"groups", `GROUPS=gh; $GROUPS repo fork octo/repo`},
+	}
+	for _, tt := range unresolved {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			commands, _, err := analyzeShellCommands(tt.source)
+			if err == nil || !strings.Contains(err.Error(), "dynamic command executable") {
+				t.Fatalf("analyze = (%#v, %v), want dynamic-executable diagnostic", commands, err)
+			}
+			for _, command := range commands {
+				if command.Executable == "gh" || command.Executable == "echo" {
+					t.Fatalf("resolved %q from %q: %#v", command.Executable, tt.source, command)
+				}
+			}
+		})
+	}
+}
+
 func TestAnalyzeShellCommandsDeduplicatesIssues(t *testing.T) {
 	t.Parallel()
 	_, _, err := analyzeShellCommands(`"$first"; "$second"`)

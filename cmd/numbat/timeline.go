@@ -52,11 +52,12 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&agents, "agent", "limit automatic discovery to a parser-backed agent (repeatable; cannot be combined with --path)")
 	caseID := fs.String("case-id", "", "case identifier stamped on every event")
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
 	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	formatFlag := fs.String("format", timelineFormatText, "output format: text|json")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--include-reasoning] [--content preview|full] [--format text|json]")
+		fmt.Fprintln(stderr, "usage: numbat timeline [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--include-reasoning] [--content preview|full|raw] [--content-scope all|messages] [--format text|json]")
 		fmt.Fprintln(stderr, "\nReconstructs a per-session chronological view of agent activity (prompts, tool calls,")
 		fmt.Fprintln(stderr, "commands, approvals, file edits, outcomes) from the same artifacts scan reads.")
 		fmt.Fprintf(stderr, "Automatic-discovery agents: %s.\n", artifactAgentUsage())
@@ -97,13 +98,19 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	scope, err := parseContentScope(*contentScopeFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "timeline: %v\n", err)
+		fs.Usage()
+		return 2
+	}
 	reasoning, err := applyDeprecatedProfile(*profileFlag, *includeReasoning)
 	if err != nil {
 		fmt.Fprintf(stderr, "timeline: %v\n", err)
 		fs.Usage()
 		return 2
 	}
-	if content == contentFull && format != timelineFormatJSON {
+	if content != contentPreview && format != timelineFormatJSON {
 		fmt.Fprintln(stderr, "timeline: --content full requires --format json")
 		fs.Usage()
 		return 2
@@ -145,7 +152,7 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 			}
 			seenArtifacts[key] = struct{}{}
 			discovered++
-			evs, ok := readArtifactEvents(a, *caseID, reasoning, content == contentFull, stderr)
+			evs, ok := readArtifactEvents(a, *caseID, reasoning, content != contentPreview, stderr)
 			if !ok {
 				continue
 			}
@@ -165,12 +172,21 @@ func runTimeline(args []string, stdout, stderr io.Writer) int {
 	sessions := groupSessions(events)
 	// Group first, then apply the requested shared event projection.
 	for i := range sessions {
-		if content == contentFull {
-			sessions[i].Events = redact.EventsWithContent(sessions[i].Events)
-		} else {
-			sessions[i].Events = redact.Events(sessions[i].Events)
+		for j, ev := range sessions[i].Events {
+			switch {
+			case content == contentPreview:
+				sessions[i].Events[j] = redact.Event(ev)
+			case scope == contentScopeMessages:
+				sessions[i].Events[j] = redact.EventWithMessageContent(ev, content == contentRaw)
+			case content == contentRaw:
+				sessions[i].Events[j] = redact.EventWithRawContent(ev)
+			default:
+				sessions[i].Events[j] = redact.EventWithContent(ev)
+			}
 		}
-		sessions[i].ProjectPath = redact.String(sessions[i].ProjectPath)
+		if content != contentRaw || scope == contentScopeMessages {
+			sessions[i].ProjectPath = redact.String(sessions[i].ProjectPath)
+		}
 	}
 	if format == timelineFormatJSON {
 		return renderTimelineJSON(sessions, stdout, stderr)
@@ -240,6 +256,7 @@ func renderTimelineJSON(sessions []timelineSession, stdout, stderr io.Writer) in
 	report := timelineReport{SchemaVersion: model.SchemaVersion, Sessions: sessions}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(report); err != nil {
 		fmt.Fprintf(stderr, "timeline: encode json: %v\n", err)
 		return 1

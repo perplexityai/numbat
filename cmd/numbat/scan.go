@@ -36,6 +36,8 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	var emitValues multiFlag
 	fs.Var(&emitValues, "emit", emitFlagHelp())
 	contentFlag := fs.String("content", "preview", contentFlagHelp())
+	contentScopeFlag := fs.String("content-scope", "all", contentScopeFlagHelp())
+	maxRecordBytes := fs.Int("max-record-bytes", 0, maxRecordBytesHelp)
 	includeReasoning := fs.Bool("include-reasoning", false, "include source-recorded reasoning events")
 	profileFlag := fs.String("profile", "", "deprecated capture profile: evidence|full (full enables --include-reasoning)")
 	var outputValues multiFlag
@@ -52,7 +54,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	var rf ruleFlags
 	rf.register(fs)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--content preview|full] [--include-reasoning] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
+		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--include-reasoning] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
 		fmt.Fprintln(stderr, "\nScans supported on-disk agent artifacts and emits redacted findings, events, or indicators as NDJSON.")
 		fmt.Fprintf(stderr, "Automatic-discovery agents: %s.\n", artifactAgentUsage())
 		fmt.Fprintln(stderr, "Preserve vendor directory layouts when scanning copied or mounted artifacts.")
@@ -92,6 +94,16 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "scan: %v\n", err)
 		fs.Usage()
+		return 2
+	}
+	scope, err := parseContentScope(*contentScopeFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "scan: %v\n", err)
+		fs.Usage()
+		return 2
+	}
+	if *maxRecordBytes < 0 {
+		fmt.Fprintln(stderr, "scan: --max-record-bytes must be non-negative")
 		return 2
 	}
 	reasoning, err := applyDeprecatedProfile(*profileFlag, *includeReasoning)
@@ -146,7 +158,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Runtime failures get a summary; usage errors above do not start a scan.
-	em := output.NewWithSink(sink, stderr, runID(), contentEmitterOptions(content)...)
+	em := output.NewWithSink(sink, stderr, runID(), contentEmitterOptions(content, scope, *maxRecordBytes)...)
 
 	roots := []string(paths)
 	if len(roots) == 0 {
@@ -178,7 +190,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return failScan(em, err.Error())
 		}
 	}
-	captureContent := content == contentFull || sel.indicators || sel.findings && eng != nil && eng.UsesContent()
+	captureContent := content != contentPreview || sel.indicators || sel.findings && eng != nil && eng.UsesContent()
 
 	sc := &scanner{
 		emit:             em,

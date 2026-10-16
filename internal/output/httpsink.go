@@ -40,7 +40,7 @@ const (
 const (
 	defaultBatchSize      = 500
 	defaultTimeout        = 30 * time.Second
-	defaultMaxBufferBytes = 16 << 20
+	defaultMaxBufferBytes = 64 << 20
 	defaultRetryInterval  = 30 * time.Second
 	contentTypeNDJSON     = "application/x-ndjson"
 	maxResponseRequestID  = 128

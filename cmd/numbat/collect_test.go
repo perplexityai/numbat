@@ -202,6 +202,68 @@ func TestCollectFullContentProjection(t *testing.T) {
 	}
 }
 
+func TestCollectContentScope(t *testing.T) {
+	const secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+	message := strings.Repeat("ordinary context ", 20) + "MESSAGE_TAIL " + secret
+	rulesDir := writeEnforceRuleFile(t, `id: test.collect_scope
+version: "1.0"
+enabled: true
+title: Synthetic collector content
+severity: high
+expr: event.content.contains("MESSAGE_TAIL") || (event.tool_input.contains("PRIVATE_CANARY") && event.tool_result.contains("RESULT_TAIL"))
+`)
+	body := buildOTLPLogs("codex", []map[string]string{
+		{"__event_name": "gen_ai.user.message", "gen_ai.prompt": message},
+		{
+			"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "mcp__notes__save",
+			"gen_ai.tool.call.id": "c", "gen_ai.tool.call.arguments": `{"password":"PRIVATE_CANARY"}`,
+			"gen_ai.tool.call.result": `"RESULT_TAIL"`,
+		},
+	})
+	for _, mode := range []string{"preview", "full", "raw"} {
+		for _, scope := range []string{"all", "messages"} {
+			t.Run(mode+"/"+scope, func(t *testing.T) {
+				content, err := parseContentMode(mode)
+				if err != nil {
+					t.Fatal(err)
+				}
+				contentScope, err := parseContentScope(scope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var records, diags bytes.Buffer
+				em := output.New(&records, &diags, "run-test", contentEmitterOptions(content, contentScope, 0)...)
+				c, err := newCollector(collectorConfig{
+					emit: em, runID: "run-test", sel: emitSelection{events: true, findings: true},
+					ruleDirs: []string{rulesDir}, noBuiltin: true,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if rr := postLogs(t, c, body, contentTypeProtobuf); rr.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+				}
+				events := decodeEventRecords(t, records.String())
+				if len(events) != 2 || len(decodeFindings(t, records.String())) != 2 {
+					t.Fatalf("content scope changed collector events/findings: %s", diags.String())
+				}
+				if (events[0].Content != "") != (mode != "preview") ||
+					strings.Contains(events[0].Content, secret) != (mode == "raw") {
+					t.Fatal("incorrect message projection")
+				}
+				tool := events[1]
+				if (tool.ToolInput != "" && tool.ToolResult != "") != (mode != "preview" && scope == "all") ||
+					tool.ToolInputBytes == 0 || tool.ToolResultBytes == 0 {
+					t.Fatal("incorrect tool projection")
+				}
+				if strings.Contains(records.String(), "PRIVATE_CANARY") != (mode == "raw" && scope == "all") {
+					t.Fatal("incorrect tool redaction")
+				}
+			})
+		}
+	}
+}
+
 func TestCollectOfficialToolResultsReachCommandRules(t *testing.T) {
 	tests := []struct {
 		name        string

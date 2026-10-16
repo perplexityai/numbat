@@ -126,6 +126,8 @@ func (e OpenCodeExtractor) extractMessage(res *Result, src Source, sha string, m
 // An unmodeled part kind records a diagnostic so coverage never silently drops
 // a part numbat is expected to map.
 func (e OpenCodeExtractor) extractPart(res *Result, src Source, sha string, trimmed []byte) {
+	start := len(res.Events)
+	defer func() { retainToolContent(res.Events[start:], trimmed) }()
 	var part openCodePart
 	if err := json.Unmarshal(trimmed, &part); err != nil {
 		res.diag(src.Path, 0, "malformed opencode part")
@@ -260,8 +262,8 @@ func (e OpenCodeExtractor) emitToolPart(res *Result, src Source, sha string, par
 			result.MCPServer, result.MCPTool = server, mcpTool
 		}
 	}
-	// A read result body is file content; never preview it so file content is
-	// never stored. Other results preview the structured output so the result
+	// File bodies stay out of previews; full tool results are retained separately.
+	// Other results preview the structured output so the result
 	// names what came back.
 	if !isRead {
 		result.ContentPreview = preview(part.State.Output)
@@ -311,6 +313,7 @@ func (e OpenCodeExtractor) base(src Source, sha string, sub int, sessionID, time
 // and whether it is the read tool (so a correlated result body is never
 // previewed).
 func classifyOpenCodeTool(ev *model.Event, tool string, input map[string]json.RawMessage) (isShell, isRead bool) {
+	ev.SetToolInput(input)
 	switch tool {
 	case openCodeToolBash:
 		ev.EventType = model.EventCommandExec
