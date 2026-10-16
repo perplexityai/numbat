@@ -304,12 +304,14 @@ func runRulesList(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+const maxRuleFixtureLine = 64 * 1024 * 1024
+
 // runRulesTest evaluates the compiled rules against a fixture of NDJSON
 // events (one model.Event per line) and prints each match as "rule_id\tevent_id".
 // It is the deterministic, offline check that rules fire as intended. With
 // --json the same evaluation emits a machine-readable NDJSON result contract
-// on stdout instead: one event_result per successfully evaluated fixture
-// line plus a terminal summary. See docs/schema/rules-test-result.v1.md.
+// on stdout instead, including input failures and a terminal summary.
+// See docs/schema/rules-test-result.v1.md.
 func runRulesTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("rules test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -396,7 +398,7 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 		tracker = sequence.NewTracker(seqs, sequence.DefaultConfig())
 	}
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), maxRuleFixtureLine)
 	matched := 0
 	matchedRules := map[string]int{}
 	line := 0

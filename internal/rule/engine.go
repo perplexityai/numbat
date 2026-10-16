@@ -691,6 +691,10 @@ type EvalDiagnostics struct {
 // "bounded/unusable coverage" as separate result classes (for example, the
 // `rules test --json` result contract).
 func (e *Engine) EvalDetailed(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
+	return e.eval(ev)
+}
+
+func (e *Engine) eval(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
 	activations := prepareActivations(e.env.CELTypeAdapter(), ev, e.usesShellCommands)
 	diag := EvalDiagnostics{
 		ShellParseError:      activations.err,
@@ -710,7 +714,7 @@ func (e *Engine) EvalDetailed(ev model.Event) ([]Match, []EvalError, EvalDiagnos
 		}
 		out, _, err := c.program.program.Eval(activations.detection)
 		if err != nil {
-			errs = append(errs, EvalError{RuleID: c.rule.ID, Message: err.Error()})
+			errs = append(errs, EvalError{RuleID: c.rule.ID, Message: "evaluation failed"})
 			continue
 		}
 		if asBool(out) {
@@ -735,34 +739,10 @@ func (e *Engine) EvalDetailed(ev model.Event) ([]Match, []EvalError, EvalDiagnos
 // the others; it is returned alongside any matches so callers can surface it
 // as a diagnostic without losing detections.
 func (e *Engine) Eval(ev model.Event) ([]Match, error) {
-	activations := prepareActivations(e.env.CELTypeAdapter(), ev, e.usesShellCommands)
-	var (
-		matches []Match
-		errs    = []error{activations.err}
-	)
-	for _, c := range e.rules {
-		if c.seq != nil {
-			continue
-		}
-		if activations.err != nil && c.program.usesShellCommands && !activations.shellUsable {
-			continue
-		}
-		out, _, err := c.program.program.Eval(activations.detection)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("rule %q: evaluation failed", c.rule.ID))
-			continue
-		}
-		if asBool(out) {
-			enforcementMatch := c.rule.IsEnforceEligible()
-			if enforcementMatch && c.program.usesShellCommands && !activations.shellEnforcementSafe {
-				enforcementMatch = false
-			}
-			matches = append(matches, Match{
-				Rule:             cloneRule(c.rule),
-				Event:            ev,
-				EnforcementMatch: enforcementMatch,
-			})
-		}
+	matches, failures, diagnostics := e.eval(ev)
+	errs := []error{diagnostics.ShellParseError}
+	for _, failure := range failures {
+		errs = append(errs, fmt.Errorf("rule %q: %s", failure.RuleID, failure.Message))
 	}
 	return matches, errors.Join(errs...)
 }
