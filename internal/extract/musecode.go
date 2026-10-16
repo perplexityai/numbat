@@ -45,15 +45,6 @@ const (
 	museEventToolResultBatchCommitted    = "tool_result_batch_committed"
 )
 
-// museRetainedFrameKind is the outer wrapper observed around a small number of
-// lines (confirmed against Muse Code 1.3.0, not documented in any source this
-// adapter cites): a "retained frame" transaction carrying one or more ordinary
-// envelope records as JSON-encoded strings. Every occurrence found so far
-// wraps bookkeeping (a permission-format declaration), but the wrapper is
-// unwrapped generically — rather than skipped outright — so a future payload
-// type worth mapping is not silently dropped by this adapter.
-const museRetainedFrameKind = "retained_frame"
-
 // MuseCodeExtractor parses Muse Code's session.jsonl transcripts: an
 // append-only, schema-versioned JSONL event log. The store layout, envelope,
 // and payload shapes below were verified two ways: independently against real
@@ -62,7 +53,7 @@ const museRetainedFrameKind = "retained_frame"
 // (github.com/specstoryai/getspecstory, Apache-2.0,
 // pkg/providers/musecode/MUSE-CODE-FORMAT.md) done against Muse Code 0.1.0.
 // The core envelope and event catalog matched exactly across that ~13-version
-// gap; the retained-frame wrapper above is the one addition found empirically
+// gap; the retained-frame wrapper is the one addition found empirically
 // that the third-party document does not mention. Muse Code's own docs do not
 // publish this format; the synthetic fixtures preserve the observed shapes.
 //
@@ -96,7 +87,9 @@ type museStream struct {
 	ID   string `json:"id"`
 }
 
-// museRetainedFrame is the outer transaction wrapper; see museRetainedFrameKind.
+// museRetainedFrame carries envelope records as JSON-encoded strings. Observed
+// Muse 1.3.0 wrappers contained bookkeeping; unwrapping also preserves any
+// supported conversation records without guessing at other payload types.
 type museRetainedFrame struct {
 	RetainedFrame string           `json:"retained_frame"`
 	Children      []museFrameChild `json:"children"`

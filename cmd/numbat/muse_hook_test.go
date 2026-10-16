@@ -17,8 +17,10 @@ func TestMuseHookDecisionBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := writeEnforceRuleFile(t, criticalEnforceRule)
-			args := []string{"hook", tc.lifecycle, "--agent", "muse", "--rules-dir", dir,
-				"--no-builtin-rules", "--output", "file", "--output-file", filepath.Join(t.TempDir(), "records.ndjson")}
+			args := []string{
+				"hook", tc.lifecycle, "--agent", "muse", "--rules-dir", dir,
+				"--no-builtin-rules", "--output", "file", "--output-file", filepath.Join(t.TempDir(), "records.ndjson"),
+			}
 			if tc.enforce {
 				args = append(args, "--enforce")
 			}
