@@ -437,6 +437,7 @@ var shellManagedNames = map[string]bool{
 	"EPOCHSECONDS": true, "EPOCHREALTIME": true, "HISTCMD": true, "BASHPID": true,
 	"BASH_COMMAND": true, "FUNCNAME": true, "BASH_SOURCE": true, "BASH_LINENO": true,
 	"BASH_ARGV": true, "BASH_ARGC": true, "GROUPS": true, "DIRSTACK": true, "PIPESTATUS": true,
+	"UID": true, "EUID": true, "PPID": true, "SHELLOPTS": true, "BASHOPTS": true, "BASH_VERSINFO": true,
 }
 
 func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functions map[string]*syntax.Stmt, activeFunctions map[string]bool, wrappers []ShellWrapper) {

@@ -567,6 +567,12 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 		{"bashpid", `BASHPID=gh; $BASHPID repo fork octo/repo`},
 		{"funcname", `FUNCNAME=gh; $FUNCNAME repo fork octo/repo`},
 		{"groups", `GROUPS=gh; $GROUPS repo fork octo/repo`},
+		{"uid", `UID=gh; $UID repo fork octo/repo`},
+		{"euid", `EUID=gh; $EUID repo fork octo/repo`},
+		{"ppid", `PPID=gh; $PPID repo fork octo/repo`},
+		{"shellopts", `SHELLOPTS=gh; $SHELLOPTS repo fork octo/repo`},
+		{"bashopts", `BASHOPTS=gh; $BASHOPTS repo fork octo/repo`},
+		{"bash_versinfo", `BASH_VERSINFO=gh; $BASH_VERSINFO repo fork octo/repo`},
 	}
 	for _, tt := range unresolved {
 		tt := tt

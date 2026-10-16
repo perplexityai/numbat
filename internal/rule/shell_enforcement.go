@@ -61,7 +61,7 @@ func posixStatementEnforcementSafe(stmt *syntax.Stmt) bool {
 			return false
 		}
 		for _, item := range command.Items {
-			if !posixWordsStatic(item.Patterns) ||
+			if !posixWordsStatic(item.Patterns) || posixWordsTilde(item.Patterns) ||
 				!posixStatementsEnforcementSafe(item.Stmts) {
 				return false
 			}
@@ -85,18 +85,24 @@ func posixWordsStatic(words []*syntax.Word) bool {
 }
 
 func posixWordsLiteral(words []*syntax.Word) bool {
-	if !posixWordsStatic(words) {
+	if !posixWordsStatic(words) || posixWordsTilde(words) {
 		return false
 	}
 	for _, word := range words {
 		if posixPartsExpand(word.Parts, true) {
 			return false
 		}
-		if lit, ok := word.Parts[0].(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "~") {
-			return false
-		}
 	}
 	return true
+}
+
+func posixWordsTilde(words []*syntax.Word) bool {
+	for _, word := range words {
+		if lit, ok := word.Parts[0].(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "~") {
+			return true
+		}
+	}
+	return false
 }
 
 func posixIfEnforcementSafe(clause *syntax.IfClause) bool {
