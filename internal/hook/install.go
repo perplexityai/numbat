@@ -238,7 +238,7 @@ func InstallAgentNames() []string {
 // Claude uses managed settings JSON, while Codex uses requirements TOML.
 func AgentSupportsManagedHooks(agent string) bool {
 	switch agent {
-	case AgentClaude, AgentCodex, AgentCursor, AgentCopilot, AgentGemini, AgentWindsurf, AgentQwen, AgentAuggie:
+	case AgentClaude, AgentCodex, AgentCursor, AgentCopilot, AgentGemini, AgentWindsurf, AgentQwen, AgentAuggie, AgentMuse:
 		return true
 	default:
 		return false
@@ -247,13 +247,14 @@ func AgentSupportsManagedHooks(agent string) bool {
 
 // ManagedAgentUsage is the stable CLI list of first-class managed targets.
 func ManagedAgentUsage() string {
-	return "claude|codex|cursor|copilot|gemini|windsurf|qwen|auggie"
+	return "claude|codex|cursor|copilot|gemini|windsurf|qwen|auggie|muse"
 }
 
 // ManagedHooksPath returns the default admin-managed hook config path for agent.
 // Claude uses a managed-settings.d drop-in so numbat does not rewrite a shared
 // base policy file; Codex uses the system requirements.toml source documented for
 // managed hooks.
+// Muse has no default machine path; its managed target must be explicit.
 func ManagedHooksPath(agent string) (string, bool) {
 	if agent == AgentQwen {
 		if path := os.Getenv("QWEN_CODE_SYSTEM_SETTINGS_PATH"); path != "" {
@@ -880,7 +881,7 @@ func InstallWithOptions(agent, path, binary string, opts InstallOptions) (Instal
 		return installJunieWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
 	}
 	if agent == AgentMuse {
-		return installMuseWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
+		return installMuseWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce, false)
 	}
 	sf, err := readSettings(path)
 	if err != nil {
@@ -933,6 +934,8 @@ func InstallManagedWithOptions(agent, path, binary string, opts InstallOptions) 
 		return installQwenManagedWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
 	case AgentAuggie:
 		return installAuggieManagedWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
+	case AgentMuse:
+		return installMuseWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce, true)
 	default:
 		return rep, nil
 	}
@@ -1023,7 +1026,7 @@ func Uninstall(agent, path string) (InstallReport, error) {
 		return uninstallJunie(path)
 	}
 	if agent == AgentMuse {
-		return uninstallMuse(path)
+		return uninstallMuse(path, false)
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		rep.Message = "no settings file; nothing to remove"
@@ -1075,6 +1078,8 @@ func UninstallManaged(agent, path string) (InstallReport, error) {
 		return uninstallQwenManaged(path)
 	case AgentAuggie:
 		return uninstallAuggieManaged(path)
+	case AgentMuse:
+		return uninstallMuse(path, true)
 	default:
 		return rep, nil
 	}
@@ -1206,6 +1211,8 @@ func StatusManagedErr(agent, path string) (InstallReport, error) {
 		return statusClaudeManagedErr(path)
 	case AgentCodex:
 		return statusCodexRequirements(path)
+	case AgentMuse:
+		return statusMuseWithScope(path, true)
 	case AgentCursor, AgentCopilot, AgentGemini, AgentWindsurf, AgentQwen, AgentAuggie:
 		rep = Status(agent, path)
 		if err := configReadable(agent, path); err != nil {

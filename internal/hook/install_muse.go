@@ -3,13 +3,15 @@
 package hook
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 )
 
 // install_muse.go wires numbat into Muse Code's hooks.json contract. Both the
-// user-scope settings.json and a project .muse/hooks.json embed the same
+// user-scope settings.json and project/ordinary managed hook files embed the same
 // {"hooks": {"<Event>": [{"matcher":...,"hooks":[{"type":"command",...}]}]}}
 // shape numbat already reads/writes generically for Claude via settingsFile,
 // so this file only supplies Muse's own event list, path resolution, and the
@@ -88,19 +90,19 @@ func applyMuseHooksWithArgs(sf settingsFile, binary string, runtimeArgs []string
 	}
 }
 
-// installMuseWithArgs writes numbat's hook entries into a Muse settings.json
-// or project hooks.json, preserving every foreign key and existing hook, and
+// installMuseWithArgs writes numbat's hook entries into a Muse settings.json,
+// project hooks.json, or explicit managed file, preserving foreign entries and
 // keeping one pristine backup. readSettings' strict JSON parse already
 // refuses (rather than silently mangles) a file with comments or trailing
 // commas, matching the Qwen/Auggie installers' contract; Muse's own docs
 // never claim JSONC support the way Devin's do.
-func installMuseWithArgs(path, binary string, runtimeArgs []string, enforce bool) (InstallReport, error) {
+func installMuseWithArgs(path, binary string, runtimeArgs []string, enforce, managed bool) (InstallReport, error) {
 	rep := InstallReport{Agent: AgentMuse, SettingsPath: path, Supported: true}
-	sf, err := readHookSettings(path, true)
+	sf, err := readMuseSettings(path, managed)
 	if err != nil {
 		return rep, err
 	}
-	if museNeedsSchemaVersion(path) {
+	if !managed && museNeedsSchemaVersion(path) {
 		if _, ok := sf.values["schema_version"]; !ok {
 			if err := setJSONField(sf.values, "schema_version", 1); err != nil {
 				return rep, err
@@ -113,23 +115,26 @@ func installMuseWithArgs(path, binary string, runtimeArgs []string, enforce bool
 	}
 	rep.BackupPath = backup
 	applyMuseHooksWithArgs(sf, binary, runtimeArgs, enforce)
-	if err := writeSettings(path, sf); err != nil {
+	if err := writeMuseSettings(path, sf, managed); err != nil {
 		return rep, err
 	}
 	rep.Installed, rep.Changed = true, true
 	rep.Message = installMessage(enforce)
+	if managed {
+		rep.Message += "; managed file only: configure managed_hooks_path separately"
+	}
 	return rep, nil
 }
 
 // uninstallMuse removes only numbat-owned hook entries, leaving foreign hooks
 // and every other top-level key untouched.
-func uninstallMuse(path string) (InstallReport, error) {
+func uninstallMuse(path string, managed bool) (InstallReport, error) {
 	rep := InstallReport{Agent: AgentMuse, SettingsPath: path, Supported: true}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		rep.Message = "no settings file; nothing to remove"
 		return rep, nil
 	}
-	sf, err := readHookSettings(path, true)
+	sf, err := readMuseSettings(path, managed)
 	if err != nil {
 		return rep, err
 	}
@@ -142,7 +147,7 @@ func uninstallMuse(path string) (InstallReport, error) {
 		return rep, err
 	}
 	rep.BackupPath = backup
-	if err := writeSettings(path, sf); err != nil {
+	if err := writeMuseSettings(path, sf, managed); err != nil {
 		return rep, err
 	}
 	rep.Changed, rep.Message = true, "removed numbat hooks"
@@ -150,10 +155,8 @@ func uninstallMuse(path string) (InstallReport, error) {
 }
 
 // museHookState reports whether every default event is wired (complete) and
-// whether any numbat hook is present at all (any). Muse gives no positive
-// confirmation of its own for a fully healthy hooks file, so this completeness
-// check — not Muse's own output — is what "hook status" relies on to tell a
-// full install apart from a partial one.
+// whether any numbat hook is present at all (any). This checks configuration,
+// not whether a Muse session loaded or executed the hooks.
 func museHookState(sf settingsFile) (complete, any bool) {
 	complete = true
 	for _, ev := range museHookEvents {
@@ -167,11 +170,16 @@ func museHookState(sf settingsFile) (complete, any bool) {
 // statusMuse validates the file and reports whether numbat's hooks are fully
 // present, without modifying anything.
 func statusMuse(path string) InstallReport {
+	rep, _ := statusMuseWithScope(path, false)
+	return rep
+}
+
+func statusMuseWithScope(path string, managed bool) (InstallReport, error) {
 	rep := InstallReport{Agent: AgentMuse, SettingsPath: path, Supported: true}
-	sf, err := readHookSettings(path, true)
+	sf, err := readMuseSettings(path, managed)
 	if err != nil {
 		rep.Message = err.Error()
-		return rep
+		return rep, err
 	}
 	complete, any := museHookState(sf)
 	rep.Installed = complete
@@ -183,7 +191,57 @@ func statusMuse(path string) InstallReport {
 	default:
 		rep.Message = "numbat hooks not installed"
 	}
-	return rep
+	return rep, nil
+}
+
+func writeMuseSettings(path string, sf settingsFile, managed bool) error {
+	if managed {
+		return writeManagedSettings(path, sf)
+	}
+	return writeSettings(path, sf)
+}
+
+func readMuseSettings(path string, managed bool) (settingsFile, error) {
+	sf, err := readHookSettings(path, true)
+	if err != nil || !managed {
+		return sf, err
+	}
+	if _, ok := sf.values["managed_hooks_env_vars"]; ok {
+		return settingsFile{}, fmt.Errorf("%s: managed_hooks_env_vars belongs in Muse settings, not a managed hooks file", path)
+	}
+	// Either field opts the whole file into Muse's different, stricter schema.
+	// Do not mix ordinary hooks into it or rewrite someone else's policy.
+	for _, groups := range sf.hooks {
+		for _, group := range groups {
+			for _, ref := range group.Hooks {
+				if err := checkMuseManagedHook(ref.fields); err != nil {
+					return settingsFile{}, fmt.Errorf("%s: %w", path, err)
+				}
+			}
+		}
+	}
+	return sf, nil
+}
+
+func checkMuseManagedHook(fields map[string]json.RawMessage) error {
+	for len(fields) > 0 {
+		for _, key := range []string{"name", "timeout_ms"} {
+			if _, ok := fields[key]; ok {
+				return fmt.Errorf("strict Muse managed hooks (%s) are unsupported; use an ordinary managed hooks file", key)
+			}
+		}
+		raw, ok := fields["onFailure"]
+		if !ok {
+			break
+		}
+		// Fallback handlers also select the format of the entire document.
+		var fallback map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fallback); err != nil {
+			return fmt.Errorf("invalid Muse onFailure handler: %w", err)
+		}
+		fields = fallback
+	}
+	return nil
 }
 
 // MuseLifecycleArgs returns the lifecycle argument names numbat wires for

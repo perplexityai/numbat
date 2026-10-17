@@ -86,7 +86,7 @@ agent sessions load it. Choose the boundary that matches the rollout.
 |---|---|---|---|
 | User (default) | `hook install --agent NAME` | Writes agent-specific configuration artifacts under one operating-system user's normal agent root. It usually applies to that user's projects and remains editable by that user. | Local use and pilots |
 | Project / explicit | `hook install --agent NAME --settings PATH` | Targets one upstream-supported file or directory; some installers create owned companion artifacts beside it. It is project-scoped only when `PATH` is that agent's documented repository location. | One controlled workspace, or an alternate agent home |
-| Managed / system | `hook install --agent NAME --managed` | Writes a vendor-defined machine policy file. The file can be admin-owned, but the hook still executes inside the agent user's process. | Durable fleet rollout where the vendor exposes a managed hook layer |
+| Managed / system | `hook install --agent NAME --managed` | Writes vendor-defined managed-hook configuration. Most targets use a machine policy file; Muse requires an explicit file and separate settings pointer. The hook still executes inside the agent user's process. | Fleet rollout where the vendor exposes a managed hook layer |
 
 In practice, choose user scope for one developer across their normal
 workspaces, project scope when a controlled repository should carry its own
@@ -157,7 +157,7 @@ numbat hook install --agent openhands \
 ```
 
 Managed installs are available for Claude Code, Codex, Cursor, Copilot CLI,
-Gemini CLI, Windsurf, Qwen Code, and Auggie:
+Gemini CLI, Windsurf, Qwen Code, Auggie, and Muse Code:
 
 | Agent | macOS / Linux | Windows | Important policy behavior |
 |---|---|---|---|
@@ -169,6 +169,7 @@ Gemini CLI, Windsurf, Qwen Code, and Auggie:
 | Windsurf | macOS: `/Library/Application Support/Windsurf/hooks.json`; Linux: `/etc/windsurf/hooks.json` | `C:\ProgramData\Windsurf\hooks.json` | System hooks are administrator-owned and run first, but user and workspace hooks are merged and also execute. |
 | Qwen Code | macOS: `/Library/Application Support/QwenCode/settings.json`; Linux: `/etc/qwen-code/settings.json` | `C:\ProgramData\qwen-code\settings.json` | System settings override user and project settings. `QWEN_CODE_SYSTEM_SETTINGS_PATH` can relocate the file. |
 | Auggie | `/etc/augment/settings.json` | `C:\ProgramData\Augment\settings.json` | The system file cannot be overridden by lower-precedence user or project settings. Generated scripts live beside it under `hooks/` and settings contain their absolute final paths. |
+| Muse Code | Explicit `--settings PATH` | Explicit `--settings PATH` | Writes an ordinary managed hooks file, not user settings. Deployment must configure `managed_hooks_path` separately; no default machine path or exclusive-policy guarantee is assumed. |
 
 A mandatory managed numbat hook and an exclusive hook policy are different.
 Cursor, Gemini, Windsurf, and Copilot combine applicable lower-scope hooks. Where
@@ -185,6 +186,59 @@ user's profile, not the installer's:
 sudo numbat hook install --agent codex --managed --emit all \
   --output-file '$HOME/.numbat/live.ndjson'
 ```
+
+### Muse managed files
+
+Muse's [managed hook contract](https://meta-models.github.io/muse-code-sdk/next/guides/extend/hooks/)
+loads a file named by `managed_hooks_path` in its settings. numbat manages only
+that hook file: install, status, and uninstall all require
+`--agent muse --managed --settings PATH`. The path is the hook file itself,
+not the settings file containing the pointer. There is no default system path.
+For example, an operator can choose `/etc/numbat/muse-hooks.json`:
+
+```sh
+sudo numbat hook install --agent muse --managed \
+  --settings /etc/numbat/muse-hooks.json --emit all \
+  --output-file '$HOME/.numbat/records.ndjson'
+```
+
+MDM or bootstrap tooling must separately merge the pointer into each intended
+Muse settings file, preserving other settings. For this example, the relevant
+settings are:
+
+```json
+{
+  "schema_version": 1,
+  "managed_hooks_path": "/etc/numbat/muse-hooks.json"
+}
+```
+
+Relative pointers resolve against the settings file's directory, not the
+workspace. numbat never follows or rewrites this pointer during managed-file
+installation or removal. It preserves foreign hooks and writes the selected
+file with mode `0644` on Unix so user processes can read administrator-owned
+configuration; on Windows, provision the destination directory's ACL.
+Protect both the hook file and its activation settings as appropriate:
+this mechanism alone does not establish tamper-resistant or exclusive policy.
+
+Only the ordinary managed-file schema is supported. numbat refuses files whose
+handlers, including `onFailure` handlers, contain `name` or `timeout_ms`, which
+select Muse's stricter schema, rather than mixing formats.
+`managed_hooks_env_vars` belongs in user settings, not the hook file. The
+installer does not grant additional environment access. For direct authenticated
+HTTP output, allow only the required `NUMBAT_HTTP_TOKEN` or
+`NUMBAT_HTTP_HMAC_KEY` names there and provide their values in Muse's launch
+environment; keep secret values out of the hook file. Verify that `$HOME`
+resolves inside the hook environment, or use an explicit per-user output path.
+
+Start a new Muse session after deployment. A missing managed file is silently
+ignored by Muse, so verify the pointer, file readability, startup diagnostics,
+and delivery of a benign event. Use the same explicit path with `hook status`;
+the default `agents` inventory does not follow Muse's managed-file pointer.
+Status checks configuration only, not activation or delivery. For staging, the
+existing target-OS and final-binary-path requirements still apply.
+
+### Other managed mechanisms
 
 Factory Droid uses Factory's vendor management plane rather than a documented
 local system file. That plane can distribute authoritative organization hooks

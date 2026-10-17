@@ -685,7 +685,8 @@ default. This agent process deadline is separate from the hook handler's
                              or directory and may create companion artifacts)
 --managed                    target the agent's admin-managed hook config
                              (requires --agent; claude, codex, cursor,
-                             copilot, gemini, windsurf, qwen, or auggie)
+                             copilot, gemini, windsurf, qwen, auggie, or muse;
+                             muse also requires --settings PATH)
 --emit KIND                  record kind installed hook commands emit:
                              findings, events, indicators, or all
                              (repeatable; default findings; enforce mode requires
@@ -757,6 +758,13 @@ must be its final runtime location because
 its generated scripts are referenced absolutely. Literal `$HOME` output paths
 in managed hook commands expand in the agent user's process, not during the
 administrator's install.
+
+For Muse, `--managed --settings PATH` targets an ordinary managed hooks file.
+It does not follow or modify the `managed_hooks_path` setting; deployment must
+configure that pointer separately. There is no default managed path, and
+install, status, and uninstall all require the explicit hook-file path. See
+[Muse managed files](deployment.md#muse-managed-files) for activation, file
+permissions, and incompatible strict-schema handling.
 
 The OpenClaw target is a package directory under the Gateway's plugin config
 root. Resolution is `$OPENCLAW_STATE_DIR`, the directory containing
