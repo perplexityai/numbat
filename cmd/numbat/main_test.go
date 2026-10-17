@@ -338,7 +338,7 @@ func TestRulesCheck(t *testing.T) {
 	}
 	// Keep this count explicit: a catalog addition or removal must be reviewed,
 	// not normalized away by deriving the expected value from the same load.
-	if !strings.Contains(out, "rules ok: 51 compiled") {
+	if !strings.Contains(out, "rules ok: 52 compiled") {
 		t.Fatalf("check output = %q", out)
 	}
 }

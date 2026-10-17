@@ -160,6 +160,10 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 		}
+		if agents[0] == hook.AgentMuse && *settingsPath == "" {
+			fmt.Fprintf(stderr, "hook %s: muse --managed requires --settings PATH to the managed hooks file; configure managed_hooks_path separately in Muse settings\n", action)
+			return 2
+		}
 	}
 
 	var binary string
@@ -638,6 +642,8 @@ func settingsPathFor(agent, home string) string {
 		return hook.CrushConfigPath(home)
 	case hook.AgentJunie:
 		return hook.JunieConfigPath(home)
+	case hook.AgentMuse:
+		return hook.MuseUserSettingsPath(home)
 	default:
 		return ""
 	}

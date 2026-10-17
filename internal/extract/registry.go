@@ -19,6 +19,7 @@ var registry = map[string]Extractor{
 	model.AgentOpenClaw:   OpenClawExtractor{},
 	model.AgentPi:         PiExtractor{},
 	model.AgentKimiCode:   KimiCodeExtractor{},
+	model.AgentMuseCode:   MuseCodeExtractor{},
 }
 
 // For returns the parser registered for an agent identifier.

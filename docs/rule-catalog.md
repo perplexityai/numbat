@@ -132,6 +132,15 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   background job, or targets a standard scheduler or autostart path.
 - `persistence.git_hook_write` - a command or structured action modifies a
   `.git/hooks/` path, excluding `.sample` stubs.
+- `persistence.agent_memory_write` - a structured write or supported POSIX
+  mutator targets a slash-separated `.agents/memory/` path, regardless of the
+  writing agent. [Muse loads the committed memory index at session start](https://dev.meta.ai/docs/muse-code/configuration),
+  including in untrusted workspaces, and reads topic files on demand. This
+  monitor-only signal includes legitimate memory updates, not just attacks.
+  Shell coverage requires literal targets and includes redirects, `tee` with flag-only options, and
+  option-free `cp`/`mv`/`install` (optionally preceded by `--`). `sed` scripts,
+  dynamic operands, other option layouts, and other agents' native memory
+  paths are not inferred.
 - `persistence.ssh_authorized_keys` - a structured action writes a user
   `authorized_keys` file or Windows administrators key file.
 - `persistence.ssh_authorized_keys_command` - a shell or PowerShell command

@@ -1,5 +1,5 @@
 id: tamper.agent_config_write
-version: "1.8"
+version: "1.9"
 enabled: true
 title: Agent monitoring configuration targeted
 description: |-
@@ -38,7 +38,8 @@ expr: |-
       "\\.augment/settings\\.json|etc/augment/settings\\.json|ProgramData/Augment/settings\\.json|" +
       "(\\.augment|etc/augment|ProgramData/Augment)/hooks/numbat--installed-by=numbat-(session_start|pre_tool|post_tool|stop|session_end)\\.(sh|ps1)|" +
       "\\.agents/plugins/numbat/(plugin\\.json|hooks/hooks\\.json)|\\.config/kilo/plugin/numbat\\.ts|" +
-      "\\.openhands/hooks\\.json|\\.config/crush/crush\\.json|\\.crush\\.json|crush\\.json|\\.junie/config\\.json" +
+      "\\.openhands/hooks\\.json|\\.config/crush/crush\\.json|\\.crush\\.json|crush\\.json|\\.junie/config\\.json|" +
+      "\\.muse/hooks\\.json|\\.config/muse/settings\\.json" +
       ")$"
     ) &&
     !event.file_path.matches(
@@ -70,7 +71,8 @@ expr: |-
           "\\.augment[\\\\/]settings\\.json|etc[\\\\/]augment[\\\\/]settings\\.json|ProgramData[\\\\/]Augment[\\\\/]settings\\.json|" +
           "(\\.augment|etc[\\\\/]augment|ProgramData[\\\\/]Augment)[\\\\/]hooks[\\\\/]numbat--installed-by=numbat-(session_start|pre_tool|post_tool|stop|session_end)\\.(sh|ps1)|" +
           "\\.agents[\\\\/]plugins[\\\\/]numbat[\\\\/](plugin\\.json|hooks[\\\\/]hooks\\.json)|\\.config[\\\\/]kilo[\\\\/]plugin[\\\\/]numbat\\.ts|" +
-          "\\.openhands[\\\\/]hooks\\.json|\\.config[\\\\/]crush[\\\\/]crush\\.json|\\.crush\\.json|crush\\.json|\\.junie[\\\\/]config\\.json" +
+          "\\.openhands[\\\\/]hooks\\.json|\\.config[\\\\/]crush[\\\\/]crush\\.json|\\.crush\\.json|crush\\.json|\\.junie[\\\\/]config\\.json|" +
+          "\\.muse[\\\\/]hooks\\.json|\\.config[\\\\/]muse[\\\\/]settings\\.json" +
           ")$"
         ) &&
         !redirect.target.matches("(?i)(^|[\\\\/])(\\.local[\\\\/]share[\\\\/]crush[\\\\/]crush\\.json|AppData[\\\\/]Local[\\\\/]crush[\\\\/]crush\\.json)$") &&
@@ -153,7 +155,8 @@ expr: |-
           "\\.copilot[\\\\/](settings\\.json|hooks[\\\\/][^\\\\/]+\\.json)|etc[\\\\/]github-copilot[\\\\/]policy\\.d[\\\\/][^\\\\/]+\\.json|ProgramData[\\\\/]GitHub[\\\\/]Copilot[\\\\/]policy\\.d[\\\\/][^\\\\/]+\\.json|\\.github[\\\\/](hooks[\\\\/][^\\\\/]+|copilot[\\\\/]settings(\\.local)?\\.json)|" +
           "\\.grok[\\\\/]hooks[\\\\/][^\\\\/]+|hooks[\\\\/]numbat\\.json|\\.agents[\\\\/]hooks\\.json|plugins[\\\\/]numbat\\.ts|\\.pi[\\\\/]agent[\\\\/]extensions[\\\\/]numbat\\.ts|\\.kimi-code[\\\\/]config\\.toml|(openclaw|clawdbot)\\.json|extensions[\\\\/]numbat([\\\\/](openclaw\\.plugin\\.json|package\\.json|index\\.js))?[\\\\/]?|" +
           "\\.qwen[\\\\/]settings\\.json|etc[\\\\/]qwen-code[\\\\/]settings\\.json|Library[\\\\/]Application Support[\\\\/]QwenCode[\\\\/]settings\\.json|ProgramData[\\\\/]qwen-code[\\\\/]settings\\.json|(\\.cline[\\\\/]hooks|\\.clinerules[\\\\/]hooks|Documents[\\\\/]Cline[\\\\/]Hooks)[\\\\/](TaskStart|TaskResume|UserPromptSubmit|PreToolUse|PostToolUse|TaskComplete|TaskCancel|TaskError|SessionShutdown)(\\.ps1)?|" +
-          "\\.augment[\\\\/]settings\\.json|etc[\\\\/]augment[\\\\/]settings\\.json|ProgramData[\\\\/]Augment[\\\\/]settings\\.json|(\\.augment|etc[\\\\/]augment|ProgramData[\\\\/]Augment)[\\\\/]hooks[\\\\/]numbat--installed-by=numbat-(session_start|pre_tool|post_tool|stop|session_end)\\.(sh|ps1)|\\.agents[\\\\/]plugins[\\\\/]numbat[\\\\/](plugin\\.json|hooks[\\\\/]hooks\\.json)|\\.config[\\\\/]kilo[\\\\/]plugin[\\\\/]numbat\\.ts|\\.openhands[\\\\/]hooks\\.json|\\.config[\\\\/]crush[\\\\/]crush\\.json|\\.crush\\.json|crush\\.json|\\.junie[\\\\/]config\\.json" +
+          "\\.augment[\\\\/]settings\\.json|etc[\\\\/]augment[\\\\/]settings\\.json|ProgramData[\\\\/]Augment[\\\\/]settings\\.json|(\\.augment|etc[\\\\/]augment|ProgramData[\\\\/]Augment)[\\\\/]hooks[\\\\/]numbat--installed-by=numbat-(session_start|pre_tool|post_tool|stop|session_end)\\.(sh|ps1)|\\.agents[\\\\/]plugins[\\\\/]numbat[\\\\/](plugin\\.json|hooks[\\\\/]hooks\\.json)|\\.config[\\\\/]kilo[\\\\/]plugin[\\\\/]numbat\\.ts|\\.openhands[\\\\/]hooks\\.json|\\.config[\\\\/]crush[\\\\/]crush\\.json|\\.crush\\.json|crush\\.json|\\.junie[\\\\/]config\\.json|" +
+          "\\.muse[\\\\/]hooks\\.json|\\.config[\\\\/]muse[\\\\/]settings\\.json" +
           ")$"
         ) &&
         !command.argv[i].matches("(?i)(^|[\\\\/])(\\.local[\\\\/]share[\\\\/]crush[\\\\/]crush\\.json|AppData[\\\\/]Local[\\\\/]crush[\\\\/]crush\\.json)$|^(\\$env:LOCALAPPDATA|%LOCALAPPDATA%)[\\\\/]crush[\\\\/]crush\\.json$") &&

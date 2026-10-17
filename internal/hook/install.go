@@ -165,8 +165,9 @@ func setJSONField(fields map[string]json.RawMessage, key string, value any) erro
 // editing. Unrelated top-level keys are preserved verbatim in values so a
 // round-trip never drops a user's configuration.
 type settingsFile struct {
-	values map[string]json.RawMessage
-	hooks  map[string][]hookGroup
+	values    map[string]json.RawMessage
+	hooks     map[string][]hookGroup
+	hookState json.RawMessage
 }
 
 // numbatHookMarker identifies owned entries independently of the binary name.
@@ -192,7 +193,7 @@ func AgentSupportsHooks(agent string) bool {
 	case AgentClaude, AgentCursor, AgentWindsurf, AgentCopilot, AgentCodex,
 		AgentVSCode, AgentGemini, AgentOpenCode, AgentOpenClaw, AgentAntigravity, AgentFactory, AgentGrok,
 		AgentDevin, AgentHermes, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro,
-		AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie:
+		AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie, AgentMuse:
 		return true
 	default:
 		return false
@@ -205,7 +206,7 @@ func AgentSupportsEnforcement(agent string) bool {
 	switch agent {
 	case AgentClaude, AgentCodex, AgentCursor, AgentCopilot, AgentVSCode, AgentGemini,
 		AgentWindsurf, AgentAntigravity, AgentFactory, AgentGrok, AgentDevin, AgentHermes,
-		AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie:
+		AgentOpenClaw, AgentPi, AgentKimi, AgentQwen, AgentCline, AgentAmp, AgentAuggie, AgentKiro, AgentGoose, AgentKilo, AgentOpenHands, AgentCrush, AgentJunie, AgentMuse:
 		return true
 	default:
 		return false
@@ -214,7 +215,7 @@ func AgentSupportsEnforcement(agent string) bool {
 
 // EnforceAgentUsage is the stable CLI list of enforce-capable install targets.
 func EnforceAgentUsage() string {
-	return "claude|codex|cursor|copilot|vscode|gemini|windsurf|antigravity|factory|grok|devin|hermes|openclaw|pi|kimi|qwen|cline|amp|auggie|kiro|goose|kilo|openhands|crush|junie"
+	return "claude|codex|cursor|copilot|vscode|gemini|windsurf|antigravity|factory|grok|devin|hermes|openclaw|pi|kimi|qwen|cline|amp|auggie|kiro|goose|kilo|openhands|crush|junie|muse"
 }
 
 // InstallAgentNames returns the distinct hook configurations targeted by
@@ -237,7 +238,7 @@ func InstallAgentNames() []string {
 // Claude uses managed settings JSON, while Codex uses requirements TOML.
 func AgentSupportsManagedHooks(agent string) bool {
 	switch agent {
-	case AgentClaude, AgentCodex, AgentCursor, AgentCopilot, AgentGemini, AgentWindsurf, AgentQwen, AgentAuggie:
+	case AgentClaude, AgentCodex, AgentCursor, AgentCopilot, AgentGemini, AgentWindsurf, AgentQwen, AgentAuggie, AgentMuse:
 		return true
 	default:
 		return false
@@ -246,13 +247,14 @@ func AgentSupportsManagedHooks(agent string) bool {
 
 // ManagedAgentUsage is the stable CLI list of first-class managed targets.
 func ManagedAgentUsage() string {
-	return "claude|codex|cursor|copilot|gemini|windsurf|qwen|auggie"
+	return "claude|codex|cursor|copilot|gemini|windsurf|qwen|auggie|muse"
 }
 
 // ManagedHooksPath returns the default admin-managed hook config path for agent.
 // Claude uses a managed-settings.d drop-in so numbat does not rewrite a shared
 // base policy file; Codex uses the system requirements.toml source documented for
 // managed hooks.
+// Muse has no default machine path; its managed target must be explicit.
 func ManagedHooksPath(agent string) (string, bool) {
 	if agent == AgentQwen {
 		if path := os.Getenv("QWEN_CODE_SYSTEM_SETTINGS_PATH"); path != "" {
@@ -528,6 +530,11 @@ func slicesContain(items []string, want string) bool {
 // editing. A missing file is not an error: it yields an empty settings value so
 // install can create it.
 func readSettings(path string) (settingsFile, error) {
+	return readHookSettings(path, false)
+}
+
+// Muse reserves hooks.state for metadata rather than an event's hook groups.
+func readHookSettings(path string, preserveState bool) (settingsFile, error) {
 	sf := settingsFile{
 		values: map[string]json.RawMessage{},
 		hooks:  map[string][]hookGroup{},
@@ -545,9 +552,24 @@ func readSettings(path string) (settingsFile, error) {
 	if err := json.Unmarshal(data, &sf.values); err != nil {
 		return settingsFile{}, fmt.Errorf("parse %s: %w", path, err)
 	}
+	if sf.values == nil {
+		return settingsFile{}, fmt.Errorf("parse %s: expected a settings object", path)
+	}
 	if raw, ok := sf.values["hooks"]; ok {
-		if err := json.Unmarshal(raw, &sf.hooks); err != nil {
+		var hooks map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &hooks); err != nil {
 			return settingsFile{}, fmt.Errorf("parse hooks in %s: %w", path, err)
+		}
+		for key, value := range hooks {
+			if preserveState && key == "state" {
+				sf.hookState = value
+				continue
+			}
+			var groups []hookGroup
+			if err := json.Unmarshal(value, &groups); err != nil {
+				return settingsFile{}, fmt.Errorf("parse hooks in %s: %w", path, err)
+			}
+			sf.hooks[key] = groups
 		}
 	}
 	if sf.hooks == nil {
@@ -565,8 +587,15 @@ func (sf settingsFile) marshal() ([]byte, error) {
 			out[k] = v
 		}
 	}
-	if len(sf.hooks) > 0 {
-		data, err := json.Marshal(sf.hooks)
+	if len(sf.hooks) > 0 || len(sf.hookState) > 0 {
+		hooks := make(map[string]any, len(sf.hooks)+1)
+		for key, groups := range sf.hooks {
+			hooks[key] = groups
+		}
+		if len(sf.hookState) > 0 {
+			hooks["state"] = sf.hookState
+		}
+		data, err := json.Marshal(hooks)
 		if err != nil {
 			return nil, err
 		}
@@ -851,6 +880,9 @@ func InstallWithOptions(agent, path, binary string, opts InstallOptions) (Instal
 	if agent == AgentJunie {
 		return installJunieWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
 	}
+	if agent == AgentMuse {
+		return installMuseWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce, false)
+	}
 	sf, err := readSettings(path)
 	if err != nil {
 		return rep, err
@@ -902,6 +934,8 @@ func InstallManagedWithOptions(agent, path, binary string, opts InstallOptions) 
 		return installQwenManagedWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
 	case AgentAuggie:
 		return installAuggieManagedWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce)
+	case AgentMuse:
+		return installMuseWithArgs(path, binary, opts.RuntimeArgs, opts.Enforce, true)
 	default:
 		return rep, nil
 	}
@@ -991,6 +1025,9 @@ func Uninstall(agent, path string) (InstallReport, error) {
 	if agent == AgentJunie {
 		return uninstallJunie(path)
 	}
+	if agent == AgentMuse {
+		return uninstallMuse(path, false)
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		rep.Message = "no settings file; nothing to remove"
 		return rep, nil
@@ -1041,6 +1078,8 @@ func UninstallManaged(agent, path string) (InstallReport, error) {
 		return uninstallQwenManaged(path)
 	case AgentAuggie:
 		return uninstallAuggieManaged(path)
+	case AgentMuse:
+		return uninstallMuse(path, true)
 	default:
 		return rep, nil
 	}
@@ -1129,6 +1168,9 @@ func Status(agent, path string) InstallReport {
 	if agent == AgentJunie {
 		return statusJunie(path)
 	}
+	if agent == AgentMuse {
+		return statusMuse(path)
+	}
 	sf, err := readSettings(path)
 	if err != nil {
 		rep.Message = err.Error()
@@ -1169,6 +1211,8 @@ func StatusManagedErr(agent, path string) (InstallReport, error) {
 		return statusClaudeManagedErr(path)
 	case AgentCodex:
 		return statusCodexRequirements(path)
+	case AgentMuse:
+		return statusMuseWithScope(path, true)
 	case AgentCursor, AgentCopilot, AgentGemini, AgentWindsurf, AgentQwen, AgentAuggie:
 		rep = Status(agent, path)
 		if err := configReadable(agent, path); err != nil {
@@ -1190,6 +1234,9 @@ func configReadable(agent, path string) error {
 	switch agent {
 	case AgentClaude, AgentCodex:
 		_, err := readSettings(path)
+		return err
+	case AgentMuse:
+		_, err := readHookSettings(path, true)
 		return err
 	case AgentFactory:
 		return configReadableFactory(path)

@@ -15,6 +15,7 @@ var artifactAgentByCLI = map[string]string{
 	"cursor":   model.AgentCursor,
 	"gemini":   model.AgentGeminiCLI,
 	"kimi":     model.AgentKimiCode,
+	"muse":     model.AgentMuseCode,
 	"openclaw": model.AgentOpenClaw,
 	"opencode": model.AgentOpenCode,
 	"pi":       model.AgentPi,
@@ -23,7 +24,7 @@ var artifactAgentByCLI = map[string]string{
 
 var artifactAgentNames = []string{
 	"claude", "codex", "copilot", "cowork", "cursor", "gemini",
-	"kimi", "openclaw", "opencode", "pi", "windsurf",
+	"kimi", "muse", "openclaw", "opencode", "pi", "windsurf",
 }
 
 func artifactAgentUsage() string {

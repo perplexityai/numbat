@@ -167,6 +167,7 @@ func TestCommandRulesAcceptOnlyOTelCompletionRecords(t *testing.T) {
 		{"truncate -s 0 ~/.numbat/state.db", "tamper.detector_state_write"},
 		{"printf x > ~/.zshrc", "persistence.shell_profile_write"},
 		{"cp /tmp/hook .git/hooks/pre-commit", "persistence.git_hook_write"},
+		{"printf x > .agents/memory/MEMORY.md", "persistence.agent_memory_write"},
 		{"cp /tmp/job.desktop ~/.config/autostart/job.desktop", "persistence.scheduler_install"},
 	}
 	for _, tc := range cases {
