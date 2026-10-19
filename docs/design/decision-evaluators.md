@@ -236,7 +236,8 @@ Inspect `status`, `reason` and gaps together; a skip is not a model verdict.
 
 Configuration and credentials must be protected from other users; Unix uses
 ownership/mode checks and Windows uses DACL/reparse checks. Same-user access is
-not a security boundary. Protect the ordinary rule directory too. Native state
+not a security boundary. Use canonical, non-symlink paths for protected files,
+including any system-directory aliases. Protect the ordinary rule directory too. Native state
 must be private; old inadequately protected files are rejected for decision
 history, not silently repaired. Logical eviction does not securely erase
 bbolt pages. Redaction is not declassification and can remove relevant evidence.

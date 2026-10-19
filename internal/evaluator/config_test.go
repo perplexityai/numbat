@@ -39,7 +39,7 @@ func TestDocumentedConfigurationsAndRules(t *testing.T) {
 		if strings.HasPrefix(value, "provider:") {
 			value = "version: \"1\"\n" + value
 		}
-		path := filepath.Join(t.TempDir(), "config.yaml")
+		path := filepath.Join(runtimePrivateDir(t), "config.yaml")
 		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +58,7 @@ func TestDocumentedConfigurationsAndRules(t *testing.T) {
 
 func configFixture(t *testing.T) (string, Config) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := runtimePrivateDir(t)
 	return filepath.Join(dir, "config.yaml"), Config{
 		Version: "1", InstallationID: "test", BudgetMS: 1000, TimeoutMS: 1000,
 		MaxRequestBytes: 4096, Content: "raw",
@@ -228,7 +228,7 @@ func TestConfigurationYAMLErrorsDoNotEchoValues(t *testing.T) {
 		{"version: '1'\nversion: DO_NOT_ECHO\n", "duplicate key"},
 		{"version: '1'\n---\nversion: '1'", "one YAML document"},
 	} {
-		path := filepath.Join(t.TempDir(), "config.yaml")
+		path := filepath.Join(runtimePrivateDir(t), "config.yaml")
 		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
 			t.Fatal(err)
 		}

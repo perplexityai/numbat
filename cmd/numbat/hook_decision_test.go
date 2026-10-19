@@ -40,6 +40,11 @@ type decisionHookLab struct {
 func newDecisionHookLab(t *testing.T) *decisionHookLab {
 	t.Helper()
 	lab := &decisionHookLab{dir: t.TempDir()}
+	dir, err := filepath.EvalSymlinks(lab.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lab.dir = dir
 	if err := os.Mkdir(filepath.Join(lab.dir, "state"), 0o700); err != nil {
 		t.Fatal(err)
 	}

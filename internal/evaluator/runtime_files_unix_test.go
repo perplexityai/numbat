@@ -2,6 +2,16 @@
 
 package evaluator
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
-func runtimePrivateDir(t *testing.T) string { t.Helper(); return t.TempDir() }
+func runtimePrivateDir(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
