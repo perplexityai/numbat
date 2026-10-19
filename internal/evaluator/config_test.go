@@ -177,11 +177,18 @@ func TestProtectedConfigurationFiles(t *testing.T) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(c.Provider.TokenFile, []byte("synthetic-token"), 0o644); err != nil {
+	if err := os.WriteFile(c.Provider.TokenFile, []byte("synthetic-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := LoadConfig(path)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loaded.Factory()(loaded.Provider.Profile); err != nil {
+		t.Fatalf("private credential rejected: %v", err)
+	}
+	// Set the negative fixture's permissions independently of the caller's umask.
+	if err := os.Chmod(c.Provider.TokenFile, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loaded.Factory()(loaded.Provider.Profile); err == nil {
