@@ -658,6 +658,86 @@ func TestNativeDenyReceiptRequiresCompleteControlWrite(t *testing.T) {
 	}
 }
 
+func TestExitCodeDenyReceiptRequiresCompleteControlWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  io.Writer
+	}{
+		{"complete", &bytes.Buffer{}},
+		{"short", &shortDenyWriter{}},
+		{"failed", &byteZeroFailWriter{}},
+		{"panic", &partialDenyPanicWriter{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			session := lab.rules[0]
+			session.Decision.Select = `event.event_type == "command.exec"`
+			action := session
+			spec := *session.Decision
+			action.ID, action.Decision = "local.action", &spec
+			action.Decision.View, action.Decision.MaxHistoryCalls = decision.Action, 0
+			action.Decision.Select = `event.command == "echo first"`
+			lab.rules = []rule.Rule{action, session}
+			lab.save(t)
+			args := []string{
+				"--agent", "junie", "--enforce", "--emit", "all",
+				"--output", "file", "--output-file", filepath.Join(lab.dir, "records.ndjson"),
+				"--state-db", filepath.Join(lab.dir, "state", "state.db"),
+				"--decision-config", lab.config, "--rules-dir", filepath.Join(lab.dir, "decisions"),
+			}
+			invoke := func(id, command string, stderr io.Writer) int {
+				t.Helper()
+				raw, err := json.Marshal(map[string]any{
+					"hook_event_name": "PreToolUse", "session_id": "session",
+					"tool_use_id": id, "tool_name": "Bash",
+					"tool_input":   map[string]any{"command": command},
+					"project_path": "/synthetic-project",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var stdout bytes.Buffer
+				return runHookEvent("PreToolUse", args, bytes.NewReader(raw), &stdout, stderr)
+			}
+			code := invoke("first", "echo first", tc.err)
+			wantCode := 0
+			if tc.name == "complete" {
+				wantCode = 2
+			}
+			if code != wantCode || lab.hits.Load() != 1 {
+				t.Fatalf("exit=%d requests=%d for %s control write", code, lab.hits.Load(), tc.name)
+			}
+			var sawReceipt atomic.Bool
+			lab.check = func(_ *http.Request, raw []byte) {
+				var request struct {
+					State struct {
+						History []struct {
+							Outcome string `json:"outcome"`
+						} `json:"history"`
+					} `json:"state"`
+				}
+				if err := json.Unmarshal(raw, &request); err != nil {
+					t.Errorf("decode provider request: %v", err)
+					return
+				}
+				for _, call := range request.State.History {
+					if call.Outcome == "deny_requested" {
+						sawReceipt.Store(true)
+					}
+				}
+			}
+			hits := lab.hits.Load()
+			if code := invoke("second", "echo second", io.Discard); code != 0 {
+				t.Fatalf("unanchored session denied: exit=%d", code)
+			}
+			if lab.hits.Load() != hits+1 || sawReceipt.Load() != (tc.name == "complete") {
+				t.Fatalf("next request count=%d receipt=%t; previous=%d control=%s",
+					lab.hits.Load(), sawReceipt.Load(), hits, tc.name)
+			}
+		})
+	}
+}
+
 func TestNativeDeterministicDenyRetainsDecisionPrefix(t *testing.T) {
 	lab := newDecisionHookLab(t)
 	lab.prefix(t, true)

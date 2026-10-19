@@ -255,6 +255,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 			denyAttempted = true
 			line := []byte(reason + "\n")
 			if n, werr := stderr.Write(line); werr == nil && n == len(line) {
+				decisionReceipt.record()
 				return 2
 			}
 			// A failed control write cannot communicate a reliable deny. Fall open
