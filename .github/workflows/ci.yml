@@ -127,6 +127,11 @@ jobs:
       - name: fuzz record output limit
         run: go test -run='^$' -fuzz='^FuzzRecordLimit$' -fuzztime=30s ./internal/output/
 
+      - name: fuzz decision policy and response decoding
+        run: |
+          go test -run='^$' -fuzz='^FuzzPolicyDecode$' -fuzztime=30s ./internal/decision/
+          go test -run='^$' -fuzz='^FuzzUniqueJSON$' -fuzztime=30s ./internal/evaluator/
+
   coverage:
     name: coverage (informational)
     runs-on: ubuntu-latest

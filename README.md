@@ -19,13 +19,19 @@ synchronous pre-action hooks; see the [enforcement guide](docs/enforcement.md).
 - **Endpoint-local detection** with built-in CEL rules, multi-step sequence rules,
   and custom YAML rules.
 - **Opt-in blocking** through supported pre-action hooks. Enforce mode is
-  disabled by default and applies only to rules marked `enforce: true`; all
-  shipped rules are monitor-only.
+  disabled by default and requires an enforcement-enabled rule or decision
+  policy; all shipped rules are monitor-only.
+- **Optional decision evaluation** for action-only or session-context review
+  through an explicitly configured HTTPS provider. The experimental
+  [Claude hook integration](docs/design/decision-evaluators.md) supports
+  monitor and enforce modes on Unix; ordinary rules remain local and deterministic.
+  Inspect configuration with `numbat decisions check --config FILE`, without
+  model calls. Policy fingerprint pinning is optional.
 - **Forensic reconstruction** from supported on-disk session artifacts, without
   prior numbat instrumentation.
-- **Versioned NDJSON records** for events, findings, enforcement decisions,
+- **Versioned NDJSON records** for events, findings, enforcement decisions, assessments,
   indicators, and scan summaries. Events and findings retain source references;
-  [JSON Schemas](docs/schema/v0.5.0/) define the wire format.
+  [JSON Schemas](docs/schema/v0.6.0/) define the wire format.
 - **Read-only artifact scanning** with secret redaction. Normal record output
   never includes a complete raw transcript; adding raw evidence files to a case
   bundle is opt-in.
@@ -140,7 +146,7 @@ and execution context. It also matches the high-severity cloud-metadata rule.
   "project_path": "/workspace/acme-api",
   "record_type": "event",
   "run_id": "run-20260724T151125.690671167-fa0a4148090fa1ba",
-  "schema_version": "0.5.0",
+  "schema_version": "0.6.0",
   "session_id": "agent:research:metadata-review",
   "source_agent": "openclaw",
   "source_type": "hook",
@@ -189,7 +195,7 @@ action completed.
   "rule_id": "chain.secret_read_then_egress",
   "rule_version": "1.4",
   "run_id": "run-20260724T144025.562634000-e18f9d375ddb1c1b",
-  "schema_version": "0.5.0",
+  "schema_version": "0.6.0",
   "session_id": "readme-live-sequence-01",
   "severity": "high",
   "source_agent": "claude-code",
@@ -234,7 +240,7 @@ matched the rule and numbat selected the agent-specific deny response. See
     "persistence.ssh_authorized_keys"
   ],
   "run_id": "run-20260724T134723.452402000-6886c86cefad57b8",
-  "schema_version": "0.5.0",
+  "schema_version": "0.6.0",
   "session_id": "sess-doc-codex-enforce-01",
   "source_agent": "codex",
   "source_type": "hook",
@@ -284,7 +290,7 @@ reference: [docs/cli.md](docs/cli.md).
 - [Enforcement](docs/enforcement.md): blocking semantics and failure behavior.
 - [Rules](docs/rules.md): custom rule format, CEL fields, tests, and sequences.
 - [Built-in rules](docs/rule-catalog.md): shipped detection coverage.
-- [Record schemas](docs/schema/v0.5.0/): JSON Schemas for the current wire format.
+- [Record schemas](docs/schema/v0.6.0/): JSON Schemas for the current wire format.
 
 ## Scope
 

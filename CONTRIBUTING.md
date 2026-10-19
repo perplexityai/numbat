@@ -1,7 +1,9 @@
 # Contributing to numbat
 
 numbat is a single Go module and binary. Contributions should preserve its
-deterministic, endpoint-local design and the architecture boundaries below.
+deterministic, endpoint-local defaults and the architecture boundaries below.
+Optional decision evaluation is an explicit monitoring-side exception, not
+network access from ordinary rules or offline commands.
 
 ## Before you start
 
@@ -62,6 +64,8 @@ Every change must preserve these project contracts:
 - **Observe and fail open by default.** numbat blocks only after an operator
   enables enforce mode. A numbat error, panic, or uncertain result suppresses
   its deny response; an agent host can still impose a stricter failure policy.
+  Optional evaluator failures suppress only that participant's contribution;
+  they must not erase a clean deterministic deny.
 - **High precision; no fabrication.** Prefer a documented false negative to a
   false positive. Emit only values supported by the source artifact or payload.
 - **Verify vendor schemas with evidence.** Agent-adapter changes must cite
@@ -84,13 +88,15 @@ Every change must preserve these project contracts:
 The `internal/archguard` tests enforce the package and dependency boundaries:
 
 - **Core** (`applypatch`, `model`, `redact`, `rule`, `sequence`, `finding`,
-  `pipeline`, `output`, `winfile`) must not import a plane package.
+  `pipeline`, `output`, `winfile`, `decision`) must not import a plane package.
 - **Forensics** (`extract`, `discover`, `casebundle`) and **monitoring** (`hook`,
-  `otel`, `state`) remain independent; neither imports the other.
+  `otel`, `state`, `evaluator`) remain independent; neither imports the other.
 - Only `state` and `sequence` may import `bbolt`.
 - In `cmd/numbat`, scan, timeline, and case files must not import the monitoring
   plane or bbolt. Hook, collect, and ship files must not import the forensics
-  plane. `agents.go` is the sole cross-plane reporting bridge.
+  plane. Offline `decisions.go` preparation belongs to the monitoring side,
+  without performing provider I/O. `agents.go` is the sole cross-plane
+  reporting bridge.
 
 The same tests reject cgo, unexpected direct dependencies, `replace` directives,
 and unclassified non-test files in `cmd/numbat`. Raise any necessary boundary

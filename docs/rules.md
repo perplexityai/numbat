@@ -252,7 +252,7 @@ uses `0`, and `tags` uses an empty list.
 | `event.tool_name` | string | `event.url` | string |
 | `event.content_omitted` | list(string) | | |
 
-The [event schema](schema/v0.5.0/event-record.schema.json) defines closed values
+The [event schema](schema/v0.6.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and
 `confidence`.
 
@@ -561,7 +561,7 @@ numbat rules test \
 
 Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
-See the [event schema](schema/v0.5.0/event-record.schema.json) for required
+See the [event schema](schema/v0.6.0/event-record.schema.json) for required
 fields.
 
 ## Sequence rules

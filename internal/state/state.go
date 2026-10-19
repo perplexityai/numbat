@@ -4,8 +4,8 @@
 // sequence windows — take the underlying handle via Bolt and own only their
 // bucket.
 //
-// The store is local-only and holds no transcript content, only the
-// content-free state owned by sibling packages.
+// The store is local-only. Sequence state is content-free; explicitly enabled
+// decision evaluation also retains its bounded, approved inference projection.
 package state
 
 import (
@@ -27,13 +27,31 @@ type DB struct {
 // exclusive file lock — a long-running command can afford a second; the live
 // hook, which blocks the agent, passes a short one and fails open.
 func Open(path string, timeout time.Duration) (*DB, error) {
+	return open(path, timeout, false)
+}
+
+// OpenEvidence refuses shared-readable files and symlinks before retaining the
+// explicitly enabled inference projection.
+func OpenEvidence(path string, timeout time.Duration) (*DB, error) {
+	return open(path, timeout, true)
+}
+
+func open(path string, timeout time.Duration, evidence bool) (*DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("state: empty database path")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
-	b, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: timeout})
+	opts := &bolt.Options{Timeout: timeout}
+	if evidence {
+		info, err := os.Lstat(filepath.Dir(path))
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+			return nil, fmt.Errorf("state: evidence directory must be private")
+		}
+		opts.OpenFile = openEvidenceFile
+	}
+	b, err := bolt.Open(path, 0o600, opts)
 	if err != nil {
 		return nil, fmt.Errorf("state: open %q: %w", path, err)
 	}

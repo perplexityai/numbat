@@ -138,6 +138,9 @@ func runCaseBuild(args []string, stdout, stderr io.Writer) int {
 	if res.Enforcements > 0 {
 		summary += fmt.Sprintf(", %d enforcement decisions", res.Enforcements)
 	}
+	if res.Assessments > 0 {
+		summary += fmt.Sprintf(", %d assessments", res.Assessments)
+	}
 	summary += fmt.Sprintf(", %d events", res.Events)
 	if mode != casebundle.EvidenceNone {
 		summary += fmt.Sprintf(", %d evidence files", res.EvidenceFiles)

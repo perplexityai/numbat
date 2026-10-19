@@ -45,13 +45,34 @@ func TestResolverCodexSubagentIdentity(t *testing.T) {
 	if main.sessionID() != "main-1" || main.sessionTreeID() != "" || main.subAgentID() != "" || main.subAgent() != "" {
 		t.Fatalf("Codex main context = session %q tree %q id %q role %q", main.sessionID(), main.sessionTreeID(), main.subAgentID(), main.subAgent())
 	}
+}
 
-	claude := newResolver(AgentClaude, map[string]any{
-		"session_id": "session-1",
-		"agent_id":   "legacy-child",
-	})
-	if claude.sessionID() != "session-1" || claude.sessionTreeID() != "" || claude.subAgentID() != "" || claude.subAgent() != "legacy-child" {
-		t.Fatalf("non-Codex semantics changed: session %q tree %q id %q role %q", claude.sessionID(), claude.sessionTreeID(), claude.subAgentID(), claude.subAgent())
+// Claude keeps session_id while agent_id identifies a subagent or teammate.
+// https://code.claude.com/docs/en/hooks
+func TestResolverClaudeSubagentIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, key string
+		value     any
+		want      string
+	}{
+		{"main", "", nil, ""},
+		{"child", "agent_id", "child-1", "child-1"},
+		{"equal to session", "agent_id", "session-1", "session-1"},
+		{"no alias", "agentId", "child-1", ""},
+		{"empty", "agent_id", "", ""},
+		{"null", "agent_id", nil, ""},
+		{"number", "agent_id", json.Number("7"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"session_id": "session-1"}
+			if tc.key != "" {
+				payload[tc.key] = tc.value
+			}
+			r := newResolver(AgentClaude, payload)
+			if r.sessionID() != "session-1" || r.sessionTreeID() != "" || r.subAgentID() != tc.want {
+				t.Fatalf("Claude context: session %q tree %q child %q", r.sessionID(), r.sessionTreeID(), r.subAgentID())
+			}
+		})
 	}
 }
 

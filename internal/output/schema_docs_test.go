@@ -31,6 +31,10 @@ func TestPublishedRecordSchemasStayCurrent(t *testing.T) {
 			recordType: RecordEnforcement,
 			fields:     withEnvelope(jsonFields(reflect.TypeOf(model.EnforcementDecision{})), true),
 		},
+		"assessment-record.schema.json": {
+			recordType: RecordAssessment,
+			fields:     withEnvelope(jsonFields(reflect.TypeOf(DecisionAssessment{})), true),
+		},
 		"indicator-record.schema.json": {
 			recordType: RecordIndicator,
 			fields:     withEnvelope(jsonFields(reflect.TypeOf(Indicator{})), false),
@@ -261,6 +265,11 @@ func jsonFields(typ reflect.Type) map[string]struct{} {
 	for i := 0; i < typ.NumField(); i++ {
 		tag := typ.Field(i).Tag.Get("json")
 		name, _, _ := strings.Cut(tag, ",")
+		if typ.Field(i).Anonymous && name == "" && typ.Field(i).Type.Kind() == reflect.Struct {
+			for embedded := range jsonFields(typ.Field(i).Type) {
+				fields[embedded] = struct{}{}
+			}
+		}
 		if name != "" && name != "-" {
 			fields[name] = struct{}{}
 		}

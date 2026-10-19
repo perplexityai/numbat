@@ -29,9 +29,9 @@ const internalPrefix = modulePath + "/internal/"
 // Plane membership. Names are the package's path under internal/ (e.g. "model"
 // or a nested package such as "rule/foo").
 var (
-	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile"}
+	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile", "decision"}
 	forensicsPkgs  = []string{"extract", "discover", "casebundle"}
-	monitoringPkgs = []string{"hook", "otel", "state"}
+	monitoringPkgs = []string{"hook", "otel", "state", "evaluator"}
 )
 
 // nonPlane lists internal packages that intentionally belong to no plane:
@@ -182,7 +182,7 @@ func internalImports(t *testing.T) map[string][]string {
 // hook/collect are the monitoring-side entrypoints: they must not touch the
 // forensics plane (extract/discover/casebundle).
 var (
-	forbidMonitoring = []string{"hook", "otel", "state", bboltPath}
+	forbidMonitoring = []string{"hook", "otel", "state", "evaluator", bboltPath}
 	forbidForensics  = []string{"extract", "discover", "casebundle"}
 )
 
@@ -204,6 +204,7 @@ func classifyCmdFile(name string) (forbidden []string, ok bool) {
 		name == "case.go" || strings.HasPrefix(name, "case_"):
 		return forbidMonitoring, true
 	case name == "hook.go" || strings.HasPrefix(name, "hook_") ||
+		name == "decisions.go" ||
 		name == "collect.go" || strings.HasPrefix(name, "collect_") ||
 		name == "ship.go" || strings.HasPrefix(name, "ship_"):
 		return forbidForensics, true

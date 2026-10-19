@@ -24,6 +24,7 @@ const (
 	EnforcementReasonNoEnforceEligibleMatch = "no_enforce_eligible_match"
 	EnforcementReasonFailOpen               = "fail_open"
 	EnforcementReasonEnforceRuleMatch       = "enforce_rule_match"
+	EnforcementReasonSemanticPolicyMatch    = "semantic_policy_match"
 )
 
 // EnforcementDecision records Numbat's computed policy decision for a matched
@@ -55,10 +56,14 @@ type EnforcementDecision struct {
 
 	ActionEventIDs []string `json:"action_event_ids"`
 	FindingIDs     []string `json:"finding_ids,omitempty"`
-	RuleIDs        []string `json:"rule_ids"`
+	RuleIDs        []string `json:"rule_ids,omitempty"`
+	AssessmentIDs  []string `json:"assessment_ids,omitempty"`
 
-	DenyRuleID      string `json:"deny_rule_id,omitempty"`
-	DenyRuleVersion string `json:"deny_rule_version,omitempty"`
+	DenyRuleID        string `json:"deny_rule_id,omitempty"`
+	DenyRuleVersion   string `json:"deny_rule_version,omitempty"`
+	DenyPolicyID      string `json:"deny_policy_id,omitempty"`
+	DenyPolicyVersion string `json:"deny_policy_version,omitempty"`
+	DenyAssessmentID  string `json:"deny_assessment_id,omitempty"`
 }
 
 // Validate enforces the closed enforcement-decision wire contract.
@@ -90,7 +95,10 @@ func (d EnforcementDecision) Validate() error {
 	if err := validateUniqueNonEmpty("finding_ids", d.FindingIDs, false); err != nil {
 		return fmt.Errorf("enforcement decision %s: %w", d.DecisionID, err)
 	}
-	if err := validateUniqueNonEmpty("rule_ids", d.RuleIDs, true); err != nil {
+	if err := validateUniqueNonEmpty("rule_ids", d.RuleIDs, len(d.AssessmentIDs) == 0); err != nil {
+		return fmt.Errorf("enforcement decision %s: %w", d.DecisionID, err)
+	}
+	if err := validateUniqueNonEmpty("assessment_ids", d.AssessmentIDs, false); err != nil {
 		return fmt.Errorf("enforcement decision %s: %w", d.DecisionID, err)
 	}
 
@@ -100,17 +108,31 @@ func (d EnforcementDecision) Validate() error {
 			return fmt.Errorf("enforcement decision %s: monitor mode requires no_override with monitor_mode", d.DecisionID)
 		}
 	case d.Decision == EnforcementDecisionDeny:
-		if d.Reason != EnforcementReasonEnforceRuleMatch || d.DenyRuleID == "" || d.DenyRuleVersion == "" {
-			return fmt.Errorf("enforcement decision %s: deny requires enforce_rule_match and a deny rule id/version", d.DecisionID)
-		}
-		if !containsValue(d.RuleIDs, d.DenyRuleID) {
-			return fmt.Errorf("enforcement decision %s: deny rule %q is absent from rule_ids", d.DecisionID, d.DenyRuleID)
+		switch d.Reason {
+		case EnforcementReasonSemanticPolicyMatch:
+			if d.DenyPolicyID == "" || d.DenyPolicyVersion == "" ||
+				!containsValue(d.AssessmentIDs, d.DenyAssessmentID) || d.DenyRuleID != "" || d.DenyRuleVersion != "" {
+				return fmt.Errorf("enforcement decision %s: semantic deny requires a policy and referenced assessment, not a deny rule", d.DecisionID)
+			}
+		case EnforcementReasonEnforceRuleMatch:
+			if d.DenyRuleID == "" || d.DenyRuleVersion == "" {
+				return fmt.Errorf("enforcement decision %s: deny rule id/version missing", d.DecisionID)
+			}
+			if !containsValue(d.RuleIDs, d.DenyRuleID) {
+				return fmt.Errorf("enforcement decision %s: deny rule %q is absent from rule_ids", d.DecisionID, d.DenyRuleID)
+			}
+			if d.DenyPolicyID != "" || d.DenyPolicyVersion != "" || d.DenyAssessmentID != "" {
+				return fmt.Errorf("enforcement decision %s: deterministic deny names a semantic policy", d.DecisionID)
+			}
+		default:
+			return fmt.Errorf("enforcement decision %s: deny requires a rule match or semantic policy match", d.DecisionID)
 		}
 	case d.Reason != EnforcementReasonNoEnforceEligibleMatch && d.Reason != EnforcementReasonFailOpen:
 		return fmt.Errorf("enforcement decision %s: invalid no_override enforce-mode reason %q", d.DecisionID, d.Reason)
 	}
-	if d.Decision != EnforcementDecisionDeny && (d.DenyRuleID != "" || d.DenyRuleVersion != "") {
-		return fmt.Errorf("enforcement decision %s: no_override decision names a deny rule", d.DecisionID)
+	if d.Decision != EnforcementDecisionDeny && (d.DenyRuleID != "" || d.DenyRuleVersion != "" ||
+		d.DenyPolicyID != "" || d.DenyPolicyVersion != "" || d.DenyAssessmentID != "") {
+		return fmt.Errorf("enforcement decision %s: no_override decision names a deny rule or policy", d.DecisionID)
 	}
 	return nil
 }

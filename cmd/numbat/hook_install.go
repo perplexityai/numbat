@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/perplexityai/numbat/internal/evaluator"
 	"github.com/perplexityai/numbat/internal/hook"
 	"github.com/perplexityai/numbat/internal/output"
 )
@@ -33,31 +35,34 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	managedTarget := fs.Bool("managed", false, "target the agent's admin-managed hook config ("+hook.ManagedAgentUsage()+"; requires --agent)")
 	// --enforce opts this install into numbat's enforcement path: the installed
 	// hook command carries the runtime enforce signal, so a positive
-	// explicitly enforceable rule match emits a block. Off by default; without
+	// explicitly enforceable rule or decision-policy match requests a deny. Without
 	// it numbat stays strictly detection-only and passthrough-safe. Meaningful only
 	// for install; ignored by uninstall/status (which key on the numbat marker).
 	var (
-		enforce           bool
-		emitValues        multiFlag
-		contentValue      = "preview"
-		contentScopeValue = "all"
-		maxRecordBytes    int
-		includeReasoning  bool
-		outputValues      multiFlag
-		outputFileValue   string
-		httpURL           string
-		httpBatch         = 500
-		httpTimeout       = defaultHookHTTPTimeout
-		httpAuth          = output.AuthNone
-		httpSigHeader     = output.DefaultHMACHeader
-		httpTSHeader      = output.DefaultTimestampHeader
-		httpAllowInsecure bool
-		httpGzip          bool
-		ruleDirs          multiFlag
-		noBuiltinRules    bool
+		enforce            bool
+		emitValues         multiFlag
+		contentValue       = "preview"
+		contentScopeValue  = "all"
+		maxRecordBytes     int
+		includeReasoning   bool
+		outputValues       multiFlag
+		outputFileValue    string
+		httpURL            string
+		httpBatch          = 500
+		httpTimeout        = defaultHookHTTPTimeout
+		httpAuth           = output.AuthNone
+		httpSigHeader      = output.DefaultHMACHeader
+		httpTSHeader       = output.DefaultTimestampHeader
+		httpAllowInsecure  bool
+		httpGzip           bool
+		ruleDirs           multiFlag
+		noBuiltinRules     bool
+		decisionConfig     string
+		decisionUserConfig bool
+		stateDB            string
 	)
 	if action == "install" {
-		fs.BoolVar(&enforce, "enforce", false, "install in enforce mode for agents with blocking support: deny supported pre-action requests when a rule marked enforce=true matches; requires an enabled enforce=true rule in the effective catalog (default: monitor only)")
+		fs.BoolVar(&enforce, "enforce", false, "install in enforce mode for agents with blocking support; requires an enforcement-enabled rule or configured decision policy (default: monitor only)")
 		fs.Var(&emitValues, "emit", "records emitted by live integrations: findings, events, indicators, or all (repeatable; default findings; enforce mode requires findings)")
 		fs.StringVar(&contentValue, "content", "preview", contentFlagHelp())
 		fs.StringVar(&contentScopeValue, "content-scope", "all", contentScopeFlagHelp())
@@ -75,6 +80,9 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&httpGzip, "http-gzip", false, "gzip the HTTP POST body")
 		fs.Var(&ruleDirs, "rules-dir", "directory of operator YAML rules to add or replace by id in installed live integrations (repeatable)")
 		fs.BoolVar(&noBuiltinRules, "no-builtin-rules", false, "install live integrations with only --rules-dir rules")
+		fs.StringVar(&decisionConfig, "decision-config", "", "explicit protected decision-evaluator configuration (Claude only)")
+		fs.BoolVar(&decisionUserConfig, "decision-user-config", false, "allow current-user-owned decision configuration; not an agent security boundary")
+		fs.StringVar(&stateDB, "state-db", "", "absolute path for shared sequence and opt-in decision state")
 	}
 	fs.Usage = func() {
 		agentArg := "--agent NAME|all"
@@ -114,6 +122,10 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hook install: --max-record-bytes must be non-negative")
 		return 2
 	}
+	if decisionUserConfig && decisionConfig == "" {
+		fmt.Fprintln(stderr, "hook install: --decision-user-config requires --decision-config")
+		return 2
+	}
 
 	if *settingsPath != "" && *agentFlag == "" {
 		fmt.Fprintf(stderr, "hook %s: --settings requires --agent (it names one file, but multiple agents use incompatible hook schemas)\n", action)
@@ -147,6 +159,10 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	}
 	if enforce && len(agents) != 1 {
 		fmt.Fprintln(stderr, "hook install: --enforce requires one agent; --agent all is not valid")
+		return 2
+	}
+	if decisionConfig != "" && (len(agents) != 1 || agents[0] != hook.AgentClaude) {
+		fmt.Fprintln(stderr, "hook install: --decision-config currently supports only --agent claude")
 		return 2
 	}
 	if enforce && !hook.AgentSupportsEnforcement(agents[0]) {
@@ -201,26 +217,29 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		args, err := installRuntimeArgs(installRuntimeConfig{
-			emit:             emitValues,
-			content:          content,
-			contentScope:     scope,
-			maxRecordBytes:   maxRecordBytes,
-			includeReasoning: includeReasoning,
-			modes:            outputValues,
-			file:             outputFileValue,
-			httpURL:          httpURL,
-			httpBatch:        httpBatch,
-			httpTimeout:      httpTimeout,
-			httpAuth:         httpAuth,
-			httpSigHeader:    httpSigHeader,
-			httpTSHeader:     httpTSHeader,
-			allowInsecure:    httpAllowInsecure,
-			gzip:             httpGzip,
-			ruleDirs:         ruleDirs,
-			noBuiltin:        noBuiltinRules,
-			enforce:          enforce,
-			managed:          *managedTarget,
-			visitFlags:       fs,
+			emit:               emitValues,
+			content:            content,
+			contentScope:       scope,
+			maxRecordBytes:     maxRecordBytes,
+			includeReasoning:   includeReasoning,
+			modes:              outputValues,
+			file:               outputFileValue,
+			httpURL:            httpURL,
+			httpBatch:          httpBatch,
+			httpTimeout:        httpTimeout,
+			httpAuth:           httpAuth,
+			httpSigHeader:      httpSigHeader,
+			httpTSHeader:       httpTSHeader,
+			allowInsecure:      httpAllowInsecure,
+			gzip:               httpGzip,
+			ruleDirs:           ruleDirs,
+			noBuiltin:          noBuiltinRules,
+			enforce:            enforce,
+			managed:            *managedTarget,
+			visitFlags:         fs,
+			decisionConfig:     decisionConfig,
+			decisionUserConfig: decisionUserConfig,
+			stateDB:            stateDB,
 		}, home)
 		if err != nil {
 			fmt.Fprintf(stderr, "hook install: %v\n", err)
@@ -303,26 +322,29 @@ func runHookAction(action, agent, path, binary string, installOpts hook.InstallO
 }
 
 type installRuntimeConfig struct {
-	emit             []string
-	content          contentMode
-	contentScope     contentScope
-	maxRecordBytes   int
-	includeReasoning bool
-	modes            []string
-	file             string
-	httpURL          string
-	httpBatch        int
-	httpTimeout      time.Duration
-	httpAuth         string
-	httpSigHeader    string
-	httpTSHeader     string
-	allowInsecure    bool
-	gzip             bool
-	ruleDirs         []string
-	noBuiltin        bool
-	enforce          bool
-	managed          bool
-	visitFlags       *flag.FlagSet
+	emit               []string
+	content            contentMode
+	contentScope       contentScope
+	maxRecordBytes     int
+	includeReasoning   bool
+	modes              []string
+	file               string
+	httpURL            string
+	httpBatch          int
+	httpTimeout        time.Duration
+	httpAuth           string
+	httpSigHeader      string
+	httpTSHeader       string
+	allowInsecure      bool
+	gzip               bool
+	ruleDirs           []string
+	noBuiltin          bool
+	enforce            bool
+	managed            bool
+	visitFlags         *flag.FlagSet
+	decisionConfig     string
+	decisionUserConfig bool
+	stateDB            string
 }
 
 func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error) {
@@ -343,6 +365,16 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 	if err := validateEnforceIO(cfg.enforce, emitSel, sinks); err != nil {
 		return nil, err
 	}
+	var decisions *evaluator.Config
+	if cfg.decisionConfig != "" {
+		decisions, err = evaluator.LoadConfig(cfg.decisionConfig, cfg.decisionUserConfig)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateDecisionHook(decisions, hook.AgentClaude, emitSel, sinks, cfg.httpTimeout); err != nil {
+			return nil, err
+		}
+	}
 
 	set := map[string]bool{}
 	if cfg.visitFlags != nil {
@@ -351,6 +383,18 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 		})
 	}
 	args := []string{}
+	if cfg.decisionConfig != "" {
+		args = append(args, "--decision-config", cfg.decisionConfig)
+		if cfg.decisionUserConfig {
+			args = append(args, "--decision-user-config")
+		}
+	}
+	if cfg.stateDB != "" {
+		if !filepath.IsAbs(cfg.stateDB) || runtimeExpandedPath(cfg.stateDB) {
+			return nil, errors.New("--state-db must be an absolute concrete path")
+		}
+		args = append(args, "--state-db", cfg.stateDB)
+	}
 	if cfg.noBuiltin && len(cfg.ruleDirs) == 0 {
 		return nil, fmt.Errorf("--no-builtin-rules requires at least one --rules-dir")
 	}
@@ -373,7 +417,7 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 		args = append(args, "--rules-dir", dir)
 	}
 	if cfg.enforce {
-		if err := validateInstallEnforcementPolicy(resolvedRuleDirs, cfg.noBuiltin); err != nil {
+		if err := validateInstallEnforcementPolicy(resolvedRuleDirs, cfg.noBuiltin, decisions); err != nil {
 			return nil, err
 		}
 	}
@@ -526,7 +570,7 @@ func installRuntimeArgs(cfg installRuntimeConfig, home string) ([]string, error)
 // agent configuration is changed and uses the same effective-catalog overlay
 // and compile path as the live hook. Deferred paths are rejected because their
 // contents cannot be verified in the installer's environment.
-func validateInstallEnforcementPolicy(ruleDirs []string, noBuiltin bool) error {
+func validateInstallEnforcementPolicy(ruleDirs []string, noBuiltin bool, decisions *evaluator.Config) error {
 	for _, dir := range ruleDirs {
 		if runtimeExpandedPath(dir) {
 			return fmt.Errorf("--enforce requires a concrete --rules-dir path that can be validated at install time; got %q", dir)
@@ -536,10 +580,25 @@ func validateInstallEnforcementPolicy(ruleDirs []string, noBuiltin bool) error {
 	if err != nil {
 		return fmt.Errorf("validate --enforce rule catalog: %w", err)
 	}
-	if !eng.HasEnforceEligibleRules() {
+	if eng.HasEnforceEligibleRules() {
+		return nil
+	}
+	if decisions == nil {
 		return fmt.Errorf("--enforce requires at least one enabled rule with enforce: true in the effective catalog (supply one with --rules-dir)")
 	}
-	return nil
+	reasons := []string{"no enforce-capable decision binding"}
+	ruleIDs := eng.RuleIDs()
+	for i, b := range decisions.Bindings {
+		blockers := decisions.EnforcementBlockers(b)
+		if b.Compiled != nil && slices.Contains(ruleIDs, b.Compiled.Policy().ID) {
+			blockers = append(blockers, fmt.Sprintf("policy ID collision with deterministic rule %q", b.Compiled.Policy().ID))
+		}
+		if len(blockers) == 0 {
+			return nil
+		}
+		reasons = append(reasons, fmt.Sprintf("bindings[%d]: %s", i, strings.Join(blockers, ", ")))
+	}
+	return fmt.Errorf("--enforce requires an enabled enforce:true rule or an enforce-capable decision binding; %s; inspect with numbat decisions check --config FILE", strings.Join(reasons, "; "))
 }
 
 func runtimeExpandedPath(path string) bool {

@@ -899,7 +899,7 @@ func InstallWithOptions(agent, path, binary string, opts InstallOptions) (Instal
 	rep.Installed = true
 	rep.Changed = true
 	if opts.Enforce {
-		rep.Message = "installed numbat hooks (enforce mode: blocks matches from rules marked enforce=true)"
+		rep.Message = "installed numbat hooks (enforce mode: requests denies for enforcement-enabled rules or configured decision policies)"
 	} else {
 		rep.Message = "installed numbat hooks"
 	}

@@ -72,24 +72,28 @@ type EnforceDecision struct {
 
 	// The remaining fields are identifier-only context for the enforcement
 	// decision record. They never retain observed command or file content.
-	Matched         bool
-	ActionEventIDs  []string
-	FindingIDs      []string
-	RuleIDs         []string
-	DenyRuleID      string
-	DenyRuleVersion string
-	CaseID          string
-	SourceAgent     string
-	SourceType      string
-	SessionID       string
-	SessionTreeID   string
-	ParentSessionID string
-	Model           string
-	ModelProvider   string
-	SubAgent        string
-	SubAgentID      string
-	ToolName        string
-	ToolCallID      string
+	Matched           bool
+	ActionEventIDs    []string
+	FindingIDs        []string
+	RuleIDs           []string
+	DenyRuleID        string
+	DenyRuleVersion   string
+	AssessmentIDs     []string
+	DenyPolicyID      string
+	DenyPolicyVersion string
+	DenyAssessmentID  string
+	CaseID            string
+	SourceAgent       string
+	SourceType        string
+	SessionID         string
+	SessionTreeID     string
+	ParentSessionID   string
+	Model             string
+	ModelProvider     string
+	SubAgent          string
+	SubAgentID        string
+	ToolName          string
+	ToolCallID        string
 }
 
 // WithEnforce attaches the live hook's enforcement accumulator. Monitor mode

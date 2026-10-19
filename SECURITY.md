@@ -27,8 +27,12 @@ environment values, credentials, and MCP configuration.
 - Artifact scans and timelines are read-only. numbat never executes an agent,
   package manager, or command found in an artifact. Explicit commands can write
   hook configuration, output files, sequence state, and case bundles.
-- numbat makes no outbound request unless an operator configures an HTTP sink or
-  runs `ship`. Non-loopback HTTP destinations require HTTPS unless
+- numbat makes no outbound request unless an operator configures an HTTP sink,
+  runs `ship`, or explicitly enables a decision evaluator through
+  `--decision-config`. Decision evaluation requires HTTPS and separate
+  `send_content` consent; it can transmit projected tool arguments and results
+  to the configured model provider. Ordinary rules and offline commands do not
+  enable it. Non-loopback HTTP sink destinations require HTTPS unless
   `--http-allow-insecure` is set explicitly.
 - `collect` binds to `127.0.0.1:4318` by default. It provides no client
   authentication or TLS when bound to another interface. Do not expose it to an
@@ -56,6 +60,11 @@ environment values, credentials, and MCP configuration.
 - Sequence state can contain event identifiers, evidence references, tags,
   confidence, and timestamps. Protect the state database and output files as
   sensitive endpoint data.
+- Opt-in session decision evaluation additionally retains its bounded inference
+  projection in the state database. Its directory must be private (0700), and
+  the database private (0600). Logical retention does not securely erase bbolt
+  pages. Raw inference egress is separate from raw output and requires explicit
+  configuration; redaction is not declassification.
 - Copying raw evidence into a case bundle is opt-in. Raw and redacted bundles
   can still contain secrets or private content.
 
@@ -65,13 +74,44 @@ environment values, credentials, and MCP configuration.
   User-scoped configuration, state, and output remain mutable or readable by
   that user unless stronger OS controls protect them.
 - Monitor mode is the default. Enforce mode is opt-in, applies only to supported
-  synchronous pre-action hooks and rules marked `enforce: true`, and asks the
-  agent host to deny an action. The host remains the enforcement point.
+  synchronous pre-action hooks and enforcement-enabled rules or explicitly
+  configured decision policies, and asks the agent host to deny an action.
+  The host remains the enforcement point.
 - A decoding error, relevant evaluation error, or output failure suppresses
   numbat's deny response. Unavailable sequence state prevents a sequence-based
   deny but does not suppress an independent clean stateless deny. The host can
   still prompt, deny, or fail closed under its own hook contract. See
   [docs/enforcement.md](docs/enforcement.md).
+- An optional evaluator error, timeout, malformed answer, or abstention
+  contributes no semantic deny and never cancels an independently proven
+  deterministic deny. A model's non-matching answer is not host authorization.
+  Semantic enforcement requires policy, binding, and global enforcement
+  opt-ins, complete/fresh evidence, and the operator's verified
+  `no_argument_rewriters` assertion. See the
+  [decision evaluator design](docs/design/decision-evaluators.md).
+- Decision configuration, policy files and credentials are root-owned and
+  non-writable by the agent by default. `--decision-user-config` explicitly
+  weakens ownership to permit the current user and offers no protection against
+  that same user. Even root-owned credentials readable by a hook are readable
+  by other processes with its OS identity; use a narrowly scoped credential.
+  Optional policy fingerprints detect changes relative to operator-supplied
+  pins; they are not signatures, approval records or a substitute for file
+  ownership. Requests are always bound to the actual loaded policy.
+- Hook payloads and writable evidence state are not authenticated against the
+  agent's OS identity. A same-user process can forge observations, alter context,
+  or force fail-open. Protected configuration and random state generations do
+  not make the captured prefix tamper-resistant.
+- Complete-prefix status describes observed callback consistency, not guaranteed
+  delivery. A proposal lost before state observation may remain invisible until
+  an unpaired outcome exposes it; a fully lost callback cannot be inferred.
+  Contextual evaluation is best-effort, not a gap-free execution ledger.
+- Identified Claude child activity invalidates parent contextual enforcement;
+  child histories are separate and cannot contribute semantic denies. Partial
+  parent/child assessments remain available. A malformed `agent_id` or a child
+  boundary without identity records a gap, not main-agent evidence. An ordinary
+  tool callback without any child marker relies on the host's identity contract.
+  Delegation can avoid semantic blocking, and known background launches are
+  ineligible. These policies are not a containment boundary for those actions.
 - Hook input is limited to 4 MiB. Oversized or malformed input produces a
   diagnostic and no numbat deny response.
 - `hook status` verifies numbat-owned configuration on disk; it does not prove

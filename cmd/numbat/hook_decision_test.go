@@ -1,0 +1,833 @@
+//go:build unix
+
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/perplexityai/numbat/internal/decision"
+	"github.com/perplexityai/numbat/internal/evaluator"
+	"github.com/perplexityai/numbat/internal/model"
+	"github.com/perplexityai/numbat/internal/output"
+	"github.com/perplexityai/numbat/internal/state"
+)
+
+type decisionHookLab struct {
+	dir    string
+	config string
+	cfg    evaluator.Config
+	hits   atomic.Int32
+	check  func(*http.Request, []byte)
+	fault  string
+}
+
+func newDecisionHookLab(t *testing.T) *decisionHookLab {
+	t.Helper()
+	lab := &decisionHookLab{dir: t.TempDir()}
+	if err := os.Mkdir(filepath.Join(lab.dir, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lab.hits.Add(1)
+		raw, _ := io.ReadAll(r.Body)
+		if lab.check != nil {
+			lab.check(r, raw)
+		}
+		switch lab.fault {
+		case "unavailable":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		case "timeout":
+			time.Sleep(150 * time.Millisecond)
+		case "malformed":
+			_, _ = io.WriteString(w, `{"model":"test","model":"test"}`)
+			return
+		case "case_alias":
+			_, _ = io.WriteString(w, `{"model":"test","answers":{"policy":{"type":"choice","choice":"permitted","Choice":"prohibited","probabilities":{"prohibited":0.999,"permitted":0.0005,"unknown":0.0005}}}}`)
+			return
+		case "truncated":
+			_, _ = io.WriteString(w, `{"model":"test","answers":{"policy":{"type":"choice","choice":"prohibited","probabilities":{"prohibited":0.999,"permitted":0.0005,"unknown":0.0005}}},"usage":{"truncated":true}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"test","answers":{"policy":{"type":"choice","choice":"prohibited","probabilities":{"prohibited":0.999,"permitted":0.0005,"unknown":0.0005}}}}`)
+	}))
+	t.Cleanup(server.Close)
+	write := func(name string, data []byte) string {
+		t.Helper()
+		path := filepath.Join(lab.dir, name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	policy := decision.Policy{
+		ID: "local.transfer", Version: "1", Title: "Protected transfer", Severity: "high", Enforce: true,
+		Decision: decision.Question{
+			Select:       `event.tool_name == "mcp__fixture__upload"`,
+			Instructions: "Classify this pending transfer.",
+			Options:      map[string]string{"prohibited": "Violates policy.", "permitted": "Meets policy.", "unknown": "Insufficient evidence."},
+			MatchOption:  "prohibited", AbstainOption: "unknown",
+		},
+	}
+	compiled, err := decision.Compile(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(policy)
+	lab.cfg = evaluator.Config{
+		Version: "1", Enabled: true, InstallationID: "test-installation", Content: "raw",
+		BudgetMS: 2000, NoArgumentRewriters: true,
+		OperatorContext: map[string]any{"policy": "Synthetic transfer policy."},
+		State:           evaluator.StateConfig{MaxSessions: 4, MaxCalls: 8, MaxBytes: 32768, IdleTTLMS: 10000},
+		Providers: map[string]evaluator.ProviderConfig{"test": {
+			Profile:   evaluator.Profile{Protocol: "decisions-v1", Endpoint: server.URL, Model: "test", MaxResponseBytes: 8192},
+			TokenFile: write("token", []byte("synthetic-token")), CAFile: write("ca.pem", ca),
+		}},
+		Bindings: []evaluator.ConfiguredBinding{{
+			PolicyFile: write("policy.yaml", raw), Provider: "test",
+			Binding: decision.Binding{
+				Enabled: true, SendContent: true, PolicySHA256: compiled.Digest(),
+				View: decision.Session, Mode: decision.Enforce,
+				MatchThreshold: .9, DenyThreshold: .99,
+				BudgetMS: 2000, MaxRequestBytes: 32768, MaxHistoryCalls: 8,
+			},
+		}},
+	}
+	lab.config = filepath.Join(lab.dir, "config.yaml")
+	lab.save(t)
+	return lab
+}
+
+func (l *decisionHookLab) save(t *testing.T) {
+	t.Helper()
+	raw, _ := json.Marshal(l.cfg)
+	if err := os.WriteFile(l.config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (l *decisionHookLab) invoke(t *testing.T, lifecycle string, payload map[string]any, extra ...string) string {
+	t.Helper()
+	var out bytes.Buffer
+	l.invokeTo(t, lifecycle, payload, &out, extra...)
+	return out.String()
+}
+
+func (l *decisionHookLab) invokeTo(t *testing.T, lifecycle string, payload map[string]any, out io.Writer, extra ...string) {
+	t.Helper()
+	payload["session_id"] = "session"
+	payload["cwd"] = "/private-workspace-not-for-provider"
+	payload["transcript_path"] = "/private-transcript-not-for-provider"
+	raw, _ := json.Marshal(payload)
+	args := []string{
+		"--agent", "claude", "--enforce", "--emit", "all",
+		"--output", "file", "--output-file", filepath.Join(l.dir, "records.ndjson"),
+		"--state-db", filepath.Join(l.dir, "state", "state.db"), "--decision-config", l.config, "--decision-user-config",
+	}
+	args = append(args, extra...)
+	var stderr bytes.Buffer
+	if exit := runHookEvent(lifecycle, args, bytes.NewReader(raw), out, &stderr); exit != 0 {
+		t.Fatalf("hook exit=%d stderr=%s", exit, stderr.String())
+	}
+}
+
+func (l *decisionHookLab) prefix(t *testing.T, result bool) {
+	t.Helper()
+	l.invoke(t, "session-start", map[string]any{"hook_event_name": "SessionStart", "source": "startup"})
+	l.invoke(t, "pre-tool", map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__read",
+		"tool_use_id": "read-1", "tool_input": map[string]any{"key": "record"},
+	})
+	if result {
+		l.invoke(t, "post-tool", map[string]any{
+			"hook_event_name": "PostToolUse", "tool_name": "mcp__fixture__read",
+			"tool_use_id": "read-1", "tool_input": map[string]any{"key": "record"},
+			"tool_response": map[string]any{"artifact": "a1", "classification": "restricted"},
+		})
+	}
+}
+
+func (l *decisionHookLab) upload(t *testing.T, extra ...string) string {
+	t.Helper()
+	return l.invoke(t, "pre-tool", map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__upload",
+		"tool_use_id": "upload-1", "tool_input": map[string]any{"artifact": "a1"},
+	}, extra...)
+}
+
+func TestNativeDecisionModesAndFailureBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		change    func(*decisionHookLab)
+		start     bool
+		result    bool
+		wantDeny  bool
+		wantCalls int32
+	}{
+		{"session_enforce", nil, true, true, true, 1},
+		{"action_without_start", func(l *decisionHookLab) { l.cfg.Bindings[0].View = decision.Action }, false, false, true, 1},
+		{"monitor", func(l *decisionHookLab) { l.cfg.Bindings[0].Mode = decision.Monitor }, true, true, false, 1},
+		{"disabled", func(l *decisionHookLab) { l.cfg.Enabled = false }, true, true, false, 0},
+		{"no_egress", func(l *decisionHookLab) { l.cfg.Bindings[0].SendContent = false }, true, true, false, 0},
+		{"unknown_finality", func(l *decisionHookLab) { l.cfg.NoArgumentRewriters = false }, true, true, false, 1},
+		{"missing_start", nil, false, false, false, 1},
+		{"pending_history", nil, true, false, false, 1},
+		{"truncated_history", func(l *decisionHookLab) { l.cfg.State.MaxCalls = 1 }, true, true, false, 1},
+		{"unavailable", func(l *decisionHookLab) { l.fault = "unavailable" }, true, true, false, 1},
+		{"malformed", func(l *decisionHookLab) { l.fault = "malformed" }, true, true, false, 1},
+		{"case_alias", func(l *decisionHookLab) { l.fault = "case_alias" }, true, true, false, 1},
+		{"provider_truncated", func(l *decisionHookLab) { l.fault = "truncated" }, true, true, false, 1},
+		{"timeout", func(l *decisionHookLab) { l.fault = "timeout"; l.cfg.Bindings[0].BudgetMS = 50 }, true, true, false, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			if tc.change != nil {
+				tc.change(lab)
+				lab.save(t)
+			}
+			if tc.start {
+				lab.prefix(t, tc.result)
+			}
+			control := lab.upload(t)
+			if deny := strings.Contains(control, `"permissionDecision":"deny"`); deny != tc.wantDeny {
+				raw, _ := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
+				t.Fatalf("deny=%t want=%t control=%s records=%s", deny, tc.wantDeny, control, raw)
+			}
+			if lab.hits.Load() != tc.wantCalls {
+				t.Fatalf("provider calls=%d want=%d", lab.hits.Load(), tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestNativeDecisionBindingOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		configure     func(*decisionHookLab)
+		globalMonitor bool
+		incomplete    bool
+		wantCalls     int32
+		wantDeny      bool
+	}{
+		{"enforce first", nil, false, false, 1, true},
+		{"monitor first", func(l *decisionHookLab) {
+			l.cfg.Bindings[0], l.cfg.Bindings[1] = l.cfg.Bindings[1], l.cfg.Bindings[0]
+		}, false, false, 2, true},
+		{"global monitor", nil, true, false, 2, false},
+		{"unconfirmed finality", func(l *decisionHookLab) {
+			l.cfg.NoArgumentRewriters = false
+		}, false, false, 2, false},
+		{"ineligible session before eligible action", func(l *decisionHookLab) {
+			l.cfg.Bindings[1].Mode = decision.Enforce
+		}, false, true, 2, true},
+		{"unavailable provider before eligible action", func(l *decisionHookLab) {
+			l.cfg.Bindings[1].Mode = decision.Enforce
+			l.check = func(*http.Request, []byte) {
+				l.fault = ""
+				if l.hits.Load() == 1 {
+					l.fault = "unavailable"
+				}
+			}
+		}, false, false, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			second := lab.cfg.Bindings[0]
+			second.View, second.Mode = decision.Action, decision.Monitor
+			lab.cfg.Bindings = append(lab.cfg.Bindings, second)
+			if tc.configure != nil {
+				tc.configure(lab)
+			}
+			lab.save(t)
+			lab.prefix(t, !tc.incomplete)
+			var flags []string
+			if tc.globalMonitor {
+				flags = append(flags, "--enforce=false")
+			}
+			control := lab.upload(t, flags...)
+			if denied := strings.Contains(control, `"permissionDecision":"deny"`); denied != tc.wantDeny || lab.hits.Load() != tc.wantCalls {
+				t.Fatalf("deny=%t calls=%d; want deny=%t calls=%d", denied, lab.hits.Load(), tc.wantDeny, tc.wantCalls)
+			}
+			raw, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var assessments []output.DecisionAssessment
+			for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+				var record struct {
+					RecordType string `json:"record_type"`
+					output.DecisionAssessment
+				}
+				if err := json.Unmarshal(line, &record); err != nil {
+					t.Fatal(err)
+				}
+				if record.RecordType == output.RecordAssessment && record.ToolCallID == "upload-1" {
+					assessments = append(assessments, record.DecisionAssessment)
+				}
+			}
+			if len(assessments) != 2 {
+				t.Fatalf("got %d assessments; expected both bindings to be accounted for", len(assessments))
+			}
+			last := assessments[1]
+			if tc.wantCalls == 1 {
+				if !assessments[0].DenyCandidate || last.Status != "skipped" || last.Reason != "prior_semantic_deny" ||
+					last.RequestID != "" || last.Matched || last.InputEligible || last.DenyCandidate || len(last.Probabilities) != 0 {
+					t.Fatalf("skipped binding was evaluated or lost its reason: %+v", assessments)
+				}
+			} else if last.Status != "completed" {
+				t.Fatalf("non-denying first binding suppressed later evaluation: %+v", assessments)
+			}
+		})
+	}
+}
+
+func TestNativeDecisionReleasesStateAndProjectsOnlyApprovedFields(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.check = func(r *http.Request, raw []byte) {
+		if r.Header.Get("Authorization") != "Bearer synthetic-token" ||
+			bytes.Contains(raw, []byte("private-workspace")) || bytes.Contains(raw, []byte("private-transcript")) {
+			t.Errorf("bad credential or evidence projection: %s", raw)
+		}
+		if !bytes.Contains(raw, []byte("restricted")) || !bytes.Contains(raw, []byte("current_pending_call")) {
+			t.Errorf("missing retained context: %s", raw)
+		}
+		db, err := state.Open(filepath.Join(lab.dir, "state", "state.db"), 25*time.Millisecond)
+		if err != nil {
+			t.Error("state lock held across inference:", err)
+		} else {
+			_ = db.Close()
+		}
+	}
+	lab.prefix(t, true)
+	if !strings.Contains(lab.upload(t), `"permissionDecision":"deny"`) {
+		t.Fatal("clean contextual decision did not deny")
+	}
+}
+
+func TestDeterministicDenySurvivesDecisionFailures(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.fault = "unavailable"
+	rules := filepath.Join(lab.dir, "rules")
+	if err := os.Mkdir(rules, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rule := "id: local.deterministic\nversion: '1'\ntitle: Synthetic deny\nseverity: high\nenforce: true\nexpr: event.tool_name == 'mcp__fixture__upload'\n"
+	if err := os.WriteFile(filepath.Join(rules, "deny.yaml"), []byte(rule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, badConfig := range []bool{false, true} {
+		if badConfig {
+			if err := os.WriteFile(lab.config, []byte("not: valid\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !strings.Contains(lab.upload(t, "--rules-dir", rules), `"permissionDecision":"deny"`) {
+			t.Fatal("optional evaluator failure erased deterministic deny")
+		}
+	}
+	if lab.hits.Load() != 0 {
+		t.Fatal("deterministic deny triggered inference")
+	}
+}
+
+func TestDeterministicMonitorMatchStillEvaluatesDecisions(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	rules := filepath.Join(lab.dir, "rules")
+	if err := os.Mkdir(rules, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rule := "id: local.monitor\nversion: '1'\ntitle: Synthetic monitor\nseverity: high\nenforce: false\nexpr: event.tool_name == 'mcp__fixture__upload'\n"
+	if err := os.WriteFile(filepath.Join(rules, "monitor.yaml"), []byte(rule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if control := lab.upload(t, "--rules-dir", rules); !strings.Contains(control, `"permissionDecision":"deny"`) || lab.hits.Load() != 1 {
+		t.Fatalf("monitor match suppressed the semantic deny: control=%s calls=%d", control, lab.hits.Load())
+	}
+	raw, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"rule_id":"local.monitor"`)) {
+		t.Fatal("test did not produce the deterministic monitor finding")
+	}
+}
+
+func TestNativeDecisionSinkFailurePreventsDeny(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	control := lab.upload(t, "--output-file", lab.dir)
+	if strings.Contains(control, `"permissionDecision":"deny"`) || lab.hits.Load() != 0 {
+		t.Fatalf("sink failure produced inference/deny: %s", control)
+	}
+}
+
+func TestDecisionInstallCarriesExplicitConfiguration(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	settings := filepath.Join(lab.dir, "settings.json")
+	var out, stderr bytes.Buffer
+	exit := runHookAdmin("install", []string{
+		"--agent", "claude", "--settings", settings, "--decision-config", lab.config,
+		"--decision-user-config", "--state-db", filepath.Join(lab.dir, "state", "state.db"), "--enforce",
+	}, &out, &stderr)
+	if exit != 0 {
+		t.Fatalf("install exit=%d: %s", exit, stderr.String())
+	}
+	raw, err := os.ReadFile(settings)
+	if err != nil || !bytes.Contains(raw, []byte("--decision-config")) || !bytes.Contains(raw, []byte("--state-db")) {
+		t.Fatalf("missing installed arguments: %s %v", raw, err)
+	}
+	if lab.hits.Load() != 0 {
+		t.Fatal("installer contacted model")
+	}
+	if !strings.Contains(out.String(), "configured decision policies") {
+		t.Fatalf("installer misrepresented enforce source: %s", out.String())
+	}
+}
+
+func TestDecisionInstallRequiresAnEffectiveEnforceSource(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		ruleEnforce     bool
+		addSecondPolicy bool
+		wantExit        int
+	}{
+		{"only binding collides", false, false, 2},
+		{"later binding is usable", false, true, 0},
+		{"deterministic enforcement remains usable", true, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			rules := filepath.Join(lab.dir, "rules")
+			if err := os.Mkdir(rules, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rule := fmt.Sprintf("id: local.transfer\nversion: '1'\ntitle: Synthetic rule\nseverity: high\nenforce: %t\nexpr: event.tool_name == 'mcp__fixture__upload'\n", tc.ruleEnforce)
+			if err := os.WriteFile(filepath.Join(rules, "rule.yaml"), []byte(rule), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.addSecondPolicy {
+				raw, err := os.ReadFile(lab.cfg.Bindings[0].PolicyFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var policy decision.Policy
+				if err := json.Unmarshal(raw, &policy); err != nil {
+					t.Fatal(err)
+				}
+				policy.ID = "local.second"
+				raw, err = json.Marshal(policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				second := lab.cfg.Bindings[0]
+				second.PolicyFile, second.PolicySHA256 = filepath.Join(lab.dir, "second.yaml"), ""
+				if err := os.WriteFile(second.PolicyFile, raw, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				lab.cfg.Bindings = append(lab.cfg.Bindings, second)
+				lab.save(t)
+			}
+			settings := filepath.Join(lab.dir, "settings.json")
+			var out, stderr bytes.Buffer
+			exit := runHookAdmin("install", []string{
+				"--agent", "claude", "--settings", settings,
+				"--rules-dir", rules, "--no-builtin-rules",
+				"--decision-config", lab.config, "--decision-user-config", "--enforce",
+			}, &out, &stderr)
+			if exit != tc.wantExit || lab.hits.Load() != 0 {
+				t.Fatalf("exit=%d calls=%d stderr=%s", exit, lab.hits.Load(), stderr.String())
+			}
+			_, err := os.Stat(settings)
+			if tc.wantExit != 0 {
+				if !os.IsNotExist(err) || !strings.Contains(stderr.String(), "bindings[0]") ||
+					!strings.Contains(stderr.String(), "local.transfer") || !strings.Contains(stderr.String(), "collision") {
+					t.Fatalf("invalid install changed settings or omitted collision details: err=%v stderr=%s", err, stderr.String())
+				}
+			} else if err != nil {
+				t.Fatal("valid install did not create settings:", err)
+			}
+		})
+	}
+}
+
+func TestDecisionCheckExplainsConfigurationOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*evaluator.Config)
+		want string
+	}{
+		{"configured", func(*evaluator.Config) {}, "runtime eligibility not checked"},
+		{"disabled", func(c *evaluator.Config) { c.Enabled = false }, "configuration disabled"},
+		{"binding disabled", func(c *evaluator.Config) { c.Bindings[0].Enabled = false }, "binding disabled"},
+		{"egress disabled", func(c *evaluator.Config) { c.Bindings[0].SendContent = false }, "send_content not authorized"},
+		{"argument finality", func(c *evaluator.Config) { c.NoArgumentRewriters = false }, "no_argument_rewriters not asserted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			c, err := evaluator.LoadConfig(lab.config, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.edit(c)
+			raw, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(lab.config, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, stderr, code := runCLI("decisions", "check", "--config", lab.config, "--decision-user-config")
+			if code != 0 || stderr != "" || !strings.Contains(out, tc.want) ||
+				!strings.Contains(out, "not checked:") || !strings.Contains(out, "runtime enforcement also requires") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, stderr)
+			}
+			if lab.hits.Load() != 0 {
+				t.Fatal("offline check contacted provider")
+			}
+			if tc.name == "configured" && (!strings.Contains(out, "request cap: 32768 bytes") ||
+				!strings.Contains(out, "retained session cap: 32768 encoded bytes")) {
+				t.Fatalf("checker omitted independent byte limits: %s", out)
+			}
+		})
+	}
+}
+
+func TestDecisionPayloadRequiresUniqueJSON(t *testing.T) {
+	for _, raw := range []string{
+		`{"tool_input":{"command":"first","command":"second"}}`,
+		`{"tool_input":{"command":"first","\u0063ommand":"second"}}`,
+		`{"tool_input":{},"tool_input":null}`,
+	} {
+		_, clean, err := decodeDecisionPayload(strings.NewReader(raw), true)
+		if err != nil || clean {
+			t.Fatalf("semantic duplicate accepted or ordinary decoder changed: clean=%t err=%v", clean, err)
+		}
+	}
+}
+
+func TestNativeDecisionConcurrentMutationCannotDeny(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	lab.check = func(_ *http.Request, _ []byte) {
+		// A different callback arrives while the provider is answering. It is
+		// captured without selecting the upload policy, so no recursive I/O.
+		lab.invoke(t, "pre-tool", map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__read",
+			"tool_use_id": "concurrent", "tool_input": map[string]any{"key": "other"},
+		})
+	}
+	if control := lab.upload(t); strings.Contains(control, `"permissionDecision":"deny"`) {
+		t.Fatalf("stale contextual decision denied: %s", control)
+	}
+}
+
+func TestDecisionCheckHelp(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if exit := runDecisionCheck([]string{"--help"}, &out, &stderr); exit != 0 {
+		t.Fatalf("help exit=%d: %s", exit, stderr.String())
+	}
+}
+
+func TestDecisionUserConfigRequiresConfigPath(t *testing.T) {
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	args := []string{"hook", "install", "--agent", "claude", "--settings", settings, "--decision-user-config"}
+	_, stderr, code := runCLI(args...)
+	if code != 2 || !strings.Contains(stderr, "--decision-user-config requires --decision-config") {
+		t.Fatalf("%v: exit=%d stderr=%q", args, code, stderr)
+	}
+	if _, err := os.Stat(settings); !os.IsNotExist(err) {
+		t.Fatalf("invalid install changed the target: %v", err)
+	}
+}
+
+func TestNativeSemanticDenyHasLinkedAuditRecords(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	if !strings.Contains(lab.upload(t), `"permissionDecision":"deny"`) {
+		t.Fatal("semantic decision did not deny")
+	}
+	raw, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assessment output.DecisionAssessment
+	var enforcement model.EnforcementDecision
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		var envelope struct {
+			RecordType string `json:"record_type"`
+		}
+		if json.Unmarshal(line, &envelope) != nil {
+			continue
+		}
+		switch envelope.RecordType {
+		case output.RecordAssessment:
+			if err := json.Unmarshal(line, &assessment); err != nil {
+				t.Fatal(err)
+			}
+		case output.RecordEnforcement:
+			if err := json.Unmarshal(line, &enforcement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := enforcement.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if enforcement.Reason != model.EnforcementReasonSemanticPolicyMatch ||
+		enforcement.DenyAssessmentID == "" || enforcement.DenyAssessmentID != assessment.AssessmentID ||
+		enforcement.DenyPolicyID != assessment.PolicyID || len(enforcement.RuleIDs) != 0 || enforcement.DenyRuleID != "" {
+		t.Fatalf("semantic decision misrepresented: enforcement=%+v assessment=%+v", enforcement, assessment)
+	}
+}
+
+func TestNativeGlobalMonitorCannotDeny(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	if strings.Contains(lab.upload(t, "--enforce=false"), `"permissionDecision":"deny"`) {
+		t.Fatal("binding overrode global monitor mode")
+	}
+}
+
+func TestNativeDenyReceiptRequiresCompleteControlWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+	}{
+		{"complete", &bytes.Buffer{}},
+		{"short", &shortDenyWriter{}},
+		{"failed", &byteZeroFailWriter{}},
+		{"panic", &partialDenyPanicWriter{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			lab.prefix(t, true)
+			lab.invokeTo(t, "pre-tool", map[string]any{
+				"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__upload",
+				"tool_use_id": "upload-1", "tool_input": map[string]any{"artifact": "a1"},
+			}, tc.out)
+			var sawReceipt atomic.Bool
+			lab.check = func(_ *http.Request, raw []byte) {
+				sawReceipt.Store(bytes.Contains(raw, []byte(`\"outcome\":\"deny_requested\"`)) ||
+					bytes.Contains(raw, []byte(`"outcome":"deny_requested"`)))
+			}
+			control := lab.invoke(t, "pre-tool", map[string]any{
+				"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__upload",
+				"tool_use_id": "upload-2", "tool_input": map[string]any{"artifact": "a1"},
+			})
+			denied := strings.Contains(control, `"permissionDecision":"deny"`)
+			if want := tc.name == "complete"; denied != want || sawReceipt.Load() != want {
+				t.Fatalf("next deny=%t receipt=%t want=%t", denied, sawReceipt.Load(), want)
+			}
+		})
+	}
+}
+
+func TestNativeDeterministicDenyRetainsDecisionPrefix(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	rules := filepath.Join(lab.dir, "rules")
+	if err := os.Mkdir(rules, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rule := "id: local.deterministic\nversion: '1'\ntitle: Synthetic deny\nseverity: high\nenforce: true\nexpr: event.tool_name == 'mcp__fixture__upload'\n"
+	if err := os.WriteFile(filepath.Join(rules, "deny.yaml"), []byte(rule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lab.upload(t, "--rules-dir", rules), `"permissionDecision":"deny"`) || lab.hits.Load() != 0 {
+		t.Fatal("deterministic deny triggered inference or did not deny")
+	}
+	control := lab.invoke(t, "pre-tool", map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__upload",
+		"tool_use_id": "upload-2", "tool_input": map[string]any{"artifact": "a1"},
+	})
+	if !strings.Contains(control, `"permissionDecision":"deny"`) || lab.hits.Load() != 1 {
+		t.Fatal("deterministic deny left the following contextual admission unresolved")
+	}
+}
+
+func TestNativeRedactedJSONFormattingDoesNotLosePrefix(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.cfg.Content = "redacted"
+	lab.save(t)
+	lab.prefix(t, true)
+	for _, phase := range []string{"pre-tool", "post-tool"} {
+		name := "PreToolUse"
+		if phase == "post-tool" {
+			name = "PostToolUse"
+		}
+		lab.invoke(t, phase, map[string]any{
+			"hook_event_name": name, "tool_name": "mcp__fixture__write",
+			"tool_use_id": "write-1", "tool_input": map[string]any{"body": " { \"count\": 7 } "},
+			"tool_response": map[string]any{"text": " [ 1, 2 ] "},
+		})
+	}
+	if !strings.Contains(lab.upload(t), `"permissionDecision":"deny"`) {
+		t.Fatal("JSON formatting incorrectly disabled contextual enforcement")
+	}
+}
+
+func (l *decisionHookLab) assessments(t *testing.T) []output.DecisionAssessment {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(l.dir, "records.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assessments []output.DecisionAssessment
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		var record struct {
+			RecordType string `json:"record_type"`
+			output.DecisionAssessment
+		}
+		if json.Unmarshal(line, &record) == nil && record.RecordType == output.RecordAssessment {
+			assessments = append(assessments, record.DecisionAssessment)
+		}
+	}
+	return assessments
+}
+
+func TestNativeChildActivityLeavesParentIncomplete(t *testing.T) {
+	for _, tc := range []struct {
+		event, lifecycle string
+		id               any
+	}{
+		{"SubagentStart", "session-start", "child-1"},
+		{"PreToolUse", "pre-tool", "child-1"},
+		{"PostToolUse", "post-tool", "child-1"},
+		{"PostToolUseFailure", "post-tool", "child-1"},
+		{"PermissionDenied", "permission-denied", "child-1"},
+		{"SubagentStop", "session-end", "child-1"},
+		{"SubagentStart", "session-start", nil},
+		{"SubagentStop", "session-end", nil},
+		{"PreToolUse", "pre-tool", ""},
+		{"PreToolUse", "pre-tool", json.Number("7")},
+		{"SessionEnd", "session-end", nil},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			lab := newDecisionHookLab(t)
+			lab.prefix(t, true)
+			payload := map[string]any{
+				"hook_event_name": tc.event, "tool_use_id": "read-1",
+				"tool_name": "mcp__fixture__read", "tool_input": map[string]any{"key": "child-record"},
+				"tool_response": "child-result",
+			}
+			if tc.event == "PostToolUseFailure" {
+				payload["error"] = "child-failure"
+			}
+			if tc.id != nil {
+				payload["agent_id"] = tc.id
+			}
+			lab.invoke(t, tc.lifecycle, payload)
+			if strings.Contains(lab.upload(t), `"permissionDecision":"deny"`) {
+				t.Fatal("incomplete parent prefix denied")
+			}
+			records := lab.assessments(t)
+			a := records[len(records)-1]
+			wantGap := "capture_gap"
+			if tc.event == "SessionEnd" {
+				wantGap = "session_ended"
+			}
+			if a.InputEligible || a.DenyCandidate || !slices.Contains(a.Gaps, wantGap) ||
+				(tc.event != "SessionEnd" && slices.Contains(a.Gaps, "session_ended")) {
+				t.Fatalf("parent assessment: %+v", a)
+			}
+		})
+	}
+}
+
+func TestNativeChildActionCannotDeny(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.cfg.Bindings[0].View = decision.Action
+	lab.save(t)
+	control := lab.invoke(t, "pre-tool", map[string]any{
+		"hook_event_name": "PreToolUse", "agent_id": "child-1",
+		"tool_name": "mcp__fixture__upload", "tool_use_id": "upload-1",
+		"tool_input": map[string]any{"artifact": "a1"},
+	})
+	records := lab.assessments(t)
+	if len(records) != 1 || !records[0].Matched || records[0].DenyCandidate ||
+		records[0].Reason != "host_argument_finality_unconfirmed" ||
+		records[0].SubAgentID != "child-1" || strings.Contains(control, `"permissionDecision":"deny"`) {
+		t.Fatalf("child control=%s assessments=%+v", control, records)
+	}
+}
+
+func TestNativeChildHistoryIsolation(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	lab.invoke(t, "pre-tool", map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_use_id": "delegate-1",
+		"tool_input": map[string]any{"prompt": "synthetic task"},
+	})
+	for _, child := range []string{"child-1", "child-2"} {
+		for _, phase := range []string{"pre-tool", "post-tool", "session-end"} {
+			name := map[string]string{"pre-tool": "PreToolUse", "post-tool": "PostToolUse", "session-end": "SubagentStop"}[phase]
+			lab.invoke(t, phase, map[string]any{
+				"hook_event_name": name, "agent_id": child, "tool_use_id": "read-1",
+				"tool_name": "mcp__fixture__read", "tool_input": map[string]any{"key": child},
+				"tool_response": child,
+			})
+		}
+	}
+	lab.invoke(t, "post-tool", map[string]any{
+		"hook_event_name": "PostToolUse", "tool_name": "Agent", "tool_use_id": "delegate-1",
+		"tool_input": map[string]any{"prompt": "synthetic task"}, "tool_response": "done",
+	})
+	c, err := evaluator.LoadConfig(lab.config, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := state.OpenEvidence(filepath.Join(lab.dir, "state", "state.db"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, child := range []string{"", "child-1", "child-2"} {
+		e, err := db.ObserveDecision(c.Digest(), decision.Observation{
+			Subject: decision.Subject{Installation: c.InstallationID, Agent: model.AgentClaudeCode, Session: "session", SubAgentID: child},
+			Phase:   "start",
+		}, c.State, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.PrefixComplete || slices.Contains(e.Gaps, "session_ended") || slices.Contains(e.Gaps, "overlapping_or_unresolved_calls") {
+			t.Fatalf("scope %q: %+v", child, e)
+		}
+		if child == "" {
+			if len(e.History) != 2 || !slices.Contains(e.Gaps, "capture_gap") {
+				t.Fatalf("parent scope: %+v", e)
+			}
+		} else {
+			if len(e.History) != 1 || !bytes.Contains(e.History[0], []byte(child)) ||
+				!slices.Contains(e.Gaps, "session_start_unobserved") {
+				t.Fatalf("child scope %q: %+v", child, e)
+			}
+		}
+	}
+}
+
+func TestNativeChildActivityInvalidatesInflightParent(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	lab.check = func(_ *http.Request, _ []byte) {
+		lab.invoke(t, "session-start", map[string]any{"hook_event_name": "SubagentStart", "agent_id": "child-1"})
+	}
+	if strings.Contains(lab.upload(t), `"permissionDecision":"deny"`) {
+		t.Fatal("parent denied using a revision predating child activity")
+	}
+}
