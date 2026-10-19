@@ -90,19 +90,19 @@ func TestEnforcementDecisionRejectsContradictions(t *testing.T) {
 
 func TestSemanticEnforcementUsesDistinctEvidence(t *testing.T) {
 	d := validEnforcementDecision()
-	d.RuleIDs = nil
+	d.RuleIDs = []string{"local.policy"}
 	d.AssessmentIDs = []string{"asm-0123456789abcdef01234567"}
 	if err := d.Validate(); err != nil {
 		t.Fatalf("semantic monitor record invalid: %v", err)
 	}
 	d.Mode, d.Decision, d.Reason = EnforcementModeEnforce, EnforcementDecisionDeny, EnforcementReasonSemanticPolicyMatch
-	d.DenyPolicyID, d.DenyPolicyVersion, d.DenyAssessmentID = "local.policy", "1", d.AssessmentIDs[0]
+	d.DenyRuleID, d.DenyRuleVersion, d.DenyAssessmentID = "local.policy", "1", d.AssessmentIDs[0]
 	if err := d.Validate(); err != nil {
 		t.Fatalf("semantic deny record invalid: %v", err)
 	}
 	for _, change := range []func(*EnforcementDecision){
 		func(d *EnforcementDecision) { d.DenyRuleID = "test.rule" },
-		func(d *EnforcementDecision) { d.DenyPolicyVersion = "" },
+		func(d *EnforcementDecision) { d.DenyRuleVersion = "" },
 		func(d *EnforcementDecision) { d.DenyAssessmentID = "foreign" },
 		func(d *EnforcementDecision) { d.AssessmentIDs = nil },
 		func(d *EnforcementDecision) { d.Reason = EnforcementReasonEnforceRuleMatch },

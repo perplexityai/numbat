@@ -102,8 +102,6 @@
       "type": "array", "minItems": 1, "uniqueItems": true,
       "items": { "type": "string", "pattern": "^asm-[a-f0-9]{24}$" }
     },
-    "deny_policy_id": { "type": "string", "minLength": 1 },
-    "deny_policy_version": { "type": "string", "minLength": 1 },
     "deny_assessment_id": { "type": "string", "pattern": "^asm-[a-f0-9]{24}$" }
   },
   "allOf": [
@@ -119,14 +117,12 @@
             "properties": { "reason": { "const": "enforce_rule_match" } },
             "required": ["rule_ids", "deny_rule_id", "deny_rule_version"],
             "not": { "anyOf": [
-              { "required": ["deny_policy_id"] }, { "required": ["deny_policy_version"] },
               { "required": ["deny_assessment_id"] }
             ] }
           },
           {
             "properties": { "reason": { "const": "semantic_policy_match" } },
-            "required": ["assessment_ids", "deny_policy_id", "deny_policy_version", "deny_assessment_id"],
-            "not": { "anyOf": [{ "required": ["deny_rule_id"] }, { "required": ["deny_rule_version"] }] }
+            "required": ["rule_ids", "assessment_ids", "deny_rule_id", "deny_rule_version", "deny_assessment_id"]
           }
         ]
       }
@@ -164,8 +160,6 @@
           "anyOf": [
             { "required": ["deny_rule_id"] },
             { "required": ["deny_rule_version"] },
-            { "required": ["deny_policy_id"] },
-            { "required": ["deny_policy_version"] },
             { "required": ["deny_assessment_id"] }
           ]
         }

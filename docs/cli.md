@@ -20,7 +20,6 @@ numbat hook install --agent NAME|all     install numbat's live integrations
 numbat hook uninstall --agent NAME|all   remove numbat-owned live integrations
 numbat hook status [--agent NAME|all]    inspect numbat-owned integration configuration
 numbat decisions check --config FILE    validate decision configuration and explain activation
-numbat decisions digest --policy FILE   validate and print a canonical policy SHA-256
 numbat rules check                       validate and compile rules; run companion tests
 numbat rules list                        list effective compiled rule ids
 numbat rules test --fixture FILE         evaluate rules against NDJSON events
@@ -68,6 +67,12 @@ numbat agents --format json
 ```
 
 ## scan
+
+`--decision-config FILE` optionally enables advisory model classification with
+decision rules from the ordinary catalog. It sends projected evidence to the
+configured endpoint; without the flag, scanning remains local. See
+[decision rules](design/decision-evaluators.md) for the separate inference
+content policy and history limits.
 
 `scan` parses agent artifacts at rest, runs the rules over the reconstructed
 event stream, and writes one NDJSON record stream.
@@ -378,6 +383,11 @@ compact preview.
 
 ## collect
 
+`--decision-config FILE` enables advisory decision rules using the same provider
+configuration as hooks and scans. Collection never sends native deny responses.
+Events without a captured exporter origin are classified independently rather
+than merged into a potentially cross-exporter history.
+
 `collect` runs an in-process OTLP/HTTP logs receiver and maps live agent
 telemetry through the same pipeline `scan` uses. It listens on
 `127.0.0.1:4318` by default and accepts protobuf-encoded OTLP logs at `/v1/logs`
@@ -580,8 +590,8 @@ runs it through the same detection pipeline as `scan`. In monitor mode
 Kiro's successful response is zero bytes because Kiro adds stdout to agent context.
 With `--enforce`, an enforce-capable pre-action callback may block after a clean
 match of a rule marked `enforce: true`; a sequence match can block
-only its final action. An explicitly configured decision policy can also
-contribute a semantic deny on supported Claude hooks, subject to its separate
+only its final action. An explicitly configured decision rule can also
+contribute a semantic deny on supported pre-action hooks, subject to its additional
 gates described below. Rules that use `shell_commands` can deny only from the
 [static enforcement subset](enforcement.md#rule-effect). Structured-response
 agents return native deny JSON and
@@ -602,8 +612,7 @@ For a matched, enforce-capable pre-action callback, `--emit findings` also emits
 one action-level `record_type:"enforcement"` record. It carries numbat's
 computed `decision:"deny"` or `decision:"no_override"` and joins to the
 triggering records through `finding_ids` and `action_event_ids`. Semantic
-denies additionally name the policy and supporting `assessment_ids`, rather
-than attributing the deny to a deterministic rule. A finding by itself never
+denies name the decision rule and supporting `assessment_ids`. A finding by itself never
 implies a deny. The decision shares the existing operator batch,
 before the host control response; it does not prove response delivery or that
 the host honored it.
@@ -633,7 +642,7 @@ below.
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
 --enforce                    opt-in enforce mode: block an action when an
-                             enforcement-enabled rule or decision policy
+                             enforcement-enabled rule
                              matches, including the final action of a sequence.
                              Off by default: monitor mode
                              detects but never blocks.
@@ -642,11 +651,8 @@ below.
 --state-db PATH              bbolt file holding live sequence-window state
                              and opt-in decision evidence
                              (default $HOME/.numbat/state.db)
---decision-config PATH       explicit protected decision-evaluator configuration
-                             (experimental, Claude on Unix only; disabled by default)
---decision-user-config       allow current-user-owned decision configuration;
-                             no same-user security boundary; requires config
-                             for install and is inert without config at runtime
+--decision-config PATH       explicit provider configuration for decision rules;
+                             sends projected evidence to its HTTPS endpoint
 --installed-by NAME          provenance marker written by `hook install`;
                              accepted but inert (ignored at runtime)
 --output SINK                record sink: stdout, file, or http
@@ -679,16 +685,16 @@ including the env-only auth secrets.
 ### Optional decision evaluation
 
 `--decision-config /etc/numbat/decisions.yaml` explicitly enables configured
-choice-model policies alongside deterministic rules. The config owns providers,
-credential-file paths, optional policy pins, action/session views, monitor/enforce
-modes, thresholds, deadlines, content consent, and state retention. Policies
-define classification criteria; ordinary `--rules-dir` files cannot enable
-inference or select a destination. See the
+decision rules in the ordinary `--rules-dir` catalog. The config owns one provider,
+credential-file paths, deadlines, inference content mode and state retention.
+Rules own their selectors, criteria, action/session views and thresholds, with
+ordinary `enabled` and `enforce` fields. Rules cannot enable network access or
+select a destination on their own. See the
 [decision evaluator design](design/decision-evaluators.md) for the complete
 format, trust boundary and evidence requirements.
 
 Both modes require findings and an out-of-band file or HTTP sink. Every
-considered enabled binding produces an `assessment` with its own `assessment_id`,
+considered enabled decision rule produces an `assessment` with its own `assessment_id`,
 separate from findings and the action-level enforcement record. A matching probability is not proof of a
 violation, and a computed deny does not prove host blocking. Model failures,
 timeouts and abstentions never override deterministic denies or authorize an
@@ -696,13 +702,13 @@ action. Raw inference egress is a separate explicit choice from event-output
 `--content`.
 
 Deterministic rules run first, including sequences. A monitor-only match does
-not skip decision policies; an eligible deny does. Decision bindings run in
-config order under a shared deadline and stop making model calls once a deny
-is established. Remaining enabled bindings receive skipped assessments.
+not skip decision rules; an eligible deny does. Decision rules run in
+effective catalog order under a shared deadline and stop making model calls once
+a deny is established. Remaining enabled rules receive skipped assessments.
 
 Use [`numbat decisions check`](#decisions) to inspect this configuration offline.
-`decisions digest` is only needed to create an optional policy pin.
-`hook status` still checks installed hook definitions, not decision-policy
+Digests are computed automatically; there is no manual pin catalog.
+`hook status` still checks installed hook definitions, not decision-rule
 activation or provider health.
 
 ### hook install / status / uninstall
@@ -755,12 +761,11 @@ default. This agent process deadline is separate from the hook handler's
                              (repeatable)
 --no-builtin-rules           install hook commands that load only --rules-dir
                              rules
---decision-config PATH       protected evaluator config to pass to Claude hooks
---decision-user-config       permit user-owned evaluator config (explicitly weaker)
+--decision-config PATH       protected provider config to pass to installed hooks
 --state-db PATH              absolute concrete path for sequence/decision state
 --enforce                    install in enforce mode: block pre-tool matches
                              from rules marked enforce: true, or explicitly
-                             configured decision policies on Claude.
+                             configured decision rules.
                              Rule enforcement supports claude, codex,
                              cursor, copilot/vscode, gemini, windsurf,
                              antigravity, factory, grok, devin, hermes,
@@ -772,11 +777,8 @@ default. This agent process deadline is separate from the hook handler's
 
 With `--enforce`, install first compiles the effective catalog and refuses to
 change agent configuration unless it contains an enabled `enforce: true` rule
-or a configured enforce-capable decision policy. The latter also requires
-`no_argument_rewriters: true`, an operator-verified deployment assertion, plus
-binding-level enforcement and content consent.
-Decision policies whose IDs collide with the effective deterministic catalog
-are skipped at runtime and cannot satisfy this installation check.
+with `--decision-config` when relying on a decision rule. All three rule types
+use the same catalog identity and override rules.
 Each `--rules-dir` must be a concrete, readable install-time path; deferred
 paths such as `$HOME/rules` are rejected in this mode.
 
@@ -920,38 +922,27 @@ result (see [`docs/schema/rules-test-result.v1.md`](schema/rules-test-result.v1.
 
 ## decisions
 
-These offline preparation commands do not initialize a provider, read
+This offline preparation command does not initialize a provider, read
 credentials, access the state DB or send inference requests. They do not
 install hooks or establish live host enforcement.
 
 ```sh
-numbat decisions check --config /etc/numbat/decisions.yaml
-numbat decisions digest --policy /path/to/policy.yaml
+numbat decisions check --config /etc/numbat/decisions.yaml --rules-dir ./rules
 ```
 
-`digest` accepts one policy and prints only its canonical SHA-256 plus a newline.
-This is the validated, parsed policy's digest, not a hash of its file bytes.
-It is an optional change-control aid: put the value in a binding's
-`policy_sha256` to reject unexpected policy changes. Without a supplied pin,
-the protected policy file is authoritative and its digest is computed automatically.
-`check` validates enabled bindings, policies and any supplied pins, then explains inference
-activation, enforcement configuration blockers, and the count-based
-complete-prefix ceiling and independent byte caps for each session binding.
-Successful validation does
-not mean enforcement is enabled; the output lists checks still needed at
-runtime and disabled/unreferenced configuration it did not verify.
+`check` validates the provider configuration and effective rule catalog, then
+prints the model, content mode, budget, rule modes/thresholds and independent
+history/request caps. Successful validation does not establish provider health,
+host delivery or enforcement. Runtime prerequisites remain explicitly unchecked.
 
 ```
-decisions digest:
-  --policy FILE              policy to validate and hash (required)
-
 decisions check:
   --config FILE              absolute protected configuration path (required)
-  --decision-user-config     allow current-user-owned config and policies;
-                              explicitly weaker, no same-user security boundary
+  --rules-dir DIR            ordinary rule directory (repeatable)
+  --no-builtin-rules         load only the supplied rule directories
 ```
 
-Both commands return `0` on success or help, `1` for validation/read errors,
+The command returns `0` on success or help, `1` for validation/read errors,
 and `2` for invalid command arguments. The [field reference](design/decision-evaluators.md#fields-defaults-and-validation)
 defines required fields, actual defaults, units and bounds; example thresholds
 are not calibrated recommendations.

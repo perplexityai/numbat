@@ -73,6 +73,7 @@
         "amp",
         "auggie",
         "kiro",
+        "muse-code",
         "goose",
         "kilo",
         "openhands",
@@ -142,6 +143,8 @@
       "type": "boolean",
       "description": "true only when at least one emitted finding field was masked; false means the redactor made no changes"
     },
+    "assessment_id": { "type": "string", "pattern": "^asm-[a-f0-9]{24}$" },
+    "decision_gaps": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
   },
   "$defs": {

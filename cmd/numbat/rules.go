@@ -361,6 +361,21 @@ func runRulesTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err.Error())
 		return 1
 	}
+	if decisions := eng.DecisionRules(); len(decisions) > 0 {
+		for _, r := range decisions {
+			for _, id := range expect {
+				if id == r.ID {
+					fmt.Fprintln(stderr, "rules test is offline and cannot assert a decision-model match")
+					return 2
+				}
+			}
+		}
+		if *expectNone {
+			fmt.Fprintln(stderr, "rules test cannot assert --expect-none for unevaluated decision rules")
+			return 2
+		}
+		fmt.Fprintf(stderr, "rules test: skipping %d decision rule(s); results cover deterministic rules only\n", len(decisions))
+	}
 
 	if *jsonOut {
 		return runRulesTestJSON(eng, f, stdout, stderr, *requireMatch, *expectNone, expect)

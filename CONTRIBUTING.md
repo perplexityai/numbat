@@ -2,8 +2,8 @@
 
 numbat is a single Go module and binary. Contributions should preserve its
 deterministic, endpoint-local defaults and the architecture boundaries below.
-Optional decision evaluation is an explicit monitoring-side exception, not
-network access from ordinary rules or offline commands.
+Optional decision evaluation is explicitly wired by `--decision-config`, not
+implicit network access from loading a rule or running validation commands.
 
 ## Before you start
 
@@ -88,14 +88,14 @@ Every change must preserve these project contracts:
 The `internal/archguard` tests enforce the package and dependency boundaries:
 
 - **Core** (`applypatch`, `model`, `redact`, `rule`, `sequence`, `finding`,
-  `pipeline`, `output`, `winfile`, `decision`) must not import a plane package.
+  `pipeline`, `output`, `winfile`, `decision`, `evaluator`) must not import a plane package.
 - **Forensics** (`extract`, `discover`, `casebundle`) and **monitoring** (`hook`,
-  `otel`, `state`, `evaluator`) remain independent; neither imports the other.
+  `otel`, `state`) remain independent; neither imports the other.
 - Only `state` and `sequence` may import `bbolt`.
 - In `cmd/numbat`, scan, timeline, and case files must not import the monitoring
   plane or bbolt. Hook, collect, and ship files must not import the forensics
-  plane. Offline `decisions.go` preparation belongs to the monitoring side,
-  without performing provider I/O. `agents.go` is the sole cross-plane
+  plane. `decisions.go` performs offline configuration validation without
+  provider I/O. `agents.go` is the sole cross-plane
   reporting bridge.
 
 The same tests reject cgo, unexpected direct dependencies, `replace` directives,

@@ -55,7 +55,7 @@ func readProtected(path string, maxBytes int, allowUser, secret bool) ([]byte, e
 	if info.Mode().Perm()&0o022 != 0 {
 		return nil, fmt.Errorf("protected file %q must not be group/other writable", path)
 	}
-	if secret && info.Mode().Perm()&0o007 != 0 {
+	if secret && info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("protected credential %q must not be accessible to other users", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)+1))

@@ -109,8 +109,7 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 	// Stable installer provenance; accepted but inert at runtime.
 	_ = fs.String("installed-by", "", "provenance marker set by hook install (ignored at runtime)")
 	stateDB := fs.String("state-db", "", "bbolt file holding sequence and opt-in decision state (default $HOME/.numbat/state.db)")
-	decisionConfig := fs.String("decision-config", "", "explicit protected decision-evaluator configuration (Claude only; default disabled)")
-	decisionUserConfig := fs.Bool("decision-user-config", false, "allow current-user-owned decision configuration; not an agent security boundary")
+	decisionConfig := fs.String("decision-config", "", "explicit protected decision-evaluator configuration (default disabled)")
 	// Each participant contributes a deny only after its own clean decision path.
 	enforceFlag := fs.Bool("enforce", false, "enforce mode: deny supported pre-action requests for enforcement-enabled rules or configured decision policies (opt-in; default is monitor: detection-only, never blocks)")
 	var rf ruleFlags
@@ -209,30 +208,29 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 
 	var decisionReceipt decisionDenyReceipt
 	deny, reason, denyAgent, err := handleHook(event, lc, *agentFlag, sourceAgent, stdin, stderr, hookOptions{
-		caseID:             *caseID,
-		sel:                sel,
-		content:            content,
-		contentScope:       scope,
-		maxRecordBytes:     *maxRecordBytes,
-		includeReasoning:   *includeReasoning,
-		stateDB:            *stateDB,
-		decisionConfig:     *decisionConfig,
-		decisionUserConfig: *decisionUserConfig,
-		decisionReceipt:    &decisionReceipt,
-		modes:              outputValues,
-		file:               *outputFile,
-		httpURL:            *httpURL,
-		httpBatch:          *httpBatch,
-		httpTO:             *httpTimeout,
-		httpAuth:           *httpAuth,
-		httpSig:            *httpSigHeader,
-		httpTS:             *httpTSHeader,
-		insecure:           *httpAllowInsecure,
-		gzip:               *httpGzip,
-		ruleDirs:           rf.dirs,
-		noBuiltin:          rf.noBuiltin,
-		enforce:            *enforceFlag,
-		visitFlags:         fs,
+		caseID:           *caseID,
+		sel:              sel,
+		content:          content,
+		contentScope:     scope,
+		maxRecordBytes:   *maxRecordBytes,
+		includeReasoning: *includeReasoning,
+		stateDB:          *stateDB,
+		decisionConfig:   *decisionConfig,
+		decisionReceipt:  &decisionReceipt,
+		modes:            outputValues,
+		file:             *outputFile,
+		httpURL:          *httpURL,
+		httpBatch:        *httpBatch,
+		httpTO:           *httpTimeout,
+		httpAuth:         *httpAuth,
+		httpSig:          *httpSigHeader,
+		httpTS:           *httpTSHeader,
+		insecure:         *httpAllowInsecure,
+		gzip:             *httpGzip,
+		ruleDirs:         rf.dirs,
+		noBuiltin:        rf.noBuiltin,
+		enforce:          *enforceFlag,
+		visitFlags:       fs,
 	})
 	if err != nil {
 		if *enforceFlag {
@@ -270,30 +268,29 @@ func runHookEvent(event string, args []string, stdin io.Reader, stdout, stderr i
 
 // hookOptions carries the parsed live-handler settings.
 type hookOptions struct {
-	caseID             string
-	sel                emitSelection
-	content            contentMode
-	contentScope       contentScope
-	maxRecordBytes     int
-	includeReasoning   bool
-	stateDB            string
-	decisionConfig     string
-	decisionUserConfig bool
-	decisionReceipt    *decisionDenyReceipt
-	modes              []string
-	file               string
-	httpURL            string
-	httpBatch          int
-	httpTO             time.Duration
-	httpAuth           string
-	httpSig            string
-	httpTS             string
-	insecure           bool
-	gzip               bool
-	ruleDirs           multiFlag
-	noBuiltin          bool
-	enforce            bool
-	visitFlags         *flag.FlagSet
+	caseID           string
+	sel              emitSelection
+	content          contentMode
+	contentScope     contentScope
+	maxRecordBytes   int
+	includeReasoning bool
+	stateDB          string
+	decisionConfig   string
+	decisionReceipt  *decisionDenyReceipt
+	modes            []string
+	file             string
+	httpURL          string
+	httpBatch        int
+	httpTO           time.Duration
+	httpAuth         string
+	httpSig          string
+	httpTS           string
+	insecure         bool
+	gzip             bool
+	ruleDirs         multiFlag
+	noBuiltin        bool
+	enforce          bool
+	visitFlags       *flag.FlagSet
 }
 
 // handleHook maps one payload through the shared pipeline. A deny is returned
@@ -386,7 +383,7 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	var stateErr error
 	if (opts.sel.findings || opts.enforce) && eng != nil {
 		if seqs := eng.SequenceRules(); len(seqs) > 0 {
-			stateDB, stateErr = openHookState(opts.stateDB)
+			stateDB, stateErr = openHookState(opts.stateDB, opts.decisionConfig != "")
 			if stateErr != nil {
 				em.Diag("warn", fmt.Sprintf("state database unavailable, %d sequence rule(s) skipped for this event: %v", len(seqs), stateErr))
 			} else {
@@ -464,13 +461,12 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 			stateErr = errors.Join(stateErr, fmt.Errorf("state database close: %w", closeErr))
 		}
 	}
-	// A state error remains fatal unless a clean stateless match already proved
-	// a deny. sequenceUnavailable means no sequence observer ran, so any such
-	// decision necessarily came from a stateless rule.
+	runHookDecisions(started, event, agent, lc, payload, events, opts, em, eng, dec, decisionPayloadClean && processErr == nil)
+	// An unavailable sequence store is not malformed input. Independent clean
+	// rules may still deny; contextual rules enforce their own state checks.
 	if !(sequenceUnavailable && dec != nil && dec.Blocked) {
 		processErr = errors.Join(processErr, stateErr)
 	}
-	runHookDecisions(started, agent, lc, payload, events, opts, em, eng, dec, decisionPayloadClean && processErr == nil)
 	if decision := hookEnforcementDecision(run, opts, dec, processErr, em.Stats().RecordErrors); decision != nil {
 		if emitErr := em.EmitEnforcement(*decision); emitErr != nil {
 			processErr = errors.Join(processErr, fmt.Errorf("emit enforcement decision %s: %w", decision.DecisionID, emitErr))
@@ -539,10 +535,8 @@ func hookEnforcementDecision(run string, opts hookOptions, dec *pipeline.Enforce
 			decision.Reason = model.EnforcementReasonEnforceRuleMatch
 			decision.DenyRuleID = dec.DenyRuleID
 			decision.DenyRuleVersion = dec.DenyRuleVersion
-			if dec.DenyPolicyID != "" {
+			if dec.DenyAssessmentID != "" {
 				decision.Reason = model.EnforcementReasonSemanticPolicyMatch
-				decision.DenyPolicyID = dec.DenyPolicyID
-				decision.DenyPolicyVersion = dec.DenyPolicyVersion
 				decision.DenyAssessmentID = dec.DenyAssessmentID
 			}
 		default:
@@ -735,7 +729,7 @@ func findingOptions() finding.Options { return finding.Options{Now: time.Now()} 
 // --state-db override, or state.db under a numbat-owned directory in the
 // user's home. The lock timeout is short because the agent is blocked while
 // the hook runs — a contended lock fails open rather than stalling it.
-func openHookState(override string) (*state.DB, error) {
+func openHookState(override string, private bool) (*state.DB, error) {
 	path := override
 	if path == "" {
 		home, err := os.UserHomeDir()
@@ -743,6 +737,13 @@ func openHookState(override string) (*state.DB, error) {
 			return nil, fmt.Errorf("resolve home for state db: %w", err)
 		}
 		path = filepath.Join(home, ".numbat", "state.db")
+	}
+	if private {
+		if db, err := state.OpenEvidence(path, 250*time.Millisecond); err == nil {
+			return db, nil
+		}
+		// Optional evidence privacy must not disable an existing sequence store.
+		// Its independent decision-history open will report the privacy failure.
 	}
 	return state.Open(path, 250*time.Millisecond)
 }

@@ -19,14 +19,14 @@ synchronous pre-action hooks; see the [enforcement guide](docs/enforcement.md).
 - **Endpoint-local detection** with built-in CEL rules, multi-step sequence rules,
   and custom YAML rules.
 - **Opt-in blocking** through supported pre-action hooks. Enforce mode is
-  disabled by default and requires an enforcement-enabled rule or decision
-  policy; all shipped rules are monitor-only.
-- **Optional decision evaluation** for action-only or session-context review
-  through an explicitly configured HTTPS provider. The experimental
-  [Claude hook integration](docs/design/decision-evaluators.md) supports
-  monitor and enforce modes on Unix; ordinary rules remain local and deterministic.
-  Inspect configuration with `numbat decisions check --config FILE`, without
-  model calls. Policy fingerprint pinning is optional.
+  disabled by default and requires an enforcement-enabled rule; all shipped
+  rules are monitor-only.
+- **Experimental decision rules** for action-only or session-context review
+  through an explicitly configured HTTPS provider. They use the
+  [ordinary rule catalog](docs/design/decision-evaluators.md) in hooks and
+  explicitly opted-in scans/collection. Default processing remains local.
+  Inspect configuration with `numbat decisions check --config FILE --rules-dir DIR`
+  without model calls.
 - **Forensic reconstruction** from supported on-disk session artifacts, without
   prior numbat instrumentation.
 - **Versioned NDJSON records** for events, findings, enforcement decisions, assessments,

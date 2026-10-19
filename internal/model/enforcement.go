@@ -59,11 +59,9 @@ type EnforcementDecision struct {
 	RuleIDs        []string `json:"rule_ids,omitempty"`
 	AssessmentIDs  []string `json:"assessment_ids,omitempty"`
 
-	DenyRuleID        string `json:"deny_rule_id,omitempty"`
-	DenyRuleVersion   string `json:"deny_rule_version,omitempty"`
-	DenyPolicyID      string `json:"deny_policy_id,omitempty"`
-	DenyPolicyVersion string `json:"deny_policy_version,omitempty"`
-	DenyAssessmentID  string `json:"deny_assessment_id,omitempty"`
+	DenyRuleID       string `json:"deny_rule_id,omitempty"`
+	DenyRuleVersion  string `json:"deny_rule_version,omitempty"`
+	DenyAssessmentID string `json:"deny_assessment_id,omitempty"`
 }
 
 // Validate enforces the closed enforcement-decision wire contract.
@@ -110,9 +108,9 @@ func (d EnforcementDecision) Validate() error {
 	case d.Decision == EnforcementDecisionDeny:
 		switch d.Reason {
 		case EnforcementReasonSemanticPolicyMatch:
-			if d.DenyPolicyID == "" || d.DenyPolicyVersion == "" ||
-				!containsValue(d.AssessmentIDs, d.DenyAssessmentID) || d.DenyRuleID != "" || d.DenyRuleVersion != "" {
-				return fmt.Errorf("enforcement decision %s: semantic deny requires a policy and referenced assessment, not a deny rule", d.DecisionID)
+			if d.DenyRuleID == "" || d.DenyRuleVersion == "" ||
+				!containsValue(d.AssessmentIDs, d.DenyAssessmentID) || !containsValue(d.RuleIDs, d.DenyRuleID) {
+				return fmt.Errorf("enforcement decision %s: semantic deny requires a rule and referenced assessment", d.DecisionID)
 			}
 		case EnforcementReasonEnforceRuleMatch:
 			if d.DenyRuleID == "" || d.DenyRuleVersion == "" {
@@ -121,7 +119,7 @@ func (d EnforcementDecision) Validate() error {
 			if !containsValue(d.RuleIDs, d.DenyRuleID) {
 				return fmt.Errorf("enforcement decision %s: deny rule %q is absent from rule_ids", d.DecisionID, d.DenyRuleID)
 			}
-			if d.DenyPolicyID != "" || d.DenyPolicyVersion != "" || d.DenyAssessmentID != "" {
+			if d.DenyAssessmentID != "" {
 				return fmt.Errorf("enforcement decision %s: deterministic deny names a semantic policy", d.DecisionID)
 			}
 		default:
@@ -130,8 +128,7 @@ func (d EnforcementDecision) Validate() error {
 	case d.Reason != EnforcementReasonNoEnforceEligibleMatch && d.Reason != EnforcementReasonFailOpen:
 		return fmt.Errorf("enforcement decision %s: invalid no_override enforce-mode reason %q", d.DecisionID, d.Reason)
 	}
-	if d.Decision != EnforcementDecisionDeny && (d.DenyRuleID != "" || d.DenyRuleVersion != "" ||
-		d.DenyPolicyID != "" || d.DenyPolicyVersion != "" || d.DenyAssessmentID != "") {
+	if d.Decision != EnforcementDecisionDeny && (d.DenyRuleID != "" || d.DenyRuleVersion != "" || d.DenyAssessmentID != "") {
 		return fmt.Errorf("enforcement decision %s: no_override decision names a deny rule or policy", d.DecisionID)
 	}
 	return nil

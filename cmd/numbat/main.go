@@ -15,7 +15,7 @@
 //	numbat collect [--addr 127.0.0.1:4318]   receive OTLP/HTTP protobuf logs; emit records
 //	numbat ship --input-file F --http-url U  tail a local record file to an HTTP endpoint
 //	numbat hook (install|uninstall|status)   manage live agent integrations
-//	numbat decisions check|digest           validate decision configuration or hash a policy
+//	numbat decisions check                 validate inference configuration and decision rules
 //	numbat agents                            report detected and supported local agents
 //	numbat rules check                       validate and compile rules; run companion tests
 //	numbat rules list                        list effective compiled rule ids
@@ -179,7 +179,7 @@ func runHelp(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return helpUnexpectedArg(args, stderr)
 		}
 		switch args[1] {
-		case "check", "digest":
+		case "check":
 			return runDecisions([]string{args[1], "--help"}, stdout, stdout)
 		default:
 			return unknownHelpTopic(args, stderr)
@@ -229,7 +229,6 @@ usage:
   numbat rules list                        list effective compiled rule ids
   numbat rules test --fixture FILE         evaluate rules against fixture events (NDJSON)
   numbat decisions check --config FILE     validate decision configuration and explain activation
-  numbat decisions digest --policy FILE    validate and print a canonical policy SHA-256
   numbat case build <case-id> --from FILE  bundle findings, enforcement decisions, and cited events
   numbat case verify DIR                   check a bundle against its manifest digests
   numbat version                           print version and schema version

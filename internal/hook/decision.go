@@ -1,121 +1,113 @@
 package hook
 
 import (
-	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/perplexityai/numbat/internal/decision"
 	"github.com/perplexityai/numbat/internal/model"
-	"github.com/perplexityai/numbat/internal/redact"
 )
 
-// DecisionObservation deliberately supports one verified host contract first.
-// It projects only tool identity, arguments and observed results; cwd,
-// transcript paths, environment and unrelated envelope fields never egress.
-// See https://code.claude.com/docs/en/hooks for the native field contract.
-func DecisionObservation(lc Lifecycle, agent string, events []model.Event, payload map[string]any, content string) (decision.Observation, bool) {
-	if agent != AgentClaude || len(events) == 0 {
+// DecisionObservation reuses normalized tool evidence and the existing host
+// lifecycle mapping. Host-specific details only establish capture boundaries.
+func DecisionObservation(rawEvent string, lc Lifecycle, agent string, events []model.Event, payload map[string]any, content string) (decision.Observation, bool) {
+	if len(events) == 0 {
 		return decision.Observation{}, false
 	}
 	ev := events[len(events)-1]
-	o := decision.Observation{Subject: decision.Subject{
-		Agent: ev.SourceAgent, Session: ev.SessionID, SessionTree: ev.SessionTreeID,
-		SubAgentID: ev.SubAgentID, CallID: ev.ToolCallID, EventID: ev.EventID,
-	}, Complete: true}
-	name, _ := payload["hook_event_name"].(string)
-	_, agentIDPresent := payload["agent_id"]
-	if ev.SubAgentID == "" && (agentIDPresent || name == "SubagentStart" || name == "SubagentStop") {
-		// Missing or malformed child identity cannot establish main-agent
-		// evidence or a fresh session anchor.
-		o.Phase, o.Complete = "gap", false
-		return o, true
+	r := newResolver(agent, payload)
+	name := strings.ToLower(r.hookEventName())
+	if name == "" {
+		name = strings.ToLower(rawEvent)
 	}
-	switch lc {
-	case LifecycleSessionStart:
-		o.Phase = "start"
-		o.NewSession = name == "SessionStart" && payload["source"] == "startup" && ev.SubAgentID == ""
-	case LifecycleSessionEnd:
-		if name == "SubagentStop" {
-			// A child can resume after this response boundary.
-			o.Phase, o.Complete = "gap", false
-			return o, true
-		}
-		if name != "SessionEnd" {
-			return o, false
-		}
-		o.Phase = "end"
-	case LifecyclePreTool:
-		if name != "PreToolUse" {
-			o.Phase, o.Complete = "gap", false
-			return o, true
-		}
-		o.Phase = "pre"
-	case LifecyclePostTool:
-		switch name {
-		case "PostToolUse":
-			o.Phase = "result"
-		case "PostToolUseFailure":
-			o.Phase = "failed"
-		default:
-			o.Phase, o.Complete = "gap", false
-			return o, true
-		}
-	case LifecyclePermissionDenied:
-		o.Phase = "denied"
-	default:
-		return o, false
-	}
-	if o.Phase == "start" || o.Phase == "end" {
-		return o, true
-	}
-	input, present := payload["tool_input"]
-	inputObject, object := input.(map[string]any)
-	o.Complete = present && object && inputObject != nil && ev.ToolName != "" &&
-		ev.ToolCallID != "" && !ev.ToolInputTruncatedForAnalysis()
-	// A background launch result does not delimit the operation's effects.
-	if inputObject["run_in_background"] == true {
-		o.Complete = false
-	}
-	action := map[string]any{"tool": ev.ToolName, "arguments_present": present}
-	if present {
-		action["arguments"] = input
-	}
-	o.Action, _ = json.Marshal(action)
-	switch o.Phase {
-	case "result":
-		if result, ok := payload["tool_response"]; ok {
-			o.Result, _ = json.Marshal(result)
-		}
-		o.Complete = o.Complete && len(o.Result) != 0 && !ev.ToolResultTruncatedForAnalysis()
+	phase := ""
+	switch {
+	case lc == LifecycleSessionStart:
+		phase = "start"
+	case lc == LifecycleSessionEnd:
+		phase = "end"
+	case lc == LifecyclePermissionDenied:
+		phase = "denied"
+	case strings.HasSuffix(string(lc), "pre-tool"),
+		EnforceEligible(agent, r.hookEventName(), lc):
+		phase = "pre"
+	case strings.Contains(string(lc), "post-tool"), lc == LifecycleCommandResult:
+		phase = "result"
 		if slices.Contains(ev.Tags, model.TagToolError) {
-			o.Phase = "failed"
+			phase = "failed"
 		}
-	case "failed":
-		if value, ok := payload["error"]; ok {
-			failure := map[string]any{"error": value}
-			if interrupt, ok := payload["is_interrupt"]; ok {
-				failure["is_interrupt"] = interrupt
-			}
-			o.Result, _ = json.Marshal(failure)
-		}
-		o.Complete = o.Complete && len(o.Result) != 0
+	case lc == LifecycleCommandExec, lc == LifecycleFileRead, lc == LifecycleFileWrite, lc == LifecycleMCPCall:
+		phase = "pre"
+	default:
+		return decision.Observation{}, false
 	}
-	if content == "redacted" {
-		for _, field := range []*json.RawMessage{&o.Action, &o.Result} {
-			if len(*field) == 0 {
-				continue
-			}
-			clean, masked, err := redact.JSONWithRedaction(*field)
-			if err != nil {
-				*field = nil
-				o.Complete = false
-				continue
-			}
-			if masked {
-				o.Complete = false
-			}
-			*field = clean
+	childBoundary := func(s string) bool {
+		s = strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(s))
+		return s == "subagentstart" || s == "subagentstop"
+	}
+	if childBoundary(name) || childBoundary(rawEvent) {
+		phase = "gap"
+	}
+	if name != "" {
+		if resolved, err := ResolveLifecycle(agent, name); err != nil || resolved != lc {
+			phase = "gap"
 		}
+	}
+	// Claude omits agent_id for the main agent. A present invalid marker cannot
+	// be interpreted as main-agent evidence (the mapping contract is unchanged).
+	if agent == AgentClaude && ev.SubAgentID == "" {
+		if _, present := payload["agent_id"]; present || name == "subagentstart" || name == "subagentstop" {
+			phase = "gap"
+		}
+		// Refuse contradictory native/installed lifecycle names.
+		if lc == LifecyclePreTool && name != "pretooluse" {
+			phase = "gap"
+		}
+		if lc == LifecycleSessionEnd && name == "" {
+			return decision.Observation{}, false
+		}
+	}
+	o := decision.ProjectBatch(events, phase, content)
+	parent := o.Subject
+	switch {
+	case agent == AgentClaude && ev.SubAgentID != "":
+		parent.SubAgentID = ""
+		o.Parent = &parent
+	case agent == AgentCodex && ev.SubAgentID != "" && r.envelopeSessionID() != "":
+		parent.Session, parent.SessionTree, parent.SubAgentID = r.envelopeSessionID(), "", ""
+		o.Parent = &parent
+	case agent == AgentHermes && (name == "subagent_start" || name == "subagent_stop") && r.envelopeSessionID() != "":
+		parent.Session = r.envelopeSessionID()
+		o.Parent = &parent
+	case agent == AgentOpenClaw:
+		if id, ok := payload["parent_session_id"].(string); ok && id != "" {
+			parent.Session = id
+			o.Parent = &parent
+		}
+	}
+	if input, ok := r.toolInputValue().(map[string]any); ok && input["run_in_background"] == true {
+		o.HistoryGap = true
+	}
+	if phase == "start" && ev.SubAgentID == "" && o.Parent == nil {
+		switch agent {
+		case AgentClaude, AgentCodex:
+			o.NewSession = payload["source"] == "startup"
+		case AgentCline:
+			_, taskStart := payload["taskStart"].(map[string]any)
+			_, taskResume := payload["taskResume"]
+			o.NewSession = !taskResume && name != "taskresume" &&
+				(name == "taskstart" || name == "task_start" || taskStart)
+		case AgentOpenCode:
+			// The generated plugin emits this only for session.created.
+			o.NewSession = name == "session-start"
+		case AgentOpenClaw:
+			resumed, present := payload["resumed_from"]
+			_, delegated := payload["parent_session_id"]
+			o.NewSession = !delegated && (!present || resumed == "")
+		}
+	}
+	if phase == "gap" {
+		o.Complete = false
 	}
 	return o, true
 }

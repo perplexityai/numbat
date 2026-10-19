@@ -22,13 +22,16 @@ import (
 	"github.com/perplexityai/numbat/internal/evaluator"
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
+	"github.com/perplexityai/numbat/internal/rule"
 	"github.com/perplexityai/numbat/internal/state"
+	"go.yaml.in/yaml/v3"
 )
 
 type decisionHookLab struct {
 	dir    string
 	config string
 	cfg    evaluator.Config
+	rules  []rule.Rule
 	hits   atomic.Int32
 	check  func(*http.Request, []byte)
 	fault  string
@@ -75,38 +78,29 @@ func newDecisionHookLab(t *testing.T) *decisionHookLab {
 		return path
 	}
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	policy := decision.Policy{
-		ID: "local.transfer", Version: "1", Title: "Protected transfer", Severity: "high", Enforce: true,
-		Decision: decision.Question{
+	policy := rule.Rule{
+		ID: "local.transfer", Version: "1", Title: "Protected transfer", Severity: "high", Enforce: decisionBool(true),
+		Decision: &rule.DecisionSpec{
 			Select:       `event.tool_name == "mcp__fixture__upload"`,
 			Instructions: "Classify this pending transfer.",
 			Options:      map[string]string{"prohibited": "Violates policy.", "permitted": "Meets policy.", "unknown": "Insufficient evidence."},
 			MatchOption:  "prohibited", AbstainOption: "unknown",
+			View: decision.Session, MatchThreshold: .9, DenyThreshold: .99, MaxHistoryCalls: 8,
 		},
 	}
-	compiled, err := decision.Compile(policy)
-	if err != nil {
+	lab.rules = []rule.Rule{policy}
+	if err := os.Mkdir(filepath.Join(lab.dir, "decisions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(policy)
 	lab.cfg = evaluator.Config{
-		Version: "1", Enabled: true, InstallationID: "test-installation", Content: "raw",
-		BudgetMS: 2000, NoArgumentRewriters: true,
+		Version: "1", InstallationID: "test-installation", Content: "raw",
+		BudgetMS: 2000, TimeoutMS: 2000, MaxRequestBytes: 32768,
 		OperatorContext: map[string]any{"policy": "Synthetic transfer policy."},
 		State:           evaluator.StateConfig{MaxSessions: 4, MaxCalls: 8, MaxBytes: 32768, IdleTTLMS: 10000},
-		Providers: map[string]evaluator.ProviderConfig{"test": {
+		Provider: evaluator.ProviderConfig{
 			Profile:   evaluator.Profile{Protocol: "decisions-v1", Endpoint: server.URL, Model: "test", MaxResponseBytes: 8192},
 			TokenFile: write("token", []byte("synthetic-token")), CAFile: write("ca.pem", ca),
-		}},
-		Bindings: []evaluator.ConfiguredBinding{{
-			PolicyFile: write("policy.yaml", raw), Provider: "test",
-			Binding: decision.Binding{
-				Enabled: true, SendContent: true, PolicySHA256: compiled.Digest(),
-				View: decision.Session, Mode: decision.Enforce,
-				MatchThreshold: .9, DenyThreshold: .99,
-				BudgetMS: 2000, MaxRequestBytes: 32768, MaxHistoryCalls: 8,
-			},
-		}},
+		},
 	}
 	lab.config = filepath.Join(lab.dir, "config.yaml")
 	lab.save(t)
@@ -119,6 +113,62 @@ func (l *decisionHookLab) save(t *testing.T) {
 	if err := os.WriteFile(l.config, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for i, r := range l.rules {
+		raw, err := yaml.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(l.dir, "decisions", fmt.Sprintf("%02d.yaml", i)), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func decisionBool(v bool) *bool { return &v }
+
+func TestNativeActionIndependentOfBrokenSessionHistory(t *testing.T) {
+	for _, missingID := range []bool{false, true} {
+		lab := newDecisionHookLab(t)
+		action := lab.rules[0]
+		q := *action.Decision
+		action.Decision = &q
+		action.ID = "local.action"
+		action.Decision.View = decision.Action
+		action.Decision.MaxHistoryCalls = 0
+		lab.rules = append(lab.rules, action)
+		lab.save(t)
+		payload := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "mcp__fixture__upload", "tool_use_id": "upload", "tool_input": map[string]any{"artifact": "synthetic"}}
+		if missingID {
+			payload["session_id"] = nil
+		}
+		// A directory cannot be opened as bbolt; action evidence must still work.
+		result := lab.invoke(t, "PreToolUse", payload, "--state-db", lab.dir)
+		if !strings.Contains(result, `"permissionDecision":"deny"`) {
+			t.Fatalf("history failure contaminated action: %s", result)
+		}
+	}
+}
+
+func TestOfflineRulesTestReportsUnevaluatedDecisions(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	path := filepath.Join(lab.dir, "events.ndjson")
+	raw := `{"schema_version":"` + model.SchemaVersion + `","event_id":"e","event_type":"tool.call","source_agent":"claude-code","source_type":"hook","confidence":"high","evidence":{"artifact_type":"hook"}}` + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"test", "--fixture", path, "--rules-dir", filepath.Join(lab.dir, "decisions"), "--no-builtin-rules", "--json"}
+	var out, errout bytes.Buffer
+	if code := runRules(args, &out, &errout); code != 0 || !strings.Contains(out.String(), `"decision_rules_skipped":["local.transfer"]`) {
+		t.Fatalf("unreported skip: code=%d out=%s err=%s", code, out.String(), errout.String())
+	}
+	out.Reset()
+	errout.Reset()
+	if code := runRules(append(args, "--expect-none"), &out, &errout); code != 2 {
+		t.Fatalf("unevaluated model accepted as negative: %d", code)
+	}
+	if lab.hits.Load() != 0 {
+		t.Fatal("offline command contacted provider")
+	}
 }
 
 func (l *decisionHookLab) invoke(t *testing.T, lifecycle string, payload map[string]any, extra ...string) string {
@@ -130,14 +180,17 @@ func (l *decisionHookLab) invoke(t *testing.T, lifecycle string, payload map[str
 
 func (l *decisionHookLab) invokeTo(t *testing.T, lifecycle string, payload map[string]any, out io.Writer, extra ...string) {
 	t.Helper()
-	payload["session_id"] = "session"
+	if _, present := payload["session_id"]; !present {
+		payload["session_id"] = "session"
+	}
 	payload["cwd"] = "/private-workspace-not-for-provider"
 	payload["transcript_path"] = "/private-transcript-not-for-provider"
 	raw, _ := json.Marshal(payload)
 	args := []string{
 		"--agent", "claude", "--enforce", "--emit", "all",
 		"--output", "file", "--output-file", filepath.Join(l.dir, "records.ndjson"),
-		"--state-db", filepath.Join(l.dir, "state", "state.db"), "--decision-config", l.config, "--decision-user-config",
+		"--state-db", filepath.Join(l.dir, "state", "state.db"), "--decision-config", l.config,
+		"--rules-dir", filepath.Join(l.dir, "decisions"),
 	}
 	args = append(args, extra...)
 	var stderr bytes.Buffer
@@ -180,11 +233,9 @@ func TestNativeDecisionModesAndFailureBoundaries(t *testing.T) {
 		wantCalls int32
 	}{
 		{"session_enforce", nil, true, true, true, 1},
-		{"action_without_start", func(l *decisionHookLab) { l.cfg.Bindings[0].View = decision.Action }, false, false, true, 1},
-		{"monitor", func(l *decisionHookLab) { l.cfg.Bindings[0].Mode = decision.Monitor }, true, true, false, 1},
-		{"disabled", func(l *decisionHookLab) { l.cfg.Enabled = false }, true, true, false, 0},
-		{"no_egress", func(l *decisionHookLab) { l.cfg.Bindings[0].SendContent = false }, true, true, false, 0},
-		{"unknown_finality", func(l *decisionHookLab) { l.cfg.NoArgumentRewriters = false }, true, true, false, 1},
+		{"action_without_start", func(l *decisionHookLab) { l.rules[0].Decision.View = decision.Action }, false, false, true, 1},
+		{"monitor", func(l *decisionHookLab) { l.rules[0].Enforce = decisionBool(false) }, true, true, false, 1},
+		{"disabled", func(l *decisionHookLab) { l.rules[0].Enabled = decisionBool(false) }, true, true, false, 0},
 		{"missing_start", nil, false, false, false, 1},
 		{"pending_history", nil, true, false, false, 1},
 		{"truncated_history", func(l *decisionHookLab) { l.cfg.State.MaxCalls = 1 }, true, true, false, 1},
@@ -192,7 +243,7 @@ func TestNativeDecisionModesAndFailureBoundaries(t *testing.T) {
 		{"malformed", func(l *decisionHookLab) { l.fault = "malformed" }, true, true, false, 1},
 		{"case_alias", func(l *decisionHookLab) { l.fault = "case_alias" }, true, true, false, 1},
 		{"provider_truncated", func(l *decisionHookLab) { l.fault = "truncated" }, true, true, false, 1},
-		{"timeout", func(l *decisionHookLab) { l.fault = "timeout"; l.cfg.Bindings[0].BudgetMS = 50 }, true, true, false, 1},
+		{"timeout", func(l *decisionHookLab) { l.fault = "timeout"; l.cfg.TimeoutMS = 50 }, true, true, false, 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,7 +267,7 @@ func TestNativeDecisionModesAndFailureBoundaries(t *testing.T) {
 	}
 }
 
-func TestNativeDecisionBindingOrder(t *testing.T) {
+func TestNativeDecisionRuleOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		configure     func(*decisionHookLab)
@@ -227,17 +278,14 @@ func TestNativeDecisionBindingOrder(t *testing.T) {
 	}{
 		{"enforce first", nil, false, false, 1, true},
 		{"monitor first", func(l *decisionHookLab) {
-			l.cfg.Bindings[0], l.cfg.Bindings[1] = l.cfg.Bindings[1], l.cfg.Bindings[0]
+			l.rules[0], l.rules[1] = l.rules[1], l.rules[0]
 		}, false, false, 2, true},
 		{"global monitor", nil, true, false, 2, false},
-		{"unconfirmed finality", func(l *decisionHookLab) {
-			l.cfg.NoArgumentRewriters = false
-		}, false, false, 2, false},
 		{"ineligible session before eligible action", func(l *decisionHookLab) {
-			l.cfg.Bindings[1].Mode = decision.Enforce
+			l.rules[1].Enforce = decisionBool(true)
 		}, false, true, 2, true},
 		{"unavailable provider before eligible action", func(l *decisionHookLab) {
-			l.cfg.Bindings[1].Mode = decision.Enforce
+			l.rules[1].Enforce = decisionBool(true)
 			l.check = func(*http.Request, []byte) {
 				l.fault = ""
 				if l.hits.Load() == 1 {
@@ -248,9 +296,11 @@ func TestNativeDecisionBindingOrder(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lab := newDecisionHookLab(t)
-			second := lab.cfg.Bindings[0]
-			second.View, second.Mode = decision.Action, decision.Monitor
-			lab.cfg.Bindings = append(lab.cfg.Bindings, second)
+			second := lab.rules[0]
+			q := *second.Decision
+			q.View = decision.Action
+			second.ID, second.Decision, second.Enforce = "local.second", &q, decisionBool(false)
+			lab.rules = append(lab.rules, second)
 			if tc.configure != nil {
 				tc.configure(lab)
 			}
@@ -304,7 +354,7 @@ func TestNativeDecisionReleasesStateAndProjectsOnlyApprovedFields(t *testing.T) 
 			bytes.Contains(raw, []byte("private-workspace")) || bytes.Contains(raw, []byte("private-transcript")) {
 			t.Errorf("bad credential or evidence projection: %s", raw)
 		}
-		if !bytes.Contains(raw, []byte("restricted")) || !bytes.Contains(raw, []byte("current_pending_call")) {
+		if !bytes.Contains(raw, []byte("restricted")) || !bytes.Contains(raw, []byte("current_event")) {
 			t.Errorf("missing retained context: %s", raw)
 		}
 		db, err := state.Open(filepath.Join(lab.dir, "state", "state.db"), 25*time.Millisecond)
@@ -383,7 +433,7 @@ func TestDecisionInstallCarriesExplicitConfiguration(t *testing.T) {
 	var out, stderr bytes.Buffer
 	exit := runHookAdmin("install", []string{
 		"--agent", "claude", "--settings", settings, "--decision-config", lab.config,
-		"--decision-user-config", "--state-db", filepath.Join(lab.dir, "state", "state.db"), "--enforce",
+		"--rules-dir", filepath.Join(lab.dir, "decisions"), "--state-db", filepath.Join(lab.dir, "state", "state.db"), "--enforce",
 	}, &out, &stderr)
 	if exit != 0 {
 		t.Fatalf("install exit=%d: %s", exit, stderr.String())
@@ -402,62 +452,39 @@ func TestDecisionInstallCarriesExplicitConfiguration(t *testing.T) {
 
 func TestDecisionInstallRequiresAnEffectiveEnforceSource(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		ruleEnforce     bool
-		addSecondPolicy bool
-		wantExit        int
+		name                            string
+		enforce, enabled, deterministic bool
+		wantExit                        int
 	}{
-		{"only binding collides", false, false, 2},
-		{"later binding is usable", false, true, 0},
-		{"deterministic enforcement remains usable", true, false, 0},
+		{"decision only", true, true, false, 0},
+		{"monitor only", false, true, false, 2},
+		{"disabled decision", true, false, false, 2},
+		{"independent deterministic rule", false, true, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lab := newDecisionHookLab(t)
-			rules := filepath.Join(lab.dir, "rules")
-			if err := os.Mkdir(rules, 0o700); err != nil {
-				t.Fatal(err)
+			lab.rules[0].Enforce, lab.rules[0].Enabled = decisionBool(tc.enforce), decisionBool(tc.enabled)
+			if tc.deterministic {
+				lab.rules = append(lab.rules, rule.Rule{
+					ID: "local.deterministic", Version: "1", Title: "Synthetic", Severity: "high",
+					Expr: "true", Enforce: decisionBool(true),
+				})
 			}
-			rule := fmt.Sprintf("id: local.transfer\nversion: '1'\ntitle: Synthetic rule\nseverity: high\nenforce: %t\nexpr: event.tool_name == 'mcp__fixture__upload'\n", tc.ruleEnforce)
-			if err := os.WriteFile(filepath.Join(rules, "rule.yaml"), []byte(rule), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if tc.addSecondPolicy {
-				raw, err := os.ReadFile(lab.cfg.Bindings[0].PolicyFile)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var policy decision.Policy
-				if err := json.Unmarshal(raw, &policy); err != nil {
-					t.Fatal(err)
-				}
-				policy.ID = "local.second"
-				raw, err = json.Marshal(policy)
-				if err != nil {
-					t.Fatal(err)
-				}
-				second := lab.cfg.Bindings[0]
-				second.PolicyFile, second.PolicySHA256 = filepath.Join(lab.dir, "second.yaml"), ""
-				if err := os.WriteFile(second.PolicyFile, raw, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				lab.cfg.Bindings = append(lab.cfg.Bindings, second)
-				lab.save(t)
-			}
+			lab.save(t)
 			settings := filepath.Join(lab.dir, "settings.json")
 			var out, stderr bytes.Buffer
 			exit := runHookAdmin("install", []string{
 				"--agent", "claude", "--settings", settings,
-				"--rules-dir", rules, "--no-builtin-rules",
-				"--decision-config", lab.config, "--decision-user-config", "--enforce",
+				"--rules-dir", filepath.Join(lab.dir, "decisions"), "--no-builtin-rules",
+				"--decision-config", lab.config, "--enforce",
 			}, &out, &stderr)
 			if exit != tc.wantExit || lab.hits.Load() != 0 {
 				t.Fatalf("exit=%d calls=%d stderr=%s", exit, lab.hits.Load(), stderr.String())
 			}
 			_, err := os.Stat(settings)
 			if tc.wantExit != 0 {
-				if !os.IsNotExist(err) || !strings.Contains(stderr.String(), "bindings[0]") ||
-					!strings.Contains(stderr.String(), "local.transfer") || !strings.Contains(stderr.String(), "collision") {
-					t.Fatalf("invalid install changed settings or omitted collision details: err=%v stderr=%s", err, stderr.String())
+				if !os.IsNotExist(err) || stderr.Len() == 0 {
+					t.Fatalf("invalid install changed settings or omitted cause: err=%v stderr=%s", err, stderr.String())
 				}
 			} else if err != nil {
 				t.Fatal("valid install did not create settings:", err)
@@ -469,39 +496,27 @@ func TestDecisionInstallRequiresAnEffectiveEnforceSource(t *testing.T) {
 func TestDecisionCheckExplainsConfigurationOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		edit func(*evaluator.Config)
+		edit func(*decisionHookLab)
 		want string
 	}{
-		{"configured", func(*evaluator.Config) {}, "runtime eligibility not checked"},
-		{"disabled", func(c *evaluator.Config) { c.Enabled = false }, "configuration disabled"},
-		{"binding disabled", func(c *evaluator.Config) { c.Bindings[0].Enabled = false }, "binding disabled"},
-		{"egress disabled", func(c *evaluator.Config) { c.Bindings[0].SendContent = false }, "send_content not authorized"},
-		{"argument finality", func(c *evaluator.Config) { c.NoArgumentRewriters = false }, "no_argument_rewriters not asserted"},
+		{"configured", func(*decisionHookLab) {}, "mode=enforce"},
+		{"disabled rule", func(l *decisionHookLab) { l.rules[0].Enabled = decisionBool(false) }, "0 decision rules"},
+		{"monitor rule", func(l *decisionHookLab) { l.rules[0].Enforce = decisionBool(false) }, "mode=monitor"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lab := newDecisionHookLab(t)
-			c, err := evaluator.LoadConfig(lab.config, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.edit(c)
-			raw, err := json.Marshal(c)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(lab.config, raw, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			out, stderr, code := runCLI("decisions", "check", "--config", lab.config, "--decision-user-config")
+			tc.edit(lab)
+			lab.save(t)
+			out, stderr, code := runCLI("decisions", "check", "--config", lab.config, "--rules-dir", filepath.Join(lab.dir, "decisions"))
 			if code != 0 || stderr != "" || !strings.Contains(out, tc.want) ||
-				!strings.Contains(out, "not checked:") || !strings.Contains(out, "runtime enforcement also requires") {
+				!strings.Contains(out, "Not checked:") || !strings.Contains(out, "Blocking also requires") {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, stderr)
 			}
 			if lab.hits.Load() != 0 {
 				t.Fatal("offline check contacted provider")
 			}
-			if tc.name == "configured" && (!strings.Contains(out, "request cap: 32768 bytes") ||
-				!strings.Contains(out, "retained session cap: 32768 encoded bytes")) {
+			if tc.name == "configured" && (!strings.Contains(out, "request cap=32768 bytes") ||
+				!strings.Contains(out, "retained session cap=32768 bytes")) {
 				t.Fatalf("checker omitted independent byte limits: %s", out)
 			}
 		})
@@ -539,16 +554,16 @@ func TestNativeDecisionConcurrentMutationCannotDeny(t *testing.T) {
 
 func TestDecisionCheckHelp(t *testing.T) {
 	var out, stderr bytes.Buffer
-	if exit := runDecisionCheck([]string{"--help"}, &out, &stderr); exit != 0 {
+	if exit := runDecisions([]string{"check", "--help"}, &out, &stderr); exit != 0 {
 		t.Fatalf("help exit=%d: %s", exit, stderr.String())
 	}
 }
 
-func TestDecisionUserConfigRequiresConfigPath(t *testing.T) {
+func TestRemovedDecisionUserConfigFlag(t *testing.T) {
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	args := []string{"hook", "install", "--agent", "claude", "--settings", settings, "--decision-user-config"}
 	_, stderr, code := runCLI(args...)
-	if code != 2 || !strings.Contains(stderr, "--decision-user-config requires --decision-config") {
+	if code != 2 || !strings.Contains(stderr, "flag provided but not defined") {
 		t.Fatalf("%v: exit=%d stderr=%q", args, code, stderr)
 	}
 	if _, err := os.Stat(settings); !os.IsNotExist(err) {
@@ -591,7 +606,7 @@ func TestNativeSemanticDenyHasLinkedAuditRecords(t *testing.T) {
 	}
 	if enforcement.Reason != model.EnforcementReasonSemanticPolicyMatch ||
 		enforcement.DenyAssessmentID == "" || enforcement.DenyAssessmentID != assessment.AssessmentID ||
-		enforcement.DenyPolicyID != assessment.PolicyID || len(enforcement.RuleIDs) != 0 || enforcement.DenyRuleID != "" {
+		enforcement.DenyRuleID != assessment.PolicyID || len(enforcement.RuleIDs) != 1 || assessment.RuleDigest == "" {
 		t.Fatalf("semantic decision misrepresented: enforcement=%+v assessment=%+v", enforcement, assessment)
 	}
 }
@@ -750,9 +765,9 @@ func TestNativeChildActivityLeavesParentIncomplete(t *testing.T) {
 	}
 }
 
-func TestNativeChildActionCannotDeny(t *testing.T) {
+func TestNativeChildActionUsesOrdinaryHostControl(t *testing.T) {
 	lab := newDecisionHookLab(t)
-	lab.cfg.Bindings[0].View = decision.Action
+	lab.rules[0].Decision.View = decision.Action
 	lab.save(t)
 	control := lab.invoke(t, "pre-tool", map[string]any{
 		"hook_event_name": "PreToolUse", "agent_id": "child-1",
@@ -760,9 +775,8 @@ func TestNativeChildActionCannotDeny(t *testing.T) {
 		"tool_input": map[string]any{"artifact": "a1"},
 	})
 	records := lab.assessments(t)
-	if len(records) != 1 || !records[0].Matched || records[0].DenyCandidate ||
-		records[0].Reason != "host_argument_finality_unconfirmed" ||
-		records[0].SubAgentID != "child-1" || strings.Contains(control, `"permissionDecision":"deny"`) {
+	if len(records) != 1 || !records[0].Matched || !records[0].DenyCandidate ||
+		records[0].SubAgentID != "child-1" || !strings.Contains(control, `"permissionDecision":"deny"`) {
 		t.Fatalf("child control=%s assessments=%+v", control, records)
 	}
 }
@@ -788,7 +802,7 @@ func TestNativeChildHistoryIsolation(t *testing.T) {
 		"hook_event_name": "PostToolUse", "tool_name": "Agent", "tool_use_id": "delegate-1",
 		"tool_input": map[string]any{"prompt": "synthetic task"}, "tool_response": "done",
 	})
-	c, err := evaluator.LoadConfig(lab.config, true)
+	c, err := evaluator.LoadConfig(lab.config)
 	if err != nil {
 		t.Fatal(err)
 	}

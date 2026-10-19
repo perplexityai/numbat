@@ -41,4 +41,11 @@ type Observation struct {
 	Action     json.RawMessage
 	Result     json.RawMessage
 	Complete   bool
+	// HistoryGap marks effects whose completion is not covered by this callback.
+	// The current action can still be complete enough for an action-view rule.
+	HistoryGap bool
+	// Parent is populated only from a source-backed delegation relationship.
+	Parent    *Subject
+	EventType string
+	ExitCode  *int
 }

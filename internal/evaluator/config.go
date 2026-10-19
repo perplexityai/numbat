@@ -1,7 +1,6 @@
 package evaluator
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -14,56 +13,52 @@ import (
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/decision"
+	"github.com/perplexityai/numbat/internal/rule"
 )
 
-// Config is loaded only from an explicit operator-supplied path. The default
-// loader requires root-owned configuration; user-owned mode is a separate CLI
-// opt-in and is not a security boundary against the agent's OS user.
+// Config owns provider access and process-wide limits, never a second rule
+// catalog. Rules come from the same effective catalog as expr and sequence.
 type Config struct {
-	Version             string                    `yaml:"version" json:"version"`
-	Enabled             bool                      `yaml:"enabled" json:"enabled"`
-	InstallationID      string                    `yaml:"installation_id" json:"installation_id"`
-	BudgetMS            int                       `yaml:"budget_ms" json:"budget_ms"`
-	Content             string                    `yaml:"content" json:"content"`
-	NoArgumentRewriters bool                      `yaml:"no_argument_rewriters" json:"no_argument_rewriters"`
-	OperatorContext     map[string]any            `yaml:"operator_context" json:"operator_context"`
-	Providers           map[string]ProviderConfig `yaml:"providers" json:"providers"`
-	Bindings            []ConfiguredBinding       `yaml:"bindings" json:"bindings"`
-	State               StateConfig               `yaml:"state" json:"state"`
-	digest              string
-	userOwned           bool
+	Version         string           `yaml:"version" json:"version"`
+	InstallationID  string           `yaml:"installation_id" json:"installation_id"`
+	BudgetMS        int              `yaml:"budget_ms" json:"budget_ms"`
+	MaxRequestBytes int              `yaml:"max_request_bytes" json:"max_request_bytes"`
+	Content         string           `yaml:"content" json:"content"`
+	TimeoutMS       int              `yaml:"timeout_ms" json:"timeout_ms"`
+	OperatorContext map[string]any   `yaml:"operator_context" json:"operator_context"`
+	Provider        ProviderConfig   `yaml:"provider" json:"provider"`
+	State           StateConfig      `yaml:"state" json:"state"`
+	Rules           []ConfiguredRule `yaml:"-" json:"-"`
+
+	digest string
 }
 
-// ProviderConfig adds protected credential paths to the non-secret wire profile.
 type ProviderConfig struct {
 	Profile   `yaml:",inline"`
 	TokenFile string `yaml:"token_file" json:"token_file"`
 	CAFile    string `yaml:"ca_file,omitempty" json:"ca_file,omitempty"`
 }
 
-// ConfiguredBinding attaches a policy source and compiled snapshot to its settings.
-type ConfiguredBinding struct {
-	decision.Binding `yaml:",inline"`
-	PolicyFile       string             `yaml:"policy_file" json:"policy_file"`
-	Provider         string             `yaml:"provider" json:"provider"`
-	Compiled         *decision.Compiled `yaml:"-" json:"-"`
+// ConfiguredRule freezes the ordinary rule and its resolved runtime limits.
+type ConfiguredRule struct {
+	decision.Binding
+	Rule     rule.Rule
+	Compiled *decision.Compiled
 }
 
-// StateConfig bounds the logical retained evidence, not bbolt's physical file
-// size or secure erasure of pages.
 type StateConfig = decision.ContextLimits
 
-// LoadConfig validates enabled bindings without reading credentials or state.
-// Disabled bindings remain uncompiled. Callers must not mutate a loaded config
-// while using its digest, compiled policies or provider factories.
-func LoadConfig(path string, allowUserOwned bool) (*Config, error) {
-	raw, err := readProtected(path, 512<<10, allowUserOwned, false)
+// LoadConfig does not read credentials, load rules or contact a provider.
+func LoadConfig(path string) (*Config, error) {
+	raw, err := readProtected(path, 512<<10, true, false)
 	if err != nil {
 		return nil, fmt.Errorf("decision configuration: %w", err)
 	}
 	c := &Config{
-		InstallationID: "local", BudgetMS: 1000, Content: "redacted", userOwned: allowUserOwned,
-		State: StateConfig{MaxSessions: 128, MaxCalls: 64, MaxBytes: 32 << 20, IdleTTLMS: 3600000},
+		InstallationID: "local", BudgetMS: 1000, MaxRequestBytes: 128 << 10,
+		Content: "redacted", TimeoutMS: 1000,
+		Provider: ProviderConfig{Profile: Profile{Protocol: "decisions-v1", MaxResponseBytes: 64 << 10}},
+		State:    StateConfig{MaxSessions: 128, MaxCalls: 64, MaxBytes: 32 << 20, IdleTTLMS: 3600000},
 	}
 	if err := decision.DecodeYAML(raw, c); err != nil {
 		return nil, fmt.Errorf("decision configuration: %w", err)
@@ -71,23 +66,26 @@ func LoadConfig(path string, allowUserOwned bool) (*Config, error) {
 	if c.Version != "1" {
 		return nil, errors.New("decision configuration version must be \"1\"")
 	}
-	if !c.Enabled {
-		return c, nil
-	}
 	if c.InstallationID == "" || strings.TrimSpace(c.InstallationID) != c.InstallationID || len(c.InstallationID) > 128 {
 		return nil, errors.New("installation_id must contain 1..128 bytes without surrounding whitespace")
 	}
 	if c.BudgetMS < 1 || c.BudgetMS > 8000 {
-		return nil, errors.New("budget_ms must be between 1 and 8000 for native hooks")
+		return nil, errors.New("budget_ms must be between 1 and 8000")
+	}
+	if c.TimeoutMS < 1 || c.TimeoutMS > 8000 {
+		return nil, errors.New("timeout_ms must be between 1 and 8000")
+	}
+	if c.MaxRequestBytes < 1 || c.MaxRequestBytes > 1<<20 {
+		return nil, errors.New("max_request_bytes must be between 1 and 1048576")
 	}
 	if c.Content != "raw" && c.Content != "redacted" {
 		return nil, errors.New("content must be redacted or raw")
 	}
-	if len(c.Bindings) < 1 || len(c.Bindings) > 16 {
-		return nil, errors.New("bindings must contain 1..16 entries")
+	if err := c.Provider.Validate(); err != nil {
+		return nil, fmt.Errorf("provider: %w", err)
 	}
-	if len(c.Providers) > 16 {
-		return nil, errors.New("providers must contain at most 16 entries")
+	if !absolutePath(c.Provider.TokenFile) || (c.Provider.CAFile != "" && !absolutePath(c.Provider.CAFile)) {
+		return nil, errors.New("provider.token_file and optional ca_file must be absolute clean paths")
 	}
 	if err := c.State.Validate(); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
@@ -99,51 +97,6 @@ func LoadConfig(path string, allowUserOwned bool) (*Config, error) {
 	if err != nil || len(context) > 32768 {
 		return nil, errors.New("decision operator context invalid or oversized")
 	}
-	seen := map[string]bool{}
-	for i := range c.Bindings {
-		b := &c.Bindings[i]
-		if !b.Enabled {
-			continue
-		}
-		p, ok := c.Providers[b.Provider]
-		if !ok {
-			return nil, fmt.Errorf("bindings[%d].provider must name a configured provider", i)
-		}
-		if err := p.Validate(); err != nil {
-			return nil, fmt.Errorf("bindings[%d].provider: %w", i, err)
-		}
-		if !absolutePath(p.TokenFile) || (p.CAFile != "" && !absolutePath(p.CAFile)) {
-			return nil, fmt.Errorf("bindings[%d].provider: token_file and optional ca_file must be absolute clean paths", i)
-		}
-		if b.BudgetMS > c.BudgetMS {
-			return nil, fmt.Errorf("bindings[%d].budget_ms must not exceed the global budget_ms", i)
-		}
-		raw, err := readProtected(b.PolicyFile, 512<<10, allowUserOwned, false)
-		if err != nil {
-			return nil, fmt.Errorf("bindings[%d].policy_file: %w", i, err)
-		}
-		b.Compiled, err = decision.LoadPolicy(bytes.NewReader(raw))
-		if err != nil {
-			return nil, fmt.Errorf("bindings[%d].policy_file: %w", i, err)
-		}
-		// Always bind requests and configuration identity to the loaded policy,
-		// even when the operator has not supplied an optional change-control pin.
-		if b.PolicySHA256 == "" {
-			b.PolicySHA256 = b.Compiled.Digest()
-		}
-		if err := b.Validate(b.Compiled); err != nil {
-			return nil, fmt.Errorf("bindings[%d]: %w", i, err)
-		}
-		minimum, err := requestBody(p.Profile, b.Compiled.Policy(), json.RawMessage(`{}`))
-		if err != nil || len(minimum) > b.MaxRequestBytes {
-			return nil, fmt.Errorf("bindings[%d].max_request_bytes is smaller than the policy request envelope", i)
-		}
-		key := b.Compiled.Policy().ID + "\x00" + b.View
-		if seen[key] {
-			return nil, fmt.Errorf("bindings[%d]: duplicate decision policy and view", i)
-		}
-		seen[key] = true
-	}
 	canonical, err := json.Marshal(c)
 	if err != nil {
 		return nil, errors.New("invalid decision configuration encoding")
@@ -153,49 +106,75 @@ func LoadConfig(path string, allowUserOwned bool) (*Config, error) {
 	return c, nil
 }
 
+// ConfigureRules resolves limits after ordinary catalog validation. No rule can
+// increase the operator's request or time budget.
+func (c *Config) ConfigureRules(rules []rule.Rule) error {
+	c.Rules = nil
+	for _, r := range rules {
+		if !r.IsEnabled() || r.Decision == nil {
+			continue
+		}
+		p, err := decision.FromRule(r)
+		if err != nil {
+			return err
+		}
+		q := r.Decision
+		b := decision.Binding{
+			Enabled: true, SendContent: true, PolicySHA256: p.Digest(),
+			View: q.View, Mode: decision.Monitor, MatchThreshold: q.MatchThreshold,
+			DenyThreshold: q.DenyThreshold, BudgetMS: min(c.TimeoutMS, c.BudgetMS),
+			MaxRequestBytes: c.MaxRequestBytes, MaxHistoryCalls: q.MaxHistoryCalls,
+		}
+		if r.IsEnforceEligible() {
+			b.Mode = decision.Enforce
+		}
+		if b.View == "" {
+			b.View = decision.Action
+		}
+		if b.View == decision.Session && b.MaxHistoryCalls == 0 {
+			b.MaxHistoryCalls = max(1, c.State.MaxCalls-1)
+		}
+		if b.BudgetMS > c.BudgetMS || b.MaxRequestBytes > c.MaxRequestBytes {
+			return fmt.Errorf("rule %q: decision limits exceed evaluator limits", r.ID)
+		}
+		if err := b.Validate(p); err != nil {
+			return fmt.Errorf("rule %q: %w", r.ID, err)
+		}
+		minimum, err := requestBody(c.Provider.Profile, p.Policy(), json.RawMessage(`{}`))
+		if err != nil || len(minimum) > b.MaxRequestBytes {
+			return fmt.Errorf("rule %q: max_request_bytes is smaller than the policy envelope", r.ID)
+		}
+		b.EnvelopeBytes = len(minimum) - len(`{}`)
+		c.Rules = append(c.Rules, ConfiguredRule{Binding: b, Rule: r, Compiled: p})
+	}
+	return nil
+}
+
 func absolutePath(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path
 }
 
 func (c *Config) Digest() string { return c.digest }
 
-// EnforcementBlockers reports configuration prerequisites only. An empty list
-// does not establish host activation, final arguments, complete input, a valid
-// model response, or successful output delivery.
-func (c *Config) EnforcementBlockers(b ConfiguredBinding) []string {
+func (c *Config) EnforcementBlockers(r ConfiguredRule) []string {
 	var reasons []string
-	if c == nil || !c.Enabled {
-		reasons = append(reasons, "configuration disabled")
+	if !r.Enabled {
+		reasons = append(reasons, "rule disabled")
 	}
-	if !b.Enabled {
-		reasons = append(reasons, "binding disabled")
-	}
-	if !b.SendContent {
-		reasons = append(reasons, "send_content not authorized")
-	}
-	if b.Mode != decision.Enforce {
-		reasons = append(reasons, "binding not in enforce mode")
-	}
-	if b.Compiled == nil {
-		reasons = append(reasons, "policy not validated")
-	} else if !b.Compiled.Policy().Enforce {
-		reasons = append(reasons, "policy enforce is false")
-	}
-	if c == nil || !c.NoArgumentRewriters {
-		reasons = append(reasons, "no_argument_rewriters not asserted")
+	if r.Compiled == nil || !r.Compiled.Policy().Enforce {
+		reasons = append(reasons, "rule enforce is false")
 	}
 	return reasons
 }
 
-// Factory reads credentials only after Run has selected a policy and bounded
-// the invocation. It never consults environment variables or retries providers.
-func (c *Config) Factory(name string) Factory {
+// Factory reads credentials only for a selected, budgeted evaluation.
+func (c *Config) Factory() Factory {
 	return func(profile Profile) (Provider, error) {
-		p, ok := c.Providers[name]
-		if !ok || p.Profile != profile {
+		p := c.Provider
+		if p.Profile.Digest() != profile.Digest() {
 			return nil, errors.New("decision provider identity mismatch")
 		}
-		token, err := readProtected(p.TokenFile, 4096, c.userOwned, true)
+		token, err := readProtected(p.TokenFile, 4096, true, true)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +183,7 @@ func (c *Config) Factory(name string) Factory {
 			return nil, err
 		}
 		if p.CAFile != "" {
-			pem, err := readProtected(p.CAFile, 128<<10, c.userOwned, false)
+			pem, err := readProtected(p.CAFile, 128<<10, true, false)
 			if err != nil {
 				return nil, err
 			}

@@ -205,7 +205,7 @@ func sourceLabel(p Source) string {
 }
 
 // validateRule checks the shape shared by both rule kinds and the
-// exactly-one-of {expr, sequence} branch. Sequence-specific structure is
+// exactly-one-of {expr, sequence, decision} branch. Sequence-specific structure is
 // validated by SequenceSpec.validate; step compilation happens in compileRule.
 func validateRule(r Rule) error {
 	if err := validateCleanRequired("id", r.ID); err != nil {
@@ -243,6 +243,15 @@ func validateRule(r Rule) error {
 	}
 	if !model.IsValidSeverity(r.Severity) {
 		return fmt.Errorf("rule %q: invalid severity %q", r.ID, r.Severity)
+	}
+	if r.Decision != nil {
+		if strings.TrimSpace(r.Expr) != "" || r.Sequence != nil {
+			return fmt.Errorf("rule %q: expr, sequence and decision are mutually exclusive", r.ID)
+		}
+		if err := r.Decision.validate(r.IsEnforceEligible()); err != nil {
+			return fmt.Errorf("rule %q: %w", r.ID, err)
+		}
+		return nil
 	}
 	switch {
 	case strings.TrimSpace(r.Expr) == "" && r.Sequence == nil:
@@ -292,6 +301,10 @@ func isRuleIDAlnum(c byte) bool {
 // type, known event fields). A sequence rule also distills its validated
 // window into the SequenceRule a tracker consumes.
 func compileRule(env *cel.Env, expressions map[string]compiledExpression, checked CheckedExpressions, r Rule) (compiledRule, error) {
+	if r.Decision != nil {
+		prg, err := compileCachedExpr(env, expressions, checked, r.Decision.Select)
+		return compiledRule{rule: r, program: prg}, err
+	}
 	if r.Sequence == nil {
 		prg, err := compileCachedExpr(env, expressions, checked, r.Expr)
 		if err != nil {
@@ -706,7 +719,7 @@ func (e *Engine) eval(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
 		errs    []EvalError
 	)
 	for _, c := range e.rules {
-		if c.seq != nil {
+		if c.seq != nil || c.rule.Decision != nil {
 			continue
 		}
 		if activations.err != nil && c.program.usesShellCommands && !activations.shellUsable {

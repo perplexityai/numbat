@@ -29,9 +29,9 @@ const internalPrefix = modulePath + "/internal/"
 // Plane membership. Names are the package's path under internal/ (e.g. "model"
 // or a nested package such as "rule/foo").
 var (
-	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile", "decision"}
+	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile", "decision", "evaluator"}
 	forensicsPkgs  = []string{"extract", "discover", "casebundle"}
-	monitoringPkgs = []string{"hook", "otel", "state", "evaluator"}
+	monitoringPkgs = []string{"hook", "otel", "state"}
 )
 
 // nonPlane lists internal packages that intentionally belong to no plane:
@@ -182,7 +182,7 @@ func internalImports(t *testing.T) map[string][]string {
 // hook/collect are the monitoring-side entrypoints: they must not touch the
 // forensics plane (extract/discover/casebundle).
 var (
-	forbidMonitoring = []string{"hook", "otel", "state", "evaluator", bboltPath}
+	forbidMonitoring = []string{"hook", "otel", "state", bboltPath}
 	forbidForensics  = []string{"extract", "discover", "casebundle"}
 )
 

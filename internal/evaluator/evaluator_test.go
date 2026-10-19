@@ -43,7 +43,7 @@ func invocation(t *testing.T) Invocation {
 			MatchThreshold: .9, DenyThreshold: .99, BudgetMS: 1000, MaxRequestBytes: 131072,
 			MaxHistoryCalls: 64, SendContent: true,
 		},
-		Profile: Profile{"decisions-v1", "https://provider.example/v1/decisions", "fixture-model", 65536},
+		Profile: Profile{Protocol: "decisions-v1", Endpoint: "https://provider.example/v1/decisions", Model: "fixture-model", MaxResponseBytes: 65536},
 		Event:   model.Event{EventID: "e3", SourceAgent: "claude", SessionID: "s1", ToolCallID: "c3", EventType: "tool.call"},
 		Evidence: decision.Evidence{
 			Subject:  decision.Subject{Installation: "fixture", Agent: "claude", Session: "s1", Generation: "epoch", CallID: "c3", EventID: "e3"},

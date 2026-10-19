@@ -1,8 +1,15 @@
 # Writing rules
 
-Each numbat rule is one YAML file with [CEL](https://cel.dev/) boolean
-expressions. It evaluates either one [normalized event](event-model.md) or an
-ordered sequence of events.
+Each numbat rule is one YAML file. Use exactly one rule body: `expr:` for a
+[CEL](https://cel.dev/) match on a [normalized event](event-model.md),
+`sequence:` for an ordered chain, or experimental `decision:` for model
+classification. All three share catalog IDs, overrides and enforcement flags.
+
+[Decision rules](design/decision-evaluators.md) contain a CEL selector,
+plain-language criteria and probability thresholds. They require a separate,
+explicit `--decision-config` for model access; loading or checking the rule
+does not send evidence. `rules test` evaluates deterministic rules only and
+reports skipped decision rules. Its assertions cannot establish model accuracy.
 
 Rule expressions can use:
 

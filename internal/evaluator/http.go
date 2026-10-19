@@ -20,10 +20,19 @@ import (
 
 // Profile contains the non-secret provider settings bound to each request.
 type Profile struct {
-	Protocol         string `json:"protocol" yaml:"protocol"`
-	Endpoint         string `json:"endpoint" yaml:"endpoint"`
-	Model            string `json:"model" yaml:"model"`
-	MaxResponseBytes int    `json:"max_response_bytes" yaml:"max_response_bytes"`
+	Protocol         string   `json:"protocol" yaml:"protocol"`
+	Endpoint         string   `json:"endpoint" yaml:"endpoint"`
+	Model            string   `json:"model" yaml:"model"`
+	MaxResponseBytes int      `json:"max_response_bytes" yaml:"max_response_bytes"`
+	ExpectedModel    string   `json:"expected_model,omitempty" yaml:"expected_model,omitempty"`
+	Routing          *Routing `json:"routing,omitempty" yaml:"routing,omitempty"`
+}
+
+// Routing is the explicit OpenRouter extension, not an arbitrary request patch.
+type Routing struct {
+	AllowFallbacks bool   `json:"allow_fallbacks" yaml:"allow_fallbacks"`
+	DataCollection string `json:"data_collection" yaml:"data_collection"`
+	ZDR            bool   `json:"zdr,omitempty" yaml:"zdr,omitempty"`
 }
 
 func (p Profile) Validate() error {
@@ -38,10 +47,23 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.Model) != p.Model || p.Model == "" || len(p.Model) > 256 {
 		return errors.New("model must contain 1..256 bytes without surrounding whitespace")
 	}
+	if strings.TrimSpace(p.ExpectedModel) != p.ExpectedModel || len(p.ExpectedModel) > 256 {
+		return errors.New("expected_model must contain at most 256 bytes without surrounding whitespace")
+	}
+	if p.Routing != nil && p.Routing.DataCollection != "deny" && p.Routing.DataCollection != "allow" {
+		return errors.New("routing.data_collection must be deny or allow")
+	}
 	if p.MaxResponseBytes < 1024 || p.MaxResponseBytes > 1024*1024 {
 		return errors.New("max_response_bytes must be between 1024 and 1048576")
 	}
 	return nil
+}
+
+func (p Profile) responseModel() string {
+	if p.ExpectedModel != "" {
+		return p.ExpectedModel
+	}
+	return p.Model
 }
 
 func (p Profile) Digest() string {
@@ -64,6 +86,10 @@ func NewHTTP(p Profile, token string) (*HTTP, error) {
 		token == "" || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("invalid provider configuration or credential")
 	}
+	if p.Routing != nil {
+		routing := *p.Routing
+		p.Routing = &routing
+	}
 	transport := &http.Transport{
 		Proxy: nil, DialContext: (&net.Dialer{}).DialContext,
 		ForceAttemptHTTP2: true, DisableKeepAlives: true,
@@ -83,7 +109,7 @@ func NewHTTP(p Profile, token string) (*HTTP, error) {
 
 func (h *HTTP) Evaluate(ctx context.Context, r decision.Request, c *decision.Compiled, maxBytes int) (decision.Reply, error) {
 	if c == nil || c.Digest() == "" || !r.Valid() || r.PolicyDigest != c.Digest() ||
-		r.ProfileDigest != h.profile.Digest() || r.Model != h.profile.Model ||
+		r.ProfileDigest != h.profile.Digest() || r.Model != h.profile.responseModel() ||
 		maxBytes < 1 || maxBytes > 1024*1024 {
 		return decision.Reply{}, ErrInput
 	}
@@ -129,7 +155,7 @@ func (h *HTTP) Evaluate(ctx context.Context, r decision.Request, c *decision.Com
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&wire) != nil || wire.Model != h.profile.Model || len(wire.Answers) != 1 {
+	if dec.Decode(&wire) != nil || wire.Model != h.profile.responseModel() || len(wire.Answers) != 1 {
 		return decision.Reply{}, ErrResponse
 	}
 	truncated, err := reportedTruncation(wire.Usage)
@@ -179,8 +205,10 @@ func requestBody(profile Profile, p decision.Policy, state json.RawMessage) ([]b
 		Model     string                    `json:"model"`
 		State     json.RawMessage           `json:"state"`
 		Questions map[string]map[string]any `json:"questions"`
+		Provider  *Routing                  `json:"provider,omitempty"`
 	}{
 		Model: profile.Model, State: state,
+		Provider: profile.Routing,
 		Questions: map[string]map[string]any{"policy": {
 			"type": "choice", "instructions": p.Decision.Instructions, "criteria": p.Decision.Options,
 		}},

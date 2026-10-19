@@ -49,7 +49,7 @@ source-specific and omitted when the source does not record them.
 ## Migration from 0.5.0
 
 Records are stamped `0.6.0`. Strict consumers must select this directory.
-Existing event and finding shapes are unchanged. The new opt-in `assessment`
+Existing event fields remain compatible. The new opt-in `assessment`
 record describes a model result, configured thresholds, evidence eligibility,
 and a semantic deny candidate; it does not establish host blocking. Its
 `provider_model` is the configured classifier, not the agent's model or proof
@@ -61,11 +61,11 @@ string `agent_id`, preserving the shared `session_id`. Child timeline groups
 therefore separate from the parent; no new parent or tree relationship is
 inferred. See the [event model](../../event-model.md).
 
-Assessment `mode` is the configured binding mode; enforcement `mode` is the
-global hook mode. `user_config` means the operator permitted user-owned
-configuration, not that numbat observed that ownership on every file.
+Assessment `mode` is the rule's monitor/enforce setting; enforcement `mode` is
+the global hook mode. `rule_digest` identifies the loaded decision definition;
+`returned_model` records the validated response identity.
 `match_threshold` and `deny_threshold` are configured cutoffs, not predicted
-probabilities. A monitor binding may omit `deny_threshold` entirely.
+probabilities. A monitor rule may omit `deny_threshold` entirely.
 
 `input_eligible: false` means eligibility was not positively established, not
 necessarily a known capture gap. Read `status`, `reason` and `gaps` together:
@@ -74,14 +74,12 @@ from a positively observed `stale_snapshot`. Provider failure does not remove
 known gaps or turn a complete action-only input into an incomplete one.
 
 Decision-based findings carry the `decision_model` tag and their input-view tag.
-They join to assessment records through policy, action, session and view; one
-policy can be assessed in both views. Assessment records have an `assessment_id`.
-Enforcement records link semantic matches with `assessment_ids` instead of
-adding policy IDs to `rule_ids`. A semantic deny uses
-`reason: semantic_policy_match` and `deny_policy_id`, `deny_policy_version`,
-`deny_assessment_id`; a deterministic deny retains `enforce_rule_match` and
-`deny_rule_id`/`deny_rule_version`. `rule_ids` is optional for semantic-only
-records. The two deny sources are mutually exclusive in one computed effect.
+They add `assessment_id` and optional `decision_gaps`. Assessments use the
+ordinary `rule_id`/`rule_version`. Enforcement records include decision rules
+in `rule_ids` and link their assessments with `assessment_ids`. A semantic deny
+uses `reason: semantic_policy_match`, ordinary `deny_rule_id`/`deny_rule_version`
+and `deny_assessment_id`; a deterministic deny retains `enforce_rule_match`.
+The two deny sources are mutually exclusive in one computed effect.
 Case bundles preserve case-scoped assessments in `assessments.ndjson`.
 Offline tools never rerun a classifier merely by reading these records.
 

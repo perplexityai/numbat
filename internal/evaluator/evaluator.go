@@ -86,7 +86,7 @@ func Run(parent context.Context, in Invocation, factory Factory) (assessment dec
 		return decision.Failure("unavailable", "invocation_identity")
 	}
 	request, err := decision.Prepare(in.Policy, b, in.Evidence, hex.EncodeToString(nonce),
-		in.Profile.Digest(), in.Profile.Model, deadline)
+		in.Profile.Digest(), in.Profile.responseModel(), deadline)
 	if err != nil {
 		return decision.Failure("skipped", "invalid_or_oversized_input")
 	}
@@ -137,6 +137,9 @@ func Run(parent context.Context, in Invocation, factory Factory) (assessment dec
 		return fail("timeout", "deadline")
 	}
 	a := decision.Reduce(in.Policy, b, request, reply, revision, time.Now())
+	if a.Status == "completed" {
+		a.ReturnedModel = reply.Model
+	}
 	if b.View == decision.Session && !confirmed {
 		a.InputEligible, a.DenyCandidate = false, false
 		if !slices.Contains(a.Gaps, "state_unavailable") {

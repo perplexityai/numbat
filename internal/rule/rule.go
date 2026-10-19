@@ -39,6 +39,8 @@ type Rule struct {
 	// the final step, the rule produces one finding citing each contributing
 	// event.
 	Sequence *SequenceSpec `yaml:"sequence,omitempty"`
+	// Decision selects model evaluation. Selection alone is never a finding.
+	Decision *DecisionSpec `yaml:"decision,omitempty"`
 	// Tags are attached to findings this rule produces.
 	Tags []string `yaml:"tags,omitempty"`
 	// Enabled controls evaluation. Disabled rules are still validated and
@@ -188,6 +190,14 @@ type Match struct {
 }
 
 func cloneRule(r Rule) Rule {
+	if r.Decision != nil {
+		spec := *r.Decision
+		spec.Options = make(map[string]string, len(r.Decision.Options))
+		for key, value := range r.Decision.Options {
+			spec.Options[key] = value
+		}
+		r.Decision = &spec
+	}
 	r.Tags = append([]string(nil), r.Tags...)
 	if r.Enabled != nil {
 		enabled := *r.Enabled

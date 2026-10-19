@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/perplexityai/numbat/internal/evaluator"
 	"github.com/perplexityai/numbat/internal/finding"
 	"github.com/perplexityai/numbat/internal/otel"
 	"github.com/perplexityai/numbat/internal/output"
@@ -77,6 +78,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	httpGzip := fs.Bool("http-gzip", false, "gzip the HTTP POST body")
 	var rf ruleFlags
 	rf.register(fs)
+	decisionConfig := fs.String("decision-config", "", "enable model classification using this provider configuration; sends selected evidence to its endpoint")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat collect [--addr 127.0.0.1:4318] [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		fmt.Fprintln(stderr, "\nReceives live OTLP/HTTP protobuf logs from supported AI agents and emits")
@@ -163,12 +165,13 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	rid := runID()
 	em := output.NewWithSink(sink, stderr, rid, contentEmitterOptions(content, scope, *maxRecordBytes)...)
 	rcv, err := newCollector(collectorConfig{
-		emit:      em,
-		runID:     rid,
-		caseID:    *caseID,
-		sel:       sel,
-		ruleDirs:  rf.dirs,
-		noBuiltin: rf.noBuiltin,
+		emit:           em,
+		runID:          rid,
+		caseID:         *caseID,
+		sel:            sel,
+		ruleDirs:       rf.dirs,
+		noBuiltin:      rf.noBuiltin,
+		decisionConfig: *decisionConfig,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "collect: %v\n", err)
@@ -274,12 +277,13 @@ func warnIfOffLoopback(addr string, stderr io.Writer) {
 
 // collectorConfig carries the resolved dependencies a collector needs.
 type collectorConfig struct {
-	emit      *output.Emitter
-	runID     string
-	caseID    string
-	sel       emitSelection
-	ruleDirs  multiFlag
-	noBuiltin bool
+	decisionConfig string
+	emit           *output.Emitter
+	runID          string
+	caseID         string
+	sel            emitSelection
+	ruleDirs       multiFlag
+	noBuiltin      bool
 }
 
 // collector holds the per-receiver state: the shared pipeline every record flows
@@ -331,6 +335,19 @@ func newCollector(cfg collectorConfig) (*collector, error) {
 		Findings:   cfg.sel.findings,
 		Indicators: cfg.sel.indicators,
 	}, finding.Options{}, c.indicators)
+	if cfg.decisionConfig != "" {
+		if !cfg.sel.findings {
+			return nil, fmt.Errorf("--decision-config requires findings output")
+		}
+		decisions, err := evaluator.LoadConfig(cfg.decisionConfig)
+		if err == nil {
+			err = decisions.ConfigureRules(eng.DecisionRules())
+		}
+		if err != nil {
+			return nil, err
+		}
+		c.pipe.WithDecisionObserver(decisions.Monitor(cfg.emit))
+	}
 	// Sequence rules correlate across the receiver's lifetime: one tracker for
 	// the whole run, internally locked, so the concurrent OTLP handlers feed
 	// session windows safely. Only built when findings are evaluated and the

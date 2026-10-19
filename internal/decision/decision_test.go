@@ -244,8 +244,10 @@ func TestLongSessionProjection(t *testing.T) {
 		t.Fatalf("count-trimmed prefix not qualified: %+v", a)
 	}
 	b.MaxHistoryCalls, b.MaxRequestBytes = 4096, 1024
-	if _, err := Prepare(c, b, e, "fresh-invocation", "profile-digest", "test-model", now.Add(time.Second)); err == nil {
-		t.Fatal("larger count limit bypassed request byte limit")
+	trimmed, err := Prepare(c, b, e, "fresh-invocation", "profile-digest", "test-model", now.Add(time.Second))
+	if err != nil || len(trimmed.State) > b.MaxRequestBytes || trimmed.Eligible ||
+		!slices.Contains(trimmed.Gaps, "history_bytes_limit") {
+		t.Fatalf("history byte cap not visible and enforced: %+v %v", trimmed, err)
 	}
 }
 

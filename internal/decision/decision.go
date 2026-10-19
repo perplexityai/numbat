@@ -69,8 +69,10 @@ type Assessment struct {
 	Version        string             `json:"version"`
 	RequestID      string             `json:"request_id,omitempty"`
 	RequestDigest  string             `json:"request_digest,omitempty"`
-	PolicyID       string             `json:"policy_id,omitempty"`
-	PolicyVersion  string             `json:"policy_version,omitempty"`
+	PolicyID       string             `json:"rule_id,omitempty"`
+	PolicyVersion  string             `json:"rule_version,omitempty"`
+	RuleDigest     string             `json:"rule_digest,omitempty"`
+	ReturnedModel  string             `json:"returned_model,omitempty"`
 	View           string             `json:"view,omitempty"`
 	Status         string             `json:"status"`
 	Reason         string             `json:"reason"`
@@ -99,11 +101,12 @@ func Prepare(c *Compiled, b Binding, e Evidence, id, profileDigest, model string
 	}
 	s := e.Subject
 	if id == "" || profileDigest == "" || model == "" || deadline.IsZero() ||
-		s.Installation == "" || s.Agent == "" || s.Session == "" ||
-		s.Generation == "" || s.CallID == "" || s.EventID == "" {
+		s.Installation == "" || s.Agent == "" ||
+		s.Generation == "" || s.EventID == "" {
 		return Request{}, errors.New("decision invocation identity incomplete")
 	}
-	if len(e.Current) > b.MaxRequestBytes || len(e.OperatorContext) > b.MaxRequestBytes ||
+	limit := b.MaxRequestBytes - b.EnvelopeBytes
+	if len(e.Current) > limit || len(e.OperatorContext) > limit ||
 		!jsonObject(e.Current) || !jsonObject(e.OperatorContext) {
 		return Request{}, errors.New("decision evidence requires JSON objects")
 	}
@@ -112,16 +115,16 @@ func Prepare(c *Compiled, b Binding, e Evidence, id, profileDigest, model string
 		PolicyDigest: c.Digest(), BindingDigest: hashJSON(b), ProfileDigest: profileDigest,
 		Model: model, View: b.View, Deadline: deadline, Eligible: e.CurrentComplete,
 	}
-	r.Gaps = append(r.Gaps, e.Gaps...)
-	if len(e.Gaps) != 0 {
-		r.Eligible = false
-	}
 	if !e.CurrentComplete {
 		r.Gaps = append(r.Gaps, "current_incomplete")
 	}
 	history := []json.RawMessage(nil)
 	coverage := "omitted_by_view"
 	if b.View == Session {
+		r.Gaps = append(r.Gaps, e.Gaps...)
+		if s.Session == "" || s.CallID == "" {
+			r.Gaps = append(r.Gaps, "missing_call_identity_or_input")
+		}
 		history = e.History
 		coverage = "complete_prefix"
 		if !e.PrefixComplete {
@@ -134,12 +137,7 @@ func Prepare(c *Compiled, b Binding, e Evidence, id, profileDigest, model string
 			history = history[len(history)-b.MaxHistoryCalls:]
 			r.Gaps = append(r.Gaps, "history_limit")
 		}
-		total := len(e.Current) + len(e.OperatorContext)
 		for _, entry := range history {
-			if len(entry) > b.MaxRequestBytes-total {
-				return Request{}, errors.New("decision history exceeds evidence limit")
-			}
-			total += len(entry)
 			if !jsonObject(entry) {
 				return Request{}, errors.New("decision history requires JSON objects")
 			}
@@ -150,13 +148,27 @@ func Prepare(c *Compiled, b Binding, e Evidence, id, profileDigest, model string
 		}
 	}
 	state := struct {
-		Current  json.RawMessage   `json:"current_pending_call"`
+		Current  json.RawMessage   `json:"current_event"`
 		History  []json.RawMessage `json:"history,omitempty"`
 		Coverage string            `json:"history_coverage"`
 		Operator json.RawMessage   `json:"operator_context"`
 	}{e.Current, history, coverage, e.OperatorContext}
 	data, err := json.Marshal(state)
-	if err != nil || len(data) > b.MaxRequestBytes {
+	if err == nil && len(data) > limit && len(state.History) != 0 {
+		remaining := len(data) - limit
+		for len(state.History) > 0 && remaining > 0 {
+			entry, marshalErr := json.Marshal(state.History[0])
+			if marshalErr != nil {
+				return Request{}, marshalErr
+			}
+			remaining -= len(entry) + 1
+			state.History = state.History[1:]
+		}
+		r.Gaps = append(r.Gaps, "history_bytes_limit")
+		r.Eligible, state.Coverage = false, "partial_prefix"
+		data, err = json.Marshal(state)
+	}
+	if err != nil || len(data) > limit {
 		return Request{}, errors.New("decision request exceeds evidence limit")
 	}
 	r.State = data

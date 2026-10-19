@@ -195,7 +195,7 @@ func TestHelpSubcommandDispatch(t *testing.T) {
 		t.Fatalf("hook install help should come from the hook admin command, got stdout=%q stderr=%q", out, errb)
 	}
 
-	for _, action := range []string{"check", "digest"} {
+	for _, action := range []string{"check"} {
 		out, errb, code = runCLI("help", "decisions", action)
 		if code != 0 || errb != "" || !strings.Contains(out, "usage: numbat decisions "+action) {
 			t.Fatalf("decisions help dispatch: exit=%d stdout=%q stderr=%q", code, out, errb)

@@ -178,6 +178,11 @@ func runCompanionRuleTestFile(path string, eng *rule.Engine, knownRules map[stri
 	if _, ok := knownRules[tf.RuleID]; !ok {
 		return 0, fmt.Errorf("rule tests %q: unknown rule_id %q", path, tf.RuleID)
 	}
+	for _, r := range eng.DecisionRules() {
+		if r.ID == tf.RuleID {
+			return 0, fmt.Errorf("rule tests %q: decision-model matches cannot be tested by offline companion fixtures", path)
+		}
+	}
 	if len(tf.Cases) == 0 {
 		return 0, fmt.Errorf("rule tests %q: no cases", path)
 	}

@@ -27,15 +27,14 @@ type DecisionAssessment struct {
 	Provider       string   `json:"provider"`
 	ProviderModel  string   `json:"provider_model"`
 	ConfigDigest   string   `json:"config_digest"`
-	BindingMode    string   `json:"mode"`        // Configured binding mode, not the hook's global mode.
-	AllowUserOwned bool     `json:"user_config"` // Permission to use current-user-owned files, not observed ownership.
+	BindingMode    string   `json:"mode"` // Rule effect, not the hook's global mode.
 }
 
 func (e *Emitter) EmitAssessment(a DecisionAssessment) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if a.SchemaVersion != model.SchemaVersion || a.Version != decision.Version ||
-		a.AssessmentID == "" || a.Status == "" || a.Reason == "" || a.SourceType != model.SourceHook ||
+		a.AssessmentID == "" || a.Status == "" || a.Reason == "" || !model.IsValidSourceType(a.SourceType) ||
 		len(a.ActionEventIDs) == 0 {
 		e.recordErrors++
 		return errors.New("invalid decision assessment record")

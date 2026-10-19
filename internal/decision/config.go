@@ -9,11 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
-	"regexp"
-	"slices"
-	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/rule"
@@ -27,8 +23,7 @@ const (
 	Enforce = "enforce"
 )
 
-// Policy is a separately loaded semantic policy, not an existing CEL rule.
-// A selector dispatches evaluation; matching it does not produce a finding.
+// Policy is the immutable model-facing projection of a decision rule.
 type Policy struct {
 	ID       string   `json:"id" yaml:"id"`
 	Version  string   `json:"version" yaml:"version"`
@@ -40,15 +35,10 @@ type Policy struct {
 
 // Question defines one mutually exclusive classification with an explicit
 // non-matching abstention. Select controls dispatch, not the classification.
-type Question struct {
-	Select        string            `json:"select" yaml:"select"`
-	Instructions  string            `json:"instructions" yaml:"instructions"`
-	Options       map[string]string `json:"options" yaml:"options"`
-	MatchOption   string            `json:"match_option" yaml:"match_option"`
-	AbstainOption string            `json:"abstain_option" yaml:"abstain_option"`
-}
+type Question = rule.DecisionSpec
 
-// Binding contains operator-owned settings. Zero values do not enable I/O.
+// Binding is the internal resolved rule/runtime contract, not a configuration
+// catalog. Zero values do not enable I/O.
 type Binding struct {
 	Enabled         bool    `json:"enabled" yaml:"enabled"`
 	PolicySHA256    string  `json:"policy_sha256" yaml:"policy_sha256"`
@@ -58,6 +48,7 @@ type Binding struct {
 	DenyThreshold   float64 `json:"deny_threshold" yaml:"deny_threshold"`
 	BudgetMS        int     `json:"budget_ms" yaml:"budget_ms"`
 	MaxRequestBytes int     `json:"max_request_bytes" yaml:"max_request_bytes"`
+	EnvelopeBytes   int     `json:"envelope_bytes"`
 	MaxHistoryCalls int     `json:"max_history_calls" yaml:"max_history_calls"`
 	SendContent     bool    `json:"send_content" yaml:"send_content"`
 }
@@ -68,8 +59,6 @@ type Compiled struct {
 	selector *rule.Engine
 	digest   string
 }
-
-var optionKey = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // LoadPolicy decodes one bounded YAML document and validates its policy.
 func LoadPolicy(r io.Reader) (*Compiled, error) {
@@ -88,22 +77,8 @@ func LoadPolicy(r io.Reader) (*Compiled, error) {
 func Compile(p Policy) (*Compiled, error) {
 	p = clonePolicy(p)
 	q := p.Decision
-	if strings.TrimSpace(q.Instructions) == "" || len(q.Instructions) > 32768 {
-		return nil, errors.New("decision instructions missing or oversized")
-	}
-	if len(q.Options) < 2 || len(q.Options) > 32 {
-		return nil, errors.New("decision needs 2..32 options")
-	}
-	for _, k := range slices.Sorted(maps.Keys(q.Options)) {
-		if !optionKey.MatchString(k) {
-			return nil, errors.New("decision.options keys must match ^[a-z][a-z0-9_]{0,63}$")
-		}
-		if description := q.Options[k]; strings.TrimSpace(description) == "" || len(description) > 8192 {
-			return nil, fmt.Errorf("decision.options[%q] must contain 1..8192 bytes of non-blank text", k)
-		}
-	}
-	if q.MatchOption == q.AbstainOption || q.Options[q.MatchOption] == "" || q.Options[q.AbstainOption] == "" {
-		return nil, errors.New("decision needs distinct match and abstain options")
+	if err := q.ValidateQuestion(); err != nil {
+		return nil, err
 	}
 	engine, err := rule.NewEngine([]rule.Source{{Name: "decision-selector", Rules: []rule.Rule{{
 		ID: p.ID, Version: p.Version, Title: p.Title, Severity: p.Severity, Expr: q.Select,
@@ -112,6 +87,16 @@ func Compile(p Policy) (*Compiled, error) {
 		return nil, fmt.Errorf("decision policy: %w", err)
 	}
 	return &Compiled{policy: p, selector: engine, digest: hashJSON(p)}, nil
+}
+
+func FromRule(r rule.Rule) (*Compiled, error) {
+	if r.Decision == nil {
+		return nil, errors.New("rule has no decision")
+	}
+	return Compile(Policy{
+		ID: r.ID, Version: r.Version, Title: r.Title, Severity: r.Severity,
+		Enforce: r.IsEnforceEligible(), Decision: *r.Decision,
+	})
 }
 
 func (c *Compiled) Policy() Policy { return clonePolicy(c.policy) }
@@ -146,6 +131,9 @@ func (b Binding) Validate(c *Compiled) error {
 	}
 	if b.MaxRequestBytes < 1 || b.MaxRequestBytes > 1024*1024 {
 		return errors.New("max_request_bytes must be between 1 and 1048576")
+	}
+	if b.EnvelopeBytes < 0 || b.EnvelopeBytes >= b.MaxRequestBytes {
+		return errors.New("provider envelope leaves no evidence budget")
 	}
 	if b.MaxHistoryCalls < 0 || b.MaxHistoryCalls > maxContextCalls || (b.View == Session && b.MaxHistoryCalls == 0) {
 		return fmt.Errorf("max_history_calls must be between 1 and %d for session view; may be omitted for action view", maxContextCalls)

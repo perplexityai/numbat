@@ -86,6 +86,9 @@ func (db *DB) ObserveDecision(namespace string, o decision.Observation, limits d
 		}
 		s.Revision++
 		s.Last = now.UnixMilli()
+		if o.HistoryGap {
+			s.gap("capture_gap")
+		}
 		current := -1
 		switch o.Phase {
 		case "start":

@@ -20,3 +20,14 @@ func openEvidenceFile(path string, flag int, perm os.FileMode) (*os.File, error)
 	}
 	return f, nil
 }
+
+func prepareEvidenceDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("state: evidence directory must be private")
+	}
+	return nil
+}

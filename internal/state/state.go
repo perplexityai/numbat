@@ -40,16 +40,14 @@ func open(path string, timeout time.Duration, evidence bool) (*DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("state: empty database path")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("state: %w", err)
-	}
 	opts := &bolt.Options{Timeout: timeout}
 	if evidence {
-		info, err := os.Lstat(filepath.Dir(path))
-		if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-			return nil, fmt.Errorf("state: evidence directory must be private")
+		if err := prepareEvidenceDirectory(filepath.Dir(path)); err != nil {
+			return nil, err
 		}
 		opts.OpenFile = openEvidenceFile
+	} else if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("state: %w", err)
 	}
 	b, err := bolt.Open(path, 0o600, opts)
 	if err != nil {

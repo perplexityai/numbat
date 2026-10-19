@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "numbat decision assessment",
-  "description": "A bounded model assessment of a proposed action. A deny candidate is not proof of control-response delivery or host blocking.",
+  "description": "A bounded model assessment of an observed or proposed action. A deny candidate is not proof of control-response delivery or host blocking.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version", "record_type", "run_id", "endpoint", "version", "timestamp", "assessment_id",
     "source_agent", "source_type", "action_event_ids", "provider", "provider_model",
-    "config_digest", "mode", "user_config", "status", "reason", "input_eligible",
+    "config_digest", "mode", "status", "reason", "input_eligible",
     "matched", "deny_candidate"
   ],
   "properties": {
@@ -21,8 +21,10 @@
     "case_id": { "type": "string" },
     "request_id": { "type": "string" },
     "request_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "policy_id": { "type": "string" },
-    "policy_version": { "type": "string" },
+    "rule_id": { "type": "string" },
+    "rule_version": { "type": "string" },
+    "rule_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "returned_model": { "type": "string", "minLength": 1 },
     "view": { "enum": ["action", "session"] },
     "status": { "enum": ["completed", "timeout", "unavailable", "invalid_response", "skipped"] },
     "reason": { "type": "string", "minLength": 1 },
@@ -39,8 +41,8 @@
     "gaps": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "matched": { "type": "boolean" },
     "deny_candidate": { "type": "boolean" },
-    "source_agent": { "const": "claude-code" },
-    "source_type": { "const": "hook" },
+    "source_agent": { "$ref": "event-record.schema.json#/properties/source_agent" },
+    "source_type": { "$ref": "event-record.schema.json#/properties/source_type" },
     "session_id": { "type": "string" },
     "session_tree_id": { "type": "string" },
     "sub_agent_id": { "type": "string" },
@@ -52,8 +54,7 @@
     "provider": { "type": "string" },
     "provider_model": { "type": "string" },
     "config_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "mode": { "enum": ["monitor", "enforce"] },
-    "user_config": { "type": "boolean" }
+    "mode": { "enum": ["monitor", "enforce"] }
   },
   "$defs": {
     "endpoint": {

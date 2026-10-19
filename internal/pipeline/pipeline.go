@@ -35,13 +35,21 @@ type Selection struct {
 // Indicators are folded over the whole run, so Process feeds each event to the
 // accumulator but never materializes it; the caller chooses when to snapshot it.
 type Pipeline struct {
-	engine     *rule.Engine
-	emit       *output.Emitter
-	sel        Selection
-	fopts      finding.Options
-	indicators *output.IndicatorAccumulator
-	enforce    *EnforceDecision
-	seq        SequenceObserver
+	decisionObserver func(model.Event)
+	engine           *rule.Engine
+	emit             *output.Emitter
+	sel              Selection
+	fopts            finding.Options
+	indicators       *output.IndicatorAccumulator
+	enforce          *EnforceDecision
+	seq              SequenceObserver
+}
+
+// WithDecisionObserver enables an explicitly configured classifier after local
+// rules. The callback has no native control authority.
+func (p *Pipeline) WithDecisionObserver(observe func(model.Event)) *Pipeline {
+	p.decisionObserver = observe
+	return p
 }
 
 // SequenceObserver is the window that evaluates sequence rules per event —
@@ -72,28 +80,26 @@ type EnforceDecision struct {
 
 	// The remaining fields are identifier-only context for the enforcement
 	// decision record. They never retain observed command or file content.
-	Matched           bool
-	ActionEventIDs    []string
-	FindingIDs        []string
-	RuleIDs           []string
-	DenyRuleID        string
-	DenyRuleVersion   string
-	AssessmentIDs     []string
-	DenyPolicyID      string
-	DenyPolicyVersion string
-	DenyAssessmentID  string
-	CaseID            string
-	SourceAgent       string
-	SourceType        string
-	SessionID         string
-	SessionTreeID     string
-	ParentSessionID   string
-	Model             string
-	ModelProvider     string
-	SubAgent          string
-	SubAgentID        string
-	ToolName          string
-	ToolCallID        string
+	Matched          bool
+	ActionEventIDs   []string
+	FindingIDs       []string
+	RuleIDs          []string
+	DenyRuleID       string
+	DenyRuleVersion  string
+	AssessmentIDs    []string
+	DenyAssessmentID string
+	CaseID           string
+	SourceAgent      string
+	SourceType       string
+	SessionID        string
+	SessionTreeID    string
+	ParentSessionID  string
+	Model            string
+	ModelProvider    string
+	SubAgent         string
+	SubAgentID       string
+	ToolName         string
+	ToolCallID       string
 }
 
 // WithEnforce attaches the live hook's enforcement accumulator. Monitor mode
@@ -228,6 +234,9 @@ func (p *Pipeline) Process(ev model.Event, source string) error {
 		if p.indicators.Add(ev) {
 			p.emit.Diag("warn", "indicator analysis reached a safety limit; some candidates may be omitted")
 		}
+	}
+	if p.decisionObserver != nil && p.sel.Findings {
+		p.decisionObserver(ev)
 	}
 	return nil
 }
