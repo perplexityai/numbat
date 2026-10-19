@@ -171,7 +171,7 @@ func (c *Config) EnforcementBlockers(r ConfiguredRule) []string {
 func (c *Config) Factory() Factory {
 	return func(profile Profile) (Provider, error) {
 		p := c.Provider
-		if p.Profile.Digest() != profile.Digest() {
+		if p.Digest() != profile.Digest() {
 			return nil, errors.New("decision provider identity mismatch")
 		}
 		token, err := readProtected(p.TokenFile, 4096, true, true)

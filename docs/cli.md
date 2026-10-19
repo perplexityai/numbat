@@ -693,7 +693,8 @@ select a destination on their own. See the
 [decision evaluator design](design/decision-evaluators.md) for the complete
 format, trust boundary and evidence requirements.
 
-Both modes require findings and an out-of-band file or HTTP sink. Every
+Both modes require findings; native enforce mode requires an out-of-band file
+or HTTP sink. Monitor-mode stdout selection routes records to stderr. Every
 considered enabled decision rule produces an `assessment` with its own `assessment_id`,
 separate from findings and the action-level enforcement record. A matching probability is not proof of a
 violation, and a computed deny does not prove host blocking. Model failures,

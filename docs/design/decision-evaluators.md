@@ -145,6 +145,7 @@ Native session rules use a private bbolt store at `--state-db` (default
 `~/.numbat/state.db`). It joins proposals and outcomes by call identity. Locks
 are released before network I/O. It stores bounded projected arguments/results,
 not complete transcripts, model answers, summaries or a verdict cache.
+User prompts and unrelated event-envelope fields are not automatically uploaded.
 Action-only configurations do not need decision-history storage.
 
 Only verified fresh lifecycle boundaries anchor a complete prefix. Currently

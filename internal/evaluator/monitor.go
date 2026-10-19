@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"slices"
 	"sync"
@@ -12,9 +13,7 @@ import (
 	"github.com/perplexityai/numbat/internal/output"
 )
 
-type monitorKey struct {
-	source, agent, artifact, project, session, tree, child string
-}
+type monitorKey [sha256.Size]byte
 
 type monitorWindow struct {
 	events []json.RawMessage
@@ -54,7 +53,12 @@ func (c *Config) Monitor(em *output.Emitter) func(model.Event) {
 		// A collector can receive several exporters with identical session IDs.
 		// Without a captured origin, do not invent a cross-request history.
 		if withHistory && ev.SessionID != "" && ev.Evidence.LocalPath != "" {
-			key := monitorKey{ev.SourceType, ev.SourceAgent, ev.Evidence.LocalPath, ev.ProjectPath, ev.SessionID, ev.SessionTreeID, ev.SubAgentID}
+			// Keep source-controlled identity lengths outside retained map keys.
+			identity, _ := json.Marshal([]string{
+				ev.SourceType, ev.SourceAgent, ev.Evidence.LocalPath,
+				ev.ProjectPath, ev.SessionID, ev.SessionTreeID, ev.SubAgentID,
+			})
+			key := monitorKey(sha256.Sum256(identity))
 			mu.Lock()
 			now := time.Now()
 			for k, w := range windows {
