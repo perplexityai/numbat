@@ -10,6 +10,8 @@ plain-language criteria and probability thresholds. They require a separate,
 explicit `--decision-config` for model access; loading or checking the rule
 does not send evidence. `rules test` evaluates deterministic rules only and
 reports skipped decision rules. Its assertions cannot establish model accuracy.
+For a disabled, monitor-only example needing no site-specific policy, see the
+[decision starter rule](design/decision-evaluators.md#disabled-starter-rule).
 
 Rule expressions can use:
 

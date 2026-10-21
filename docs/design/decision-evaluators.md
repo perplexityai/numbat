@@ -5,10 +5,39 @@ ordinary rule catalog, IDs, overrides, `enabled` and `enforce` settings. A separ
 provider configuration explicitly enables network access; loading a rule alone
 never sends data. Probabilities are model scores, not calibrated guarantees.
 
+## Disabled starter rule
+
+[`tool_output_injection.yaml`](../../examples/decision-rules/tool_output_injection.yaml)
+is a monitor-only example for explicit prompt-injection attempts in tool output.
+It needs no site-specific policy, allowlist or session history. It is not part of
+the embedded catalog and ships with `enabled: false` and `enforce: false`.
+
+From a repository checkout, copy it into your operator rule directory and change
+only `enabled: false` to `enabled: true`. Configure the provider and credential as
+shown below, then validate and install without `--enforce`:
+
+```sh
+mkdir -p ./my-rules
+cp examples/decision-rules/tool_output_injection.yaml ./my-rules/
+# Edit ./my-rules/tool_output_injection.yaml: set enabled: true.
+numbat rules check --rules-dir ./my-rules
+numbat decisions check --config /etc/numbat/decisions.yaml --rules-dir ./my-rules
+numbat hook install --agent claude --rules-dir ./my-rules \
+  --decision-config /etc/numbat/decisions.yaml
+```
+
+`decisions check` should list `example.tool_output_injection` in monitor mode.
+The rule reviews captured, nonempty tool/command results, not user messages or
+results the source did not capture. It cannot prevent delivery of an already
+observed result. The supplied threshold is a starting point, not calibrated
+accuracy; review findings and abstentions before relying on it.
+
 ## Configuration and examples
 
 Save this provider configuration outside your rule directory. Set the named
 environment variable in the process that launches the agent or collector.
+`operator_context` is needed only for the contextual upload example below;
+omit it for the starter rule.
 
 ```yaml
 version: "1"
