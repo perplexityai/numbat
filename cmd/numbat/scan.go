@@ -402,7 +402,7 @@ const (
 )
 
 func emitFlagHelp() string {
-	return "record kind to emit: findings, events, indicators, or all (repeatable; default findings)"
+	return "record kind to emit: findings, events, indicators, or all (repeatable; default findings)\nwith --decision-config, findings is required and includes assessments (no separate filter)"
 }
 
 // parseEmit validates the repeatable --emit flag and returns the selected record

@@ -243,6 +243,11 @@ cost. No model calls occur without the explicit configuration flag.
 
 ## Output and troubleshooting
 
+Decision evaluation requires findings output. Both `--emit findings` (the
+default) and `--emit all` include assessments as separate records in the same
+stream and sinks, not fields added to activity events. There is no independent
+assessment selector or per-outcome filter.
+
 Each active decision rule produces an `assessment` per evaluation, including
 non-matches, abstentions, errors and skips. This applies to configured hooks,
 scans and collection, not just matches that produce findings. Disabled rules,

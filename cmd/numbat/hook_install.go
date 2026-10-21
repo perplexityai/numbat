@@ -61,7 +61,7 @@ func runHookAdmin(action string, args []string, stdout, stderr io.Writer) int {
 	)
 	if action == "install" {
 		fs.BoolVar(&enforce, "enforce", false, "install in enforce mode for agents with blocking support; requires an enforcement-enabled rule or configured decision policy (default: monitor only)")
-		fs.Var(&emitValues, "emit", "records emitted by live integrations: findings, events, indicators, or all (repeatable; default findings; enforce mode requires findings)")
+		fs.Var(&emitValues, "emit", emitFlagHelp()+"; enforce mode requires findings")
 		fs.StringVar(&contentValue, "content", "preview", contentFlagHelp())
 		fs.StringVar(&contentScopeValue, "content-scope", "all", contentScopeFlagHelp())
 		fs.IntVar(&maxRecordBytes, "max-record-bytes", 0, maxRecordBytesHelp)

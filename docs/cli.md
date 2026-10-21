@@ -176,7 +176,8 @@ NUMBAT_HTTP_HMAC_KEY=... numbat scan \
 
 ### Emit modes
 
-- `findings` (default) — rule matches over the event stream.
+- `findings` (default): rule matches over the event stream, plus decision
+  assessments when `--decision-config` is set.
 - `events` — the full typed event timeline.
 - `indicators` — a deduplicated projection of indicators mined from
   the event stream (domains, IPv4/IPv6 addresses, URLs, emails, and
@@ -205,6 +206,14 @@ NUMBAT_HTTP_HMAC_KEY=... numbat scan \
   event.
 - `all` — events, findings, and indicators; enforcement records and scan
   summaries are emitted automatically when applicable.
+
+Decision evaluation requires findings output. With `--decision-config`,
+`--emit findings` and `--emit all` include a separate `assessment` record for
+each evaluated rule, including non-matches, abstentions, errors and skips.
+These records share the stream and sinks; activity events are not modified.
+There is no independent assessment selector or per-outcome filter; filter
+downstream if needed. `--content` and `--output` control retained event content
+and destinations separately.
 
 An indicator record (a `https://get.example.sh/install` URL seen twice):
 
