@@ -2,6 +2,7 @@ package decision
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/redact"
@@ -51,7 +52,7 @@ func Project(ev model.Event, phase, content string) Observation {
 	action := map[string]any{"tool": ev.ToolName, "arguments_present": input != ""}
 	if input != "" && ValidJSON([]byte(input)) {
 		action["arguments"] = json.RawMessage(input)
-		o.Complete = input != "null" && !ev.ToolInputTruncatedForAnalysis()
+		o.Complete = strings.TrimSpace(input) != "null" && !ev.ToolInputTruncatedForAnalysis()
 	} else {
 		// Some adapters expose a typed command/path rather than argument JSON.
 		// Preserve those observed fields without inventing a tool payload.

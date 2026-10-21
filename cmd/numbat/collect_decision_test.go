@@ -19,8 +19,8 @@ import (
 )
 
 func TestCollectorCancellationStopsOnlyModelWork(t *testing.T) {
-	for _, during := range []bool{false, true} {
-		t.Run(map[bool]string{false: "before", true: "during"}[during], func(t *testing.T) {
+	for _, mode := range []string{"before", "during", "expired", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
 			lab := newDecisionHookLab(t)
 			lab.rules[0].Decision.Select = "true"
 			lab.rules[0].Decision.View = decision.Action
@@ -31,10 +31,21 @@ func TestCollectorCancellationStopsOnlyModelWork(t *testing.T) {
 			})
 			lab.save(t)
 			ctx, cancel := context.WithCancel(context.Background())
+			switch mode {
+			case "expired", "deadline":
+				cancel()
+				remaining := -time.Second
+				if mode == "deadline" {
+					remaining = 500 * time.Millisecond
+				}
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(remaining))
+			}
 			defer cancel()
-			if during {
+			if mode == "during" || mode == "deadline" {
 				lab.check = func(r *http.Request, _ []byte) {
-					cancel()
+					if mode == "during" {
+						cancel()
+					}
 					select {
 					case <-r.Context().Done():
 					case <-time.After(3 * time.Second):
@@ -67,7 +78,7 @@ func TestCollectorCancellationStopsOnlyModelWork(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantCalls := int32(0)
-			if during {
+			if mode == "during" || mode == "deadline" {
 				wantCalls = 1
 			}
 			if lab.hits.Load() != wantCalls || c.processed() != 3 || res.Code != http.StatusOK ||

@@ -34,3 +34,15 @@ func TestOriginalCallInputSurvivesPhaseAndBatchNormalization(t *testing.T) {
 		})
 	}
 }
+
+func TestNullAndMalformedArgumentsRemainIncomplete(t *testing.T) {
+	for _, input := range []string{"null", " null ", "\nnull\t", "{", "   "} {
+		t.Run(input, func(t *testing.T) {
+			ev := model.Event{ToolName: "Read", FilePath: "/synthetic/file"}
+			ev.SetToolInput(json.RawMessage(input))
+			if o := Project(ev, "pre", "raw"); o.Complete {
+				t.Fatalf("null or malformed source arguments marked complete: %s", o.Action)
+			}
+		})
+	}
+}
