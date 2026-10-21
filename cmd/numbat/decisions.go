@@ -55,6 +55,11 @@ func runDecisions(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "request cap=%d bytes; retained session cap=%d bytes, %d calls\n",
 		c.MaxRequestBytes, min(c.State.MaxBytes, 1<<20), c.State.MaxCalls)
+	route := "direct"
+	if c.Provider.ProxyURL != "" {
+		route = "explicit proxy"
+	}
+	fmt.Fprintf(stdout, "provider route=%s; ambient proxy variables ignored\n", route)
 	fmt.Fprintln(stdout, "Not checked: credentials, provider, state or host delivery. Blocking also requires --enforce and eligible evidence.")
 	return 0
 }

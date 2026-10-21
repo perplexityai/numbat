@@ -82,7 +82,10 @@ An unavailable or uncertain evaluator contributes only `no_override`; it cannot
 cancel a deterministic deny or grant an explicit allow.
 Deterministic CEL and sequence rules run first. A monitor-only finding does not
 suppress decision rules; an established deny skips further model calls.
-Otherwise, decision rules run in effective catalog order within a shared deadline.
+Otherwise, at most two independent decision requests run concurrently within a
+shared deadline. Requests are admitted in catalog order, but results are
+finalized as they arrive; a clean deny cancels remaining model work. Freshness
+and deadline checks run at finalization, not merely at provider response time.
 After a successful native deny write, optional session evidence records
 `deny_requested`, not a confirmed host block. This permits later calls to be
 reviewed without treating that proposal as still running. A partial write or

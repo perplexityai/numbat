@@ -330,6 +330,10 @@ func TestHTTPContract(t *testing.T) {
 			if got.DenyCandidate != tc.deny || calls.Load() != 1 {
 				t.Fatalf("got %+v calls=%d", got, calls.Load())
 			}
+			if tc.code == http.StatusTooManyRequests &&
+				(got.Status != "unavailable" || got.Reason != "rate_limited" || got.Matched) {
+				t.Fatalf("rate limit was not reported separately: %+v", got)
+			}
 			if tc.code == http.StatusOK && !tc.deny && (got.Status != "invalid_response" || got.Reason != "provider_contract") {
 				t.Fatalf("invalid reply was not rejected as a provider-contract failure: %+v", got)
 			}

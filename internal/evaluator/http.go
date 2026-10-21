@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/perplexityai/numbat/internal/decision"
@@ -23,6 +24,7 @@ import (
 type Profile struct {
 	Protocol         string            `json:"protocol" yaml:"protocol"`
 	Endpoint         string            `json:"endpoint" yaml:"endpoint"`
+	ProxyURL         string            `json:"proxy_url,omitempty" yaml:"proxy_url,omitempty"`
 	Model            string            `json:"model" yaml:"model"`
 	MaxResponseBytes int               `json:"max_response_bytes" yaml:"max_response_bytes"`
 	ExpectedModel    string            `json:"expected_model,omitempty" yaml:"expected_model,omitempty"`
@@ -63,7 +65,41 @@ func (p Profile) Validate() error {
 	if err := validateHeaders(p.Headers); err != nil {
 		return err
 	}
+	if p.ProxyURL != "" {
+		if _, err := parseProxyURL(p.ProxyURL); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func parseProxyURL(raw string) (*url.URL, error) {
+	invalid := errors.New("proxy_url must be an HTTP or HTTPS URL of at most 2048 bytes with a valid host and port, no userinfo, query or fragment, and no path beyond /")
+	if len(raw) > 2048 || strings.ContainsAny(raw, "?#") {
+		return nil, invalid
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+		u.User != nil || u.Opaque != "" || (u.EscapedPath() != "" && u.EscapedPath() != "/") {
+		return nil, invalid
+	}
+	host := u.Hostname()
+	if strings.Contains(host, ":") {
+		if net.ParseIP(host) == nil || !strings.HasPrefix(u.Host, "[") {
+			return nil, invalid
+		}
+	} else if strings.ContainsAny(u.Host, "[]") {
+		return nil, invalid
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, invalid
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return nil, invalid
+	}
+	return u, nil
 }
 
 func validateHeaders(headers map[string]string) error {
@@ -142,6 +178,13 @@ func NewHTTP(p Profile, token string) (*HTTP, error) {
 		MaxResponseHeaderBytes: 16384,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
 	}
+	if p.ProxyURL != "" {
+		proxy, err := parseProxyURL(p.ProxyURL)
+		if err != nil {
+			return nil, err
+		}
+		transport.Proxy = http.ProxyURL(proxy)
+	}
 	return &HTTP{
 		profile: p, token: token,
 		client: &http.Client{
@@ -180,6 +223,9 @@ func (h *HTTP) Evaluate(ctx context.Context, r decision.Request, c *decision.Com
 		return decision.Reply{}, errors.New("provider transport unavailable")
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusTooManyRequests {
+		return decision.Reply{}, ErrRateLimit
+	}
 	if res.StatusCode != http.StatusOK {
 		return decision.Reply{}, errors.New("provider returned non-success")
 	}

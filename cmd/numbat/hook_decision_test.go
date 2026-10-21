@@ -28,13 +28,14 @@ import (
 )
 
 type decisionHookLab struct {
-	dir    string
-	config string
-	cfg    evaluator.Config
-	rules  []rule.Rule
-	hits   atomic.Int32
-	check  func(*http.Request, []byte)
-	fault  string
+	dir           string
+	config        string
+	cfg           evaluator.Config
+	rules         []rule.Rule
+	hits          atomic.Int32
+	check         func(*http.Request, []byte)
+	fault         string
+	responseFault func([]byte) string
 }
 
 func newDecisionHookLab(t *testing.T) *decisionHookLab {
@@ -54,7 +55,11 @@ func newDecisionHookLab(t *testing.T) *decisionHookLab {
 		if lab.check != nil {
 			lab.check(r, raw)
 		}
-		switch lab.fault {
+		fault := lab.fault
+		if lab.responseFault != nil {
+			fault = lab.responseFault(raw)
+		}
+		switch fault {
 		case "unavailable":
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -505,7 +510,7 @@ func TestNativeDecisionRuleOrder(t *testing.T) {
 		wantCalls     int32
 		wantDeny      bool
 	}{
-		{"enforce first", nil, false, false, 1, true},
+		{"enforce first", nil, false, false, 2, true},
 		{"monitor first", func(l *decisionHookLab) {
 			l.rules[0], l.rules[1] = l.rules[1], l.rules[0]
 		}, false, false, 2, true},
@@ -515,11 +520,20 @@ func TestNativeDecisionRuleOrder(t *testing.T) {
 		}, false, true, 2, true},
 		{"unavailable provider before eligible action", func(l *decisionHookLab) {
 			l.rules[1].Enforce = decisionBool(true)
-			l.check = func(*http.Request, []byte) {
-				l.fault = ""
-				if l.hits.Load() == 1 {
-					l.fault = "unavailable"
+			l.responseFault = func(raw []byte) string {
+				var request struct {
+					State struct {
+						History []json.RawMessage `json:"history"`
+					} `json:"state"`
 				}
+				if err := json.Unmarshal(raw, &request); err != nil {
+					t.Errorf("decode provider request: %v", err)
+					return "unavailable"
+				}
+				if len(request.State.History) > 0 {
+					return "unavailable"
+				}
+				return ""
 			}
 		}, false, false, 2, true},
 	} {
@@ -540,7 +554,9 @@ func TestNativeDecisionRuleOrder(t *testing.T) {
 				flags = append(flags, "--enforce=false")
 			}
 			control := lab.upload(t, flags...)
-			if denied := strings.Contains(control, `"permissionDecision":"deny"`); denied != tc.wantDeny || lab.hits.Load() != tc.wantCalls {
+			calls := lab.hits.Load()
+			if denied := strings.Contains(control, `"permissionDecision":"deny"`); denied != tc.wantDeny ||
+				calls < 1 || calls > tc.wantCalls || (!tc.wantDeny && calls != tc.wantCalls) {
 				t.Fatalf("deny=%t calls=%d; want deny=%t calls=%d", denied, lab.hits.Load(), tc.wantDeny, tc.wantCalls)
 			}
 			raw, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
@@ -563,14 +579,22 @@ func TestNativeDecisionRuleOrder(t *testing.T) {
 			if len(assessments) != 2 {
 				t.Fatalf("got %d assessments; expected both bindings to be accounted for", len(assessments))
 			}
-			last := assessments[1]
-			if tc.wantCalls == 1 {
-				if !assessments[0].DenyCandidate || last.Status != "skipped" || last.Reason != "prior_semantic_deny" ||
-					last.RequestID != "" || last.Matched || last.InputEligible || last.DenyCandidate || len(last.Probabilities) != 0 {
-					t.Fatalf("skipped binding was evaluated or lost its reason: %+v", assessments)
+			seen := make(map[string]bool)
+			denies := 0
+			for _, a := range assessments {
+				if seen[a.PolicyID] {
+					t.Fatalf("duplicate rule result: %+v", assessments)
 				}
-			} else if last.Status != "completed" {
-				t.Fatalf("non-denying first binding suppressed later evaluation: %+v", assessments)
+				seen[a.PolicyID] = true
+				if a.DenyCandidate {
+					denies++
+				}
+				if !tc.wantDeny && a.Status != "completed" {
+					t.Fatalf("monitoring lost a rule result: %+v", assessments)
+				}
+			}
+			if (denies > 0) != tc.wantDeny {
+				t.Fatalf("deny is not supported by its assessments: %+v", assessments)
 			}
 		})
 	}
@@ -928,7 +952,7 @@ func TestExitCodeDenyReceiptRequiresCompleteControlWrite(t *testing.T) {
 			if tc.name == "complete" {
 				wantCode = 2
 			}
-			if code != wantCode || lab.hits.Load() != 1 {
+			if calls := lab.hits.Load(); code != wantCode || calls < 1 || calls > 2 {
 				t.Fatalf("exit=%d requests=%d for %s control write", code, lab.hits.Load(), tc.name)
 			}
 			var sawReceipt atomic.Bool

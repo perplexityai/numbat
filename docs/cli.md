@@ -391,18 +391,25 @@ numbat timeline --agent codex --include-reasoning --content full --format json
 `--content full` and `--content raw` are available only with `--format json`; the text view remains a
 compact preview.
 
+Claude hook `agent_id` is preserved as `sub_agent_id`, so identified children
+sharing a host session appear as separate timeline groups, even without
+decision evaluation. Main-agent or older payloads without that field keep
+their existing grouping; this is a source-identity correction, not a model setting.
+
 ## collect
 
 `--decision-config FILE` enables advisory decision rules using the same provider
 configuration as hooks and scans. Collection never sends native deny responses.
 Events without a captured exporter origin are classified independently rather
 than merged into a potentially cross-exporter history.
-Optional model work shares a 25-second deadline per export, including queue
-time, and stops when the requesting client disconnects. Per-event model
-budgets still apply within it. Later records receive timeout assessments
-instead of further model calls; local events, deterministic findings and
-indicators continue to be processed. This bounds model work, not total sink or
-local-processing time.
+Optional model work uses a bounded, best-effort background queue, so inference
+does not hold the export response open. At most 64 queued/in-flight events and
+8 MiB of serialized evidence/metadata are retained; work waiting over five
+seconds is skipped. Per-event model budgets still apply. Accepted work is owned
+by the collector, not the client's connection, and is cancelled at shutdown.
+Queue drops produce skipped assessments without dropping local events,
+deterministic findings or indicators. There is no durable model-work queue;
+ordinary sink delivery and local-processing latency still apply.
 
 `collect` runs an in-process OTLP/HTTP logs receiver and maps live agent
 telemetry through the same pipeline `scan` uses. It listens on
@@ -722,7 +729,8 @@ action. Raw inference egress is a separate explicit choice from event-output
 
 Deterministic rules run first, including sequences. A monitor-only match does
 not skip decision rules; an eligible deny does. Decision rules run in
-effective catalog order under a shared deadline and stop making model calls once
+catalog admission order, with at most two independent requests under a shared
+deadline. Results are finalized as they arrive; remaining model work is cancelled once
 a deny is established. Remaining enabled rules receive skipped assessments.
 
 Use [`numbat decisions check`](#decisions) to inspect this configuration offline.

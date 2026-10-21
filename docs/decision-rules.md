@@ -6,6 +6,23 @@ optionally with observed session history. They share the ordinary
 `expr:` and `sequence:` rules. Loading a rule alone never contacts a provider;
 `--decision-config` explicitly enables sending projected evidence.
 
+## Recommended use
+
+Use a small, tested, low-noise set of local rules for enforcement, and a few
+decision rules for important policies that are difficult to express in CEL.
+Use narrow selectors: an upload policy usually needs evaluation at the upload,
+not at every preceding read. Retaining context does not require a model call
+for each observation. Installed rule count is not the same as selected model
+requests per action.
+
+Start decision rules in monitor mode with reviewed positive, benign and
+ambiguous cases. Promote a policy only after checking false blocks, missed
+detections, completed-check coverage, host behavior and provider capacity;
+severity and model scores alone do not establish safe enforcement. Keep
+contextual enforcement experimental. Put broader correlation and expensive
+retrospective analysis in the SIEM/data lake, with explicit content-retention
+and access controls for exported activity.
+
 ## Quick start
 
 The disabled [tool-output injection example](../examples/decision-rules/tool_output_injection.yaml)
@@ -79,7 +96,7 @@ id: local.protected_upload
 version: "1"
 title: Protected data sent to an unapproved destination
 severity: high
-enforce: true
+enforce: false
 decision:
   select: 'event.event_type in ["tool.call", "command.exec", "network.indicator"]'
   view: session
@@ -96,13 +113,13 @@ decision:
   match_option: prohibited
   abstain_option: unknown
   match_threshold: 0.95
-  deny_threshold: 0.99
 ```
 
-The install command above still monitors this rule: blocking additionally
-requires `--enforce`, an eligible native pre-action hook and complete evidence.
-Validate representative positive, negative and insufficient-evidence cases
-before enabling enforcement. See the [enforcement contract](enforcement.md).
+This example is intentionally monitor-only. Explicit contextual blocking also
+requires `enforce: true`, a validated `deny_threshold`, `--enforce`, an eligible
+native pre-action hook and complete evidence. An observed chain can still
+produce a finding when history is incomplete; incomplete history cannot
+authorize a contextual deny. See the [enforcement contract](enforcement.md).
 
 ## Providers and credentials
 
@@ -137,16 +154,35 @@ case-insensitive duplicates and invalid headers are rejected. OpenRouter
 public application listings; omit them for private deployments.
 
 Numbat does not retry, redirect, use ambient proxy variables or choose a fallback.
+If your network requires a proxy, set `provider.proxy_url` explicitly to an
+HTTP/HTTPS CONNECT proxy. Proxy authentication is unsupported. Provider tokens
+are sent only inside provider TLS, never in CONNECT headers. TLS verification
+remains enabled; `ca_file` applies to both an HTTPS proxy and the provider. A failed
+proxy does not trigger a direct fallback or fail-closed blocking.
+
 Provider-side routing is separate. Malformed answers, incomplete probability
-maps and explicit provider truncation are rejected.
+maps and explicit provider truncation are rejected. Before enforcement, verify
+a completed assessment on synthetic monitor input through the intended route;
+the offline configuration check does not establish connectivity.
 
 ## Evaluation and safety
 
-Deterministic and sequence rules run first. Decision rules then run in effective
-catalog order, one question per request under a shared deadline. A native action
-expanded into several events selects the first matching event but retains the
-whole action in its projection and citations. A clean deny skips remaining model
-calls; a monitor-only finding does not.
+Deterministic and sequence rules run first. Local selectors identify applicable
+decision rules before inference. Up to two independent requests run at once
+per evaluation under one shared deadline, admitted in catalog order. Results are finalized as
+they arrive, with fresh eligibility checks; a slow first request cannot consume
+the second request's entire window. A clean deny cancels outstanding model work
+and skips requests not yet started; a monitor-only finding does not. Beyond the
+two-request bound, later rules can still miss the deadline. Concurrency reduces
+serial waiting, not request count, cost or the need for capacity headroom.
+This is not a host-wide or fleet-wide rate limiter; overlapping hooks can each
+start their own requests.
+
+Questions are not automatically packed into one request: the
+[provider documents](https://docs.perplexity.ai/docs/decisions/quickstart) that
+grouped questions can affect each other's answers. A native action expanded
+into several events selects the first matching event but retains the whole
+action in its projection and citations.
 
 Models cannot execute tools, authorize an action or cancel a deterministic deny.
 Semantic blocking requires both enforcement opt-ins, `deny_threshold`, complete
@@ -176,8 +212,15 @@ response are not atomic; a deny request is not proof of host blocking.
   never clipped to force a verdict.
 - **Passive inputs:** scans use separate in-memory windows and never native
   admission state. Without artifact origin, the collector supplies no
-  cross-request history. Optional model work shares a 25-second export deadline
-  and follows client cancellation; expired work does not discard local telemetry.
+  cross-request history. The collector admits model work to a best-effort queue
+  without waiting for inference before acknowledging telemetry. Its single
+  worker retains at most 64 queued/in-flight events and 8 MiB of serialized
+  evidence/metadata; work waiting over five seconds is skipped. Evidence is
+  snapshotted at receipt, not reconstructed from later activity. Accepted work
+  survives client disconnects, but collector shutdown cancels it; there is no
+  durable replay queue. Sink delivery and local processing retain their normal
+  latency and failure behavior. Exporter retries can still reevaluate records;
+  classification is not exactly-once.
 
 Protect configuration, credentials, rule directories and native state. Protected
 files use ownership/mode checks on Unix and DACL/reparse checks on Windows.
@@ -194,6 +237,13 @@ Assessments cover matches, non-matches, abstentions, errors and skips. Disabled
 rules and lifecycle-only callbacks do not produce per-rule assessments;
 configuration-load failures are diagnostics. Inspect `status`, `reason` and
 `gaps` together: an unavailable or skipped evaluation is not a negative result.
+HTTP 429 is reported as `unavailable` / `rate_limited`, without exposing the
+provider's error body or retrying.
+Rules that do not apply remain `not_selected`, even after the deadline.
+Queue drops report `queue_full`, `queue_bytes_limit`, `queue_expired` or
+`collector_shutdown`, never a model verdict. In native enforce mode,
+unavailable checks and completed checks with ineligible evidence also produce
+warnings; they do not override an independent local deny.
 
 Each evaluation has a distinct `assessment_id`. Assessments include rule/model
 identity, available probabilities, thresholds and action-event references, not
@@ -227,6 +277,7 @@ guarantee that the provider's token/context limit will fit.
 | Config | `operator_context` | Empty object; at most 32768 serialized bytes |
 | Provider | `protocol` | `decisions-v1` |
 | Provider | `endpoint`, `model` | Required HTTPS URL and model ID |
+| Provider | `proxy_url` | Optional explicit HTTP/HTTPS CONNECT proxy, at most 2048 bytes; no userinfo, query, fragment or path beyond `/`; ambient proxy variables are ignored |
 | Provider | `token_env`, `token_file` | Exactly one: environment variable name (`[A-Za-z_][A-Za-z0-9_]*`) or absolute clean token path; token input at most 4096 bytes |
 | Provider | `headers` | Optional non-secret literal metadata; at most 32 entries / 8192 bytes; no auth or transport overrides |
 | Provider | `expected_model` | Optional exact returned identity |

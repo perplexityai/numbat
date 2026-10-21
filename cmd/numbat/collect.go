@@ -23,6 +23,7 @@ import (
 
 	"github.com/perplexityai/numbat/internal/evaluator"
 	"github.com/perplexityai/numbat/internal/finding"
+	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/otel"
 	"github.com/perplexityai/numbat/internal/output"
 	"github.com/perplexityai/numbat/internal/pipeline"
@@ -46,11 +47,6 @@ const contentTypeProtobuf = "application/x-protobuf"
 // maxOTLPBody bounds a single OTLP POST so a malformed or hostile body cannot
 // exhaust memory. 4 MiB comfortably holds a normal export batch.
 const maxOTLPBody = 4 << 20
-
-// Optional network classification must not consume a fresh deadline for every
-// record in a large export. Leave room under the server's 30s write timeout for
-// local processing and output; this does not bound those independent operations.
-const collectDecisionBudget = 25 * time.Second
 
 // runCollect implements `numbat collect`: a long-running, in-process OTLP/HTTP
 // receiver. It listens on a loopback address (default :4318), decodes each
@@ -211,6 +207,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 // completes. It returns the process exit code: 0 on a clean signal-driven stop,
 // 1 if the listener could not bind or serve.
 func serveCollect(ctx context.Context, addr string, rcv *collector, stderr io.Writer) int {
+	defer rcv.close()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(stderr, "collect: listen %s: %v\n", addr, err)
@@ -296,16 +293,21 @@ type collectorConfig struct {
 // each record to a model.Event and hands it to the pipeline, exactly as the hook
 // handler and scanner do, so detection is identical across sensors.
 type collector struct {
-	emit          *output.Emitter
-	runID         string
-	caseID        string
-	pipe          *pipeline.Pipeline
-	indicators    *output.IndicatorAccumulator
-	indicatorsSel bool
-	processMu     sync.Mutex
-	indicatorMu   sync.Mutex
-	emittedCounts map[string]int
-	deliveryDown  bool
+	decisions      *evaluator.Background
+	emit           *output.Emitter
+	runID          string
+	caseID         string
+	pipe           *pipeline.Pipeline
+	indicators     *output.IndicatorAccumulator
+	indicatorsSel  bool
+	processMu      sync.Mutex
+	indicatorMu    sync.Mutex
+	emittedCounts  map[string]int
+	deliveryDown   bool
+	advisoryErrors int
+	lifecycleMu    sync.Mutex
+	closing        bool
+	active         sync.WaitGroup
 
 	processedN atomic.Int64
 	skippedN   atomic.Int64
@@ -351,7 +353,16 @@ func newCollector(cfg collectorConfig) (*collector, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.pipe.WithDecisionObserver(decisions.Monitor(cfg.emit))
+		if len(decisions.Rules) > 0 {
+			c.decisions = decisions.Background(cfg.emit, &c.processMu)
+			c.pipe.WithDecisionObserver(func(ctx context.Context, ev model.Event) {
+				before := cfg.emit.Stats().RecordErrors
+				c.decisions.Observe(ctx, ev)
+				// Immediate skip records are optional too. This callback and
+				// background writes share processMu, so the delta is scoped.
+				c.advisoryErrors += cfg.emit.Stats().RecordErrors - before
+			})
+		}
 	}
 	// Sequence rules correlate across the receiver's lifetime: one tracker for
 	// the whole run, internally locked, so the concurrent OTLP handlers feed
@@ -373,8 +384,15 @@ func newCollector(cfg collectorConfig) (*collector, error) {
 // failure is a client error (the exporter sent a malformed batch), never a
 // crash.
 func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), collectDecisionBudget)
-	defer cancel()
+	c.lifecycleMu.Lock()
+	if c.closing {
+		c.lifecycleMu.Unlock()
+		writeOTLPError(w, http.StatusServiceUnavailable, "collector shutting down")
+		return
+	}
+	c.active.Add(1)
+	c.lifecycleMu.Unlock()
+	defer c.active.Done()
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeOTLPError(w, http.StatusMethodNotAllowed, "method not allowed: use POST")
@@ -410,6 +428,7 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 	defer c.processMu.Unlock()
 
 	recordErrorsBefore := c.emit.Stats().RecordErrors
+	advisoryErrorsBefore := c.advisoryErrors
 	rejected := int64(0)
 	noAnalog := 0
 	for _, res := range results {
@@ -426,7 +445,7 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 		if ev.CaseID == "" {
 			ev.CaseID = c.caseID
 		}
-		if err := c.pipe.ProcessContext(ctx, ev, "otel:"+res.SourceAgent); err != nil {
+		if err := c.pipe.ProcessContext(r.Context(), ev, "otel:"+res.SourceAgent); err != nil {
 			c.skippedN.Add(1)
 			rejected++
 			c.emit.Diag("warn", "collect: "+err.Error())
@@ -450,7 +469,8 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		c.deliveryDown = sinkStats.PendingFailure
 	}
-	if c.emit.Stats().RecordErrors > recordErrorsBefore || sinkStats.PendingFailure {
+	baseErrors := c.emit.Stats().RecordErrors-recordErrorsBefore > c.advisoryErrors-advisoryErrorsBefore
+	if baseErrors || sinkStats.PendingFailure {
 		writeOTLPError(w, http.StatusServiceUnavailable, "record delivery failed; retry the export")
 		return
 	}
@@ -460,6 +480,16 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeOTLPSuccess(w)
+}
+
+func (c *collector) close() {
+	c.lifecycleMu.Lock()
+	c.closing = true
+	c.lifecycleMu.Unlock()
+	c.active.Wait()
+	if c.decisions != nil {
+		c.decisions.Close()
+	}
 }
 
 // emitChangedIndicators emits each indicator on first sight and again only

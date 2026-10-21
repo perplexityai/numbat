@@ -25,18 +25,31 @@ type monitorWindow struct {
 // windows never establish the complete, fresh prefix required by native deny.
 // Each caller owns its capture stream; artifacts and identities stay separate.
 func (c *Config) Monitor(em *output.Emitter) func(context.Context, model.Event) {
+	snapshot := c.monitorSnapshot()
+	gate := make(chan struct{}, 1)
+	return func(parent context.Context, ev model.Event) {
+		ctx, cancel := context.WithTimeout(parent, time.Duration(c.BudgetMS)*time.Millisecond)
+		defer cancel()
+		in := snapshot(ev)
+		select {
+		case gate <- struct{}{}:
+			defer func() { <-gate }()
+		case <-ctx.Done():
+		}
+		c.Evaluate(ctx, in, em)
+	}
+}
+
+func (c *Config) monitorSnapshot() func(model.Event) Evaluation {
 	var mu sync.Mutex
 	windows := make(map[monitorKey]*monitorWindow)
 	total := 0
-	gate := make(chan struct{}, 1)
 	withHistory := false
 	for _, r := range c.Rules {
 		withHistory = withHistory || r.View == decision.Session
 	}
 	operator, _ := json.Marshal(c.OperatorContext)
-	return func(parent context.Context, ev model.Event) {
-		ctx, cancel := context.WithTimeout(parent, time.Duration(c.BudgetMS)*time.Millisecond)
-		defer cancel()
+	return func(ev model.Event) Evaluation {
 		phase := "observed"
 		if ev.ToolResultForAnalysis() != "" {
 			phase = "result"
@@ -99,13 +112,7 @@ func (c *Config) Monitor(em *output.Emitter) func(context.Context, model.Event) 
 			}
 			mu.Unlock()
 		}
-		// Bound concurrent provider work without an unbounded internal queue.
-		select {
-		case gate <- struct{}{}:
-			defer func() { <-gate }()
-		case <-ctx.Done():
-		}
-		c.Evaluate(ctx, Evaluation{
+		return Evaluation{
 			Events: []model.Event{ev},
 			Evidence: func(_ model.Event, view string) decision.Evidence {
 				if view == decision.Action {
@@ -115,6 +122,6 @@ func (c *Config) Monitor(em *output.Emitter) func(context.Context, model.Event) 
 				}
 				return e
 			},
-		}, em)
+		}
 	}
 }
