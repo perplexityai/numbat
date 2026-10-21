@@ -686,7 +686,8 @@ including the env-only auth secrets.
 
 `--decision-config /etc/numbat/decisions.yaml` explicitly enables configured
 decision rules in the ordinary `--rules-dir` catalog. The config owns one provider,
-credential-file paths, deadlines, inference content mode and state retention.
+an explicit environment or file credential source, deadlines, inference content
+mode and state retention.
 Rules own their selectors, criteria, action/session views and thresholds, with
 ordinary `enabled` and `enforce` fields. Rules cannot enable network access or
 select a destination on their own. See the

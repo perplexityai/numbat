@@ -272,6 +272,36 @@ func TestNativeDecisionModesAndFailureBoundaries(t *testing.T) {
 	}
 }
 
+func TestNativeDecisionEnvironmentCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name, token string
+		deny        bool
+		calls       int32
+	}{
+		{"available", "synthetic-token", true, 1},
+		{"unavailable", "", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("NUMBAT_TEST_DECISION_TOKEN", tc.token)
+			lab := newDecisionHookLab(t)
+			lab.cfg.Provider.TokenFile, lab.cfg.Provider.TokenEnv = "", "NUMBAT_TEST_DECISION_TOKEN"
+			lab.save(t)
+			lab.prefix(t, true)
+			control := lab.upload(t)
+			if strings.Contains(control, `"permissionDecision":"deny"`) != tc.deny || lab.hits.Load() != tc.calls {
+				t.Fatalf("control=%s requests=%d", control, lab.hits.Load())
+			}
+			raw, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
+			if err != nil || strings.Contains(string(raw), "synthetic-token") {
+				t.Fatal("missing records or leaked credential:", err)
+			}
+			if !tc.deny && !strings.Contains(string(raw), `"status":"unavailable"`) {
+				t.Fatal("credential failure not reported as unavailable")
+			}
+		})
+	}
+}
+
 func TestNativeDecisionRuleOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

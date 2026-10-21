@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,13 +21,16 @@ import (
 
 // Profile contains the non-secret provider settings bound to each request.
 type Profile struct {
-	Protocol         string   `json:"protocol" yaml:"protocol"`
-	Endpoint         string   `json:"endpoint" yaml:"endpoint"`
-	Model            string   `json:"model" yaml:"model"`
-	MaxResponseBytes int      `json:"max_response_bytes" yaml:"max_response_bytes"`
-	ExpectedModel    string   `json:"expected_model,omitempty" yaml:"expected_model,omitempty"`
-	Routing          *Routing `json:"routing,omitempty" yaml:"routing,omitempty"`
+	Protocol         string            `json:"protocol" yaml:"protocol"`
+	Endpoint         string            `json:"endpoint" yaml:"endpoint"`
+	Model            string            `json:"model" yaml:"model"`
+	MaxResponseBytes int               `json:"max_response_bytes" yaml:"max_response_bytes"`
+	ExpectedModel    string            `json:"expected_model,omitempty" yaml:"expected_model,omitempty"`
+	Routing          *Routing          `json:"routing,omitempty" yaml:"routing,omitempty"`
+	Headers          map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
 }
+
+const maxTokenBytes = 4096
 
 // Routing is the explicit OpenRouter extension, not an arbitrary request patch.
 type Routing struct {
@@ -56,6 +60,47 @@ func (p Profile) Validate() error {
 	if p.MaxResponseBytes < 1024 || p.MaxResponseBytes > 1024*1024 {
 		return errors.New("max_response_bytes must be between 1024 and 1048576")
 	}
+	if err := validateHeaders(p.Headers); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateHeaders(headers map[string]string) error {
+	if len(headers) > 32 {
+		return errors.New("provider headers must contain at most 32 entries")
+	}
+	seen := make(map[string]bool, len(headers))
+	size := 0
+	for name, value := range headers {
+		key := http.CanonicalHeaderKey(name)
+		if name == "" || seen[key] {
+			return errors.New("provider header names must be valid and unique ignoring case")
+		}
+		for _, c := range name {
+			if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') &&
+				!strings.ContainsRune("!#$%&'*+-.^_`|~", c) {
+				return errors.New("invalid provider header name")
+			}
+		}
+		switch key {
+		case "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie",
+			"Host", "Content-Type", "Content-Length", "Content-Encoding", "Accept-Encoding",
+			"Transfer-Encoding", "Connection", "Proxy-Connection", "Keep-Alive",
+			"Te", "Trailer", "Upgrade", "Expect":
+			return errors.New("provider headers cannot override authentication or transport headers")
+		}
+		for _, c := range value {
+			if c < ' ' && c != '\t' || c == 127 {
+				return errors.New("invalid provider header value")
+			}
+		}
+		seen[key] = true
+		size += len(name) + len(value) + 4
+		if size > 8192 {
+			return errors.New("provider headers must fit within 8192 bytes")
+		}
+	}
 	return nil
 }
 
@@ -80,16 +125,17 @@ type HTTP struct {
 }
 
 // NewHTTP receives credentials from trusted caller wiring, never evidence.
-// It performs no I/O; Config.Factory owns the protected token-file loader.
+// It performs no I/O; Config.Factory resolves the configured credential source.
 func NewHTTP(p Profile, token string) (*HTTP, error) {
 	if p.Validate() != nil || strings.TrimSpace(token) != token ||
-		token == "" || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
+		token == "" || len(token) > maxTokenBytes || strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("invalid provider configuration or credential")
 	}
 	if p.Routing != nil {
 		routing := *p.Routing
 		p.Routing = &routing
 	}
+	p.Headers = maps.Clone(p.Headers)
 	transport := &http.Transport{
 		Proxy: nil, DialContext: (&net.Dialer{}).DialContext,
 		ForceAttemptHTTP2: true, DisableKeepAlives: true,
@@ -126,6 +172,9 @@ func (h *HTTP) Evaluate(ctx context.Context, r decision.Request, c *decision.Com
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.token)
+	for name, value := range h.profile.Headers {
+		req.Header.Set(name, value)
+	}
 	res, err := h.client.Do(req)
 	if err != nil {
 		return decision.Reply{}, errors.New("provider transport unavailable")

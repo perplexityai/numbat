@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -36,6 +37,7 @@ type Config struct {
 type ProviderConfig struct {
 	Profile   `yaml:",inline"`
 	TokenFile string `yaml:"token_file" json:"token_file"`
+	TokenEnv  string `yaml:"token_env,omitempty" json:"token_env,omitempty"`
 	CAFile    string `yaml:"ca_file,omitempty" json:"ca_file,omitempty"`
 }
 
@@ -84,8 +86,15 @@ func LoadConfig(path string) (*Config, error) {
 	if err := c.Provider.Validate(); err != nil {
 		return nil, fmt.Errorf("provider: %w", err)
 	}
-	if !absolutePath(c.Provider.TokenFile) || (c.Provider.CAFile != "" && !absolutePath(c.Provider.CAFile)) {
-		return nil, errors.New("provider.token_file and optional ca_file must be absolute clean paths")
+	if (c.Provider.TokenFile == "") == (c.Provider.TokenEnv == "") {
+		return nil, errors.New("provider requires exactly one of token_file or token_env")
+	}
+	if c.Provider.TokenEnv != "" && !validEnvName(c.Provider.TokenEnv) {
+		return nil, errors.New("provider.token_env must be an environment variable name")
+	}
+	if (c.Provider.TokenFile != "" && !absolutePath(c.Provider.TokenFile)) ||
+		(c.Provider.CAFile != "" && !absolutePath(c.Provider.CAFile)) {
+		return nil, errors.New("provider token_file and ca_file paths must be absolute and clean")
 	}
 	if err := c.State.Validate(); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
@@ -154,6 +163,16 @@ func absolutePath(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path
 }
 
+func validEnvName(name string) bool {
+	for i, c := range name {
+		if c != '_' && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') &&
+			(i == 0 || c < '0' || c > '9') {
+			return false
+		}
+	}
+	return name != ""
+}
+
 func (c *Config) Digest() string { return c.digest }
 
 func (c *Config) EnforcementBlockers(r ConfiguredRule) []string {
@@ -174,11 +193,11 @@ func (c *Config) Factory() Factory {
 		if p.Digest() != profile.Digest() {
 			return nil, errors.New("decision provider identity mismatch")
 		}
-		token, err := readProtected(p.TokenFile, 4096, true, true)
+		token, err := p.token()
 		if err != nil {
 			return nil, err
 		}
-		h, err := NewHTTP(profile, strings.TrimSpace(string(token)))
+		h, err := NewHTTP(profile, token)
 		if err != nil {
 			return nil, err
 		}
@@ -197,4 +216,19 @@ func (c *Config) Factory() Factory {
 		}
 		return h, nil
 	}
+}
+
+func (p ProviderConfig) token() (string, error) {
+	if p.TokenEnv != "" {
+		token, ok := os.LookupEnv(p.TokenEnv)
+		if !ok || len(token) > maxTokenBytes {
+			return "", errors.New("decision credential unavailable or oversized")
+		}
+		return strings.TrimSpace(token), nil
+	}
+	token, err := readProtected(p.TokenFile, maxTokenBytes, true, true)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(token)), nil
 }

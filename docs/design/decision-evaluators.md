@@ -7,20 +7,26 @@ never sends data. Probabilities are model scores, not calibrated guarantees.
 
 ## Configuration and examples
 
-Save this provider configuration outside your rule directory. The token file
-contains only the bearer token, not a header or JSON object.
+Save this provider configuration outside your rule directory. Set the named
+environment variable in the process that launches the agent or collector.
 
 ```yaml
 version: "1"
 provider:
   endpoint: https://api.perplexity.ai/v1/decisions
   model: pplx-decider-v1.2
-  token_file: /etc/numbat/decision.token
+  token_env: PERPLEXITY_API_KEY
 content: redacted
 max_request_bytes: 32768
 operator_context:
   approved_upload_hosts: [uploads.example.org]
 ```
+
+Alternatively, replace `token_env` with `token_file: /etc/numbat/decision.token`.
+Configure exactly one source. The protected file contains only the bearer token,
+not a header or JSON object. Credentials are read only for selected evaluations;
+`decisions check` does not resolve them. Missing or invalid credentials produce
+an unavailable assessment, not a policy verdict.
 
 For OpenRouter, replace the provider block with:
 
@@ -28,11 +34,22 @@ For OpenRouter, replace the provider block with:
 provider:
   endpoint: https://openrouter.ai/api/alpha/decisions
   model: pplx-decider-v1.2
-  token_file: /etc/numbat/openrouter.token
+  token_env: OPENROUTER_API_KEY
+  headers:
+    HTTP-Referer: https://example.com
+    X-OpenRouter-Title: Numbat
   routing:
     allow_fallbacks: false
     data_collection: deny
 ```
+
+`headers` is optional literal, non-secret metadata; no environment substitution
+is performed. Authentication is always generated from the selected token source.
+`Authorization`, cookie and transport-header overrides are rejected, as are
+case-insensitive duplicate names, invalid names/values, more than 32 headers,
+or more than 8192 bytes including header separators.
+OpenRouter [attribution](https://openrouter.ai/docs/app-attribution) can create
+public application listings; omit these headers for private deployments.
 
 Verify model availability for your provider account. `expected_model` optionally
 specifies the exact returned ID when an API resolves the requested alias to a
@@ -191,7 +208,9 @@ separate: configure a suitable byte budget and verify its truncation behavior.
 | Config | `content` | `redacted` or explicit `raw`; independent of record-output mode |
 | Config | `operator_context` | Empty object; at most 32768 serialized bytes |
 | Provider | `protocol` | `decisions-v1` |
-| Provider | `endpoint`, `model`, `token_file` | Required HTTPS URL, model ID, absolute token path |
+| Provider | `endpoint`, `model` | Required HTTPS URL and model ID |
+| Provider | `token_env`, `token_file` | Exactly one: environment variable name (`[A-Za-z_][A-Za-z0-9_]*`) or absolute clean token path; token input at most 4096 bytes |
+| Provider | `headers` | Optional non-secret literal metadata; at most 32 entries / 8192 bytes; no auth or transport overrides |
 | Provider | `expected_model` | Optional exact returned identity |
 | Provider | `ca_file` | Optional absolute PEM certificate path |
 | Provider | `max_response_bytes` | 65536; at most 1048576 |
@@ -236,7 +255,9 @@ Inspect `status`, `reason` and gaps together; a skip is not a model verdict.
 
 Configuration and credentials must be protected from other users; Unix uses
 ownership/mode checks and Windows uses DACL/reparse checks. Same-user access is
-not a security boundary. Use canonical, non-symlink paths for protected files,
+not a security boundary. Environment credentials must be available to the actual
+hook process; exporting a variable in another terminal does not update a running
+agent or collector. Use canonical, non-symlink paths for protected files,
 including any system-directory aliases. Protect the ordinary rule directory too. Native state
 must be private; old inadequately protected files are rejected for decision
 history, not silently repaired. Logical eviction does not securely erase

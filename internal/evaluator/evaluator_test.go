@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -353,6 +354,104 @@ func TestProfileRejectsUnsafeEndpoints(t *testing.T) {
 		if _, err := NewHTTP(in.Profile, token); err == nil {
 			t.Fatal("accepted invalid credential")
 		}
+	}
+}
+
+func TestProviderHeaderValidation(t *testing.T) {
+	for _, name := range []string{
+		"Authorization", "authorization", "Proxy-Authorization", "Cookie", "Set-Cookie",
+		"Host", "Content-Type", "Content-Length", "Content-Encoding", "Accept-Encoding",
+		"Transfer-Encoding", "Connection", "Proxy-Connection", "Keep-Alive", "TE",
+		"Trailer", "Upgrade", "Expect", "", "Bad Header", "Bad:Header", "Bad\r\nHeader", "é",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := invocation(t).Profile
+			p.Headers = map[string]string{name: "DO_NOT_ECHO"}
+			err := p.Validate()
+			if err == nil || strings.Contains(err.Error(), "DO_NOT_ECHO") {
+				t.Fatalf("missing or unsafe header error: %v", err)
+			}
+		})
+	}
+	for name, headers := range map[string]map[string]string{
+		"case aliases": {"X-Title": "a", "x-title": "b"},
+		"CRLF":         {"X-Title": "DO_NOT_ECHO\r\nX-Injected: value"},
+		"NUL":          {"X-Title": "DO_NOT_ECHO\x00"},
+		"control":      {"X-Title": "DO_NOT_ECHO\x01"},
+		"DEL":          {"X-Title": "DO_NOT_ECHO\x7f"},
+		"oversized":    {"X-Title": strings.Repeat("x", 8192)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := invocation(t).Profile
+			p.Headers = headers
+			if err := p.Validate(); err == nil || strings.Contains(err.Error(), "DO_NOT_ECHO") {
+				t.Fatalf("missing or unsafe header error: %v", err)
+			}
+		})
+	}
+	p := invocation(t).Profile
+	p.Headers = make(map[string]string)
+	for i := range 33 {
+		p.Headers[fmt.Sprintf("X-Test-%d", i)] = "value"
+	}
+	if p.Validate() == nil {
+		t.Fatal("too many headers accepted")
+	}
+	delete(p.Headers, "X-Test-32")
+	if err := p.Validate(); err != nil {
+		t.Fatal("bounded metadata headers rejected:", err)
+	}
+	p.Headers = map[string]string{"X-Test": strings.Repeat("x", 8192-len("X-Test")-4)}
+	if err := p.Validate(); err != nil {
+		t.Fatal("header byte boundary rejected:", err)
+	}
+}
+
+func TestHTTPMetadataHeadersAreLiteralAndFrozen(t *testing.T) {
+	t.Setenv("NUMBAT_TEST_HEADER_VALUE", "DO_NOT_SEND")
+	var calls atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		calls.Add(1)
+		if len(req.Header.Values("Authorization")) != 1 ||
+			req.Header.Get("Authorization") != "Bearer synthetic-token" ||
+			req.Header.Get("Content-Type") != "application/json" ||
+			req.Header.Get("HTTP-Referer") != "https://example.com" ||
+			req.Header.Get("X-Title") != "${NUMBAT_TEST_HEADER_VALUE}" {
+			t.Error("metadata changed authentication, encoding or literal header values")
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil || strings.Contains(string(body), "synthetic-token") ||
+			strings.Contains(string(body), "NUMBAT_TEST_HEADER_VALUE") ||
+			strings.Contains(string(body), "DO_NOT_SEND") {
+			t.Error("credentials or metadata leaked into inference evidence:", err)
+		}
+		_, _ = io.WriteString(w, `{"model":"fixture-model","answers":{"policy":{"type":"choice","choice":"violation","probabilities":{"violation":0.995,"permitted":0.003,"unknown":0.002}}}}`)
+	}))
+	defer srv.Close()
+	in := invocation(t)
+	in.Profile.Endpoint = srv.URL
+	in.Profile.Headers = map[string]string{
+		"HTTP-Referer": "https://example.com",
+		"X-Title":      "${NUMBAT_TEST_HEADER_VALUE}",
+	}
+	client, err := NewHTTP(in.Profile, "synthetic-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := client.profile.Digest()
+	in.Profile.Headers["X-Title"] = "changed"
+	if client.profile.Digest() != digest {
+		t.Fatal("caller mutation changed the provider identity")
+	}
+	in.Profile = client.profile
+	client.client.Transport.(*http.Transport).TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	got := Run(context.Background(), in, func(Profile) (Provider, error) { return client, nil })
+	if !got.DenyCandidate || calls.Load() != 1 {
+		t.Fatalf("metadata request failed: %+v, requests=%d", got, calls.Load())
+	}
+	delete(in.Profile.Headers, "X-Title")
+	if in.Profile.Digest() == digest {
+		t.Fatal("metadata headers were not bound to provider identity")
 	}
 }
 
