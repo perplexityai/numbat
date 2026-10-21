@@ -5,13 +5,13 @@ Each numbat rule is one YAML file. Use exactly one rule body: `expr:` for a
 `sequence:` for an ordered chain, or experimental `decision:` for model
 classification. All three share catalog IDs, overrides and enforcement flags.
 
-[Decision rules](design/decision-evaluators.md) contain a CEL selector,
+[Decision rules](decision-rules.md) contain a CEL selector,
 plain-language criteria and probability thresholds. They require a separate,
 explicit `--decision-config` for model access; loading or checking the rule
 does not send evidence. `rules test` evaluates deterministic rules only and
 reports skipped decision rules. Its assertions cannot establish model accuracy.
 For a disabled, monitor-only example needing no site-specific policy, see the
-[decision starter rule](design/decision-evaluators.md#disabled-starter-rule).
+[decision starter rule](decision-rules.md#quick-start).
 
 Rule expressions can use:
 
@@ -115,6 +115,7 @@ documents, and multiple rules per file are rejected.
 | `severity` | yes | `info`, `low`, `medium`, `high`, or `critical` |
 | `expr` | one of | CEL predicate for a single event |
 | `sequence` | one of | Ordered multi-event definition |
+| `decision` | one of | CEL selector and optional model classification |
 | `description` | no | Operator-facing explanation |
 | `tags` | no | Strings copied to findings |
 | `enabled` | no | Defaults to `true`; disabled rules are still validated |

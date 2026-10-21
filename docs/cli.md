@@ -71,7 +71,7 @@ numbat agents --format json
 `--decision-config FILE` optionally enables advisory model classification with
 decision rules from the ordinary catalog. It sends projected evidence to the
 configured endpoint; without the flag, scanning remains local. See
-[decision rules](design/decision-evaluators.md) for the separate inference
+[decision rules](decision-rules.md) for the separate inference
 content policy and history limits.
 
 `scan` parses agent artifacts at rest, runs the rules over the reconstructed
@@ -708,7 +708,7 @@ mode and state retention.
 Rules own their selectors, criteria, action/session views and thresholds, with
 ordinary `enabled` and `enforce` fields. Rules cannot enable network access or
 select a destination on their own. See the
-[decision evaluator design](design/decision-evaluators.md) for the complete
+[decision rule guide](decision-rules.md) for the complete
 format, trust boundary and evidence requirements.
 
 Both modes require findings; native enforce mode requires an out-of-band file
@@ -962,7 +962,7 @@ decisions check:
 ```
 
 The command returns `0` on success or help, `1` for validation/read errors,
-and `2` for invalid command arguments. The [field reference](design/decision-evaluators.md#fields-defaults-and-validation)
+and `2` for invalid command arguments. The [field reference](decision-rules.md#configuration-reference)
 defines required fields, actual defaults, units and bounds; example thresholds
 are not calibrated recommendations.
 

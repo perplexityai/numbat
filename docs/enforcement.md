@@ -72,7 +72,7 @@ numbat exposes only observe and deny effects. Agent hosts do not share portable
 approval, rewrite, or stop semantics, and an explicit allow could bypass a
 host's own approval flow.
 
-An optional [decision rule](design/decision-evaluators.md) can contribute
+An optional [decision rule](decision-rules.md) can contribute
 a semantic deny candidate through the ordinary native pre-action gate. It uses
 the same rule catalog, is inactive without `--decision-config`, and does not
 change deterministic evaluation. The rule requires `enforce: true` and the hook

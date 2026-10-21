@@ -24,7 +24,7 @@ synchronous pre-action hooks; see the [enforcement guide](docs/enforcement.md).
   rules are monitor-only.
 - **Experimental decision rules** for action-only or session-context review
   through an explicitly configured HTTPS provider. They use the
-  [ordinary rule catalog](docs/design/decision-evaluators.md) in hooks and
+  [ordinary rule catalog](docs/decision-rules.md) in hooks and
   explicitly opted-in scans/collection. Default processing remains local.
   Inspect configuration with `numbat decisions check --config FILE --rules-dir DIR`
   without model calls.

@@ -15,7 +15,7 @@ import (
 )
 
 func TestDocumentedConfigurationsAndRules(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "design", "decision-evaluators.md"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "decision-rules.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

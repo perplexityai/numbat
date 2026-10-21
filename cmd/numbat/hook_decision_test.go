@@ -210,7 +210,7 @@ func TestDocumentedDecisionExamplesValidateOffline(t *testing.T) {
 	lab := newDecisionHookLab(t)
 	t.Setenv("PERPLEXITY_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "design", "decision-evaluators.md"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "decision-rules.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

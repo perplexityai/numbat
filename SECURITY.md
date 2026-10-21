@@ -88,7 +88,7 @@ environment values, credentials, and MCP configuration.
   Semantic enforcement requires rule and global enforcement opt-ins,
   complete input and, for contextual rules, complete/fresh observed history.
   It uses the existing host-control contract. See the
-  [decision evaluator design](docs/design/decision-evaluators.md).
+  [decision rule guide](docs/decision-rules.md).
 - Decision configuration and credentials must be protected from other users.
   Protect rule directories as for deterministic enforcement. Current-user
   ownership is supported and offers no protection against that same user.
