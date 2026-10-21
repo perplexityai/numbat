@@ -34,9 +34,8 @@ type Engine struct {
 	usesContent       bool
 }
 
-// compiledRule is one compiled rule of either shape: program is set for a
-// single-event rule, seq for a sequence rule. Exactly one side is populated;
-// validateRule guarantees the source rule declares exactly one.
+// compiledRule holds a single-event predicate or decision selector in program,
+// or a sequence in seq. The source rule identifies the catalog type.
 type compiledRule struct {
 	rule    Rule
 	program compiledExpression
@@ -176,7 +175,7 @@ func newEngine(sources []Source, checked CheckedExpressions) (*Engine, error) {
 				continue
 			}
 			compiled = append(compiled, c)
-			if c.program.usesShellCommands {
+			if c.rule.Decision == nil && c.program.usesShellCommands {
 				usesShellCommands = true
 			}
 			if c.program.usesContent || c.seq != nil && c.seq.usesContent {

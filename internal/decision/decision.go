@@ -171,6 +171,13 @@ func Prepare(c *Compiled, b Binding, e Evidence, id, profileDigest, model string
 	if err != nil || len(data) > limit {
 		return Request{}, errors.New("decision request exceeds evidence limit")
 	}
+	gaps := r.Gaps[:0]
+	for _, gap := range r.Gaps {
+		if !slices.Contains(gaps, gap) {
+			gaps = append(gaps, gap)
+		}
+	}
+	r.Gaps = gaps
 	r.State = data
 	r.Digest = r.digest()
 	return r, nil

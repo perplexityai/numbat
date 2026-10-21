@@ -61,3 +61,26 @@ decision:
 		}
 	}
 }
+
+func TestDecisionShellAnalysisSkippedBySingleEventEval(t *testing.T) {
+	r := Rule{
+		ID: "local.shell_decision", Version: "1", Title: "Synthetic", Severity: "high",
+		Decision: &DecisionSpec{
+			Select:       `shell_commands.exists(command, command.executable == "danger")`,
+			Instructions: "Classify the observed action.",
+			Options:      map[string]string{"violation": "Prohibited", "unknown": "Insufficient evidence"},
+			MatchOption:  "violation", AbstainOption: "unknown", MatchThreshold: .9,
+		},
+	}
+	local := Rule{ID: "local.deterministic", Version: "1", Title: "Synthetic", Severity: "high", Expr: "true"}
+	eng := mustEngine(t, r, local)
+	ev := model.Event{EventType: model.EventCommandExec, Command: `echo "unterminated`}
+	matches, err := eng.Eval(ev)
+	if err != nil || len(matches) != 1 || matches[0].Rule.ID != local.ID {
+		t.Fatalf("inactive decision selector affected local rules: matches=%v err=%v", matches, err)
+	}
+	local.Expr = r.Decision.Select
+	if _, err := mustEngine(t, local).Eval(ev); err == nil {
+		t.Fatal("active deterministic shell predicate skipped analysis")
+	}
+}

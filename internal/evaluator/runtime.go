@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
@@ -30,6 +31,7 @@ func (c *Config) Evaluate(ctx context.Context, in Evaluation, em *output.Emitter
 	if len(in.Events) == 0 || in.Evidence == nil {
 		return
 	}
+	invocationID := rand.Text()
 	deterministicDeny := in.Control != nil && in.Control.Blocked && in.Control.DenyAssessmentID == ""
 	for _, configured := range c.Rules {
 		b, p := configured.Binding, configured.Compiled
@@ -57,7 +59,7 @@ func (c *Config) Evaluate(ctx context.Context, in Evaluation, em *output.Emitter
 		if a.DenyCandidate && (in.Control == nil || in.Control.ObserveOnly || in.Control.Tainted) {
 			a.DenyCandidate, a.Reason = false, "native_enforcement_ineligible"
 		}
-		sum := sha256.Sum256([]byte(ev.EventID + "\x00" + a.PolicyID + "\x00" + b.View + "\x00" + a.RequestID))
+		sum := sha256.Sum256([]byte(invocationID + "\x00" + ev.EventID + "\x00" + a.RuleDigest + "\x00" + b.View + "\x00" + a.RequestID))
 		id := "asm-" + hex.EncodeToString(sum[:12])
 		eventIDs := make([]string, len(in.Events))
 		for i, event := range in.Events {
@@ -77,9 +79,9 @@ func (c *Config) Evaluate(ctx context.Context, in Evaluation, em *output.Emitter
 		}
 		r := configured.Rule
 		r.Tags = append(slices.Clone(r.Tags), "decision_model", "decision_view:"+b.View)
-		f := finding.FromMatch(rule.Match{Rule: r, Event: ev}, finding.Options{})
+		f := finding.FromMatch(rule.Match{Rule: r, Event: ev}, finding.Options{AssessmentID: id})
 		f.CitedEventIDs = slices.Clone(eventIDs)
-		f.AssessmentID, f.DecisionGaps = id, slices.Clone(a.Gaps)
+		f.DecisionGaps = slices.Clone(a.Gaps)
 		if err := em.EmitFinding(f); err != nil {
 			continue
 		}

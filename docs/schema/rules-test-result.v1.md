@@ -187,7 +187,7 @@ failure or sequence-tracker error promotes the event to
   "enforce_eligible_rules": 24,
   "assertion_outcome": "unchecked",
   "numbat_version": "dev+abc123",
-  "record_schema": "0.5.0"
+  "record_schema": "0.6.0"
 }
 ```
 

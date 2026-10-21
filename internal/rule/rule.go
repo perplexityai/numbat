@@ -5,10 +5,9 @@
 // selected normalized fields under their emitted JSON names; `shell_commands`
 // is a rule-only projection of statically visible command invocations.
 //
-// Two rule shapes share the contract: a single-event rule (`expr`) evaluates
-// one event in isolation, and a sequence rule (`sequence:`) correlates an
-// ordered chain within one correlation partition, each step an ordinary CEL
-// expr evaluated by the same engine. Exactly one shape must be present.
+// Three rule shapes share the catalog: expr evaluates one event, sequence
+// correlates an ordered chain, and decision selects optional model evaluation.
+// Exactly one shape must be present.
 package rule
 
 import (
@@ -32,8 +31,7 @@ type Rule struct {
 	Severity    string `yaml:"severity"`
 	Version     string `yaml:"version"`
 	// Expr is a CEL boolean expression. When it evaluates true for an event, the
-	// rule produces a Finding. A rule carries exactly one of Expr or Sequence,
-	// never both.
+	// rule produces a Finding. Exactly one of Expr, Sequence or Decision is set.
 	Expr string `yaml:"expr,omitempty"`
 	// Sequence makes this a multi-step correlation rule. When an event matches
 	// the final step, the rule produces one finding citing each contributing

@@ -47,6 +47,11 @@ const contentTypeProtobuf = "application/x-protobuf"
 // exhaust memory. 4 MiB comfortably holds a normal export batch.
 const maxOTLPBody = 4 << 20
 
+// Optional network classification must not consume a fresh deadline for every
+// record in a large export. Leave room under the server's 30s write timeout for
+// local processing and output; this does not bound those independent operations.
+const collectDecisionBudget = 25 * time.Second
+
 // runCollect implements `numbat collect`: a long-running, in-process OTLP/HTTP
 // receiver. It listens on a loopback address (default :4318), decodes each
 // incoming OTLP logs export, maps every record into a model.Event
@@ -368,6 +373,8 @@ func newCollector(cfg collectorConfig) (*collector, error) {
 // failure is a client error (the exporter sent a malformed batch), never a
 // crash.
 func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), collectDecisionBudget)
+	defer cancel()
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeOTLPError(w, http.StatusMethodNotAllowed, "method not allowed: use POST")
@@ -419,7 +426,7 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 		if ev.CaseID == "" {
 			ev.CaseID = c.caseID
 		}
-		if err := c.pipe.Process(ev, "otel:"+res.SourceAgent); err != nil {
+		if err := c.pipe.ProcessContext(ctx, ev, "otel:"+res.SourceAgent); err != nil {
 			c.skippedN.Add(1)
 			rejected++
 			c.emit.Diag("warn", "collect: "+err.Error())

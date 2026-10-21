@@ -48,7 +48,12 @@ source-specific and omitted when the source does not record them.
 
 ## Migration from 0.5.0
 
-Records are stamped `0.6.0`. Strict consumers must select this directory.
+All records are stamped `0.6.0`, even without decision evaluation enabled.
+Update strict downstream validators to this directory before upgrading the
+binary; earlier schema directories still apply to earlier record streams.
+Case building and verification accept only the binary's current record schema.
+Keep a matching-version binary for older streams and immutable bundles;
+this release does not migrate them.
 Existing event fields remain compatible. The new opt-in `assessment`
 record describes a model result, configured thresholds, evidence eligibility,
 and a semantic deny candidate; it does not establish host blocking. Its
@@ -82,6 +87,10 @@ and `deny_assessment_id`; a deterministic deny retains `enforce_rule_match`.
 The two deny sources are mutually exclusive in one computed effect.
 Case bundles preserve case-scoped assessments in `assessments.ndjson`.
 Offline tools never rerun a classifier merely by reading these records.
+Assessment IDs distinguish evaluations, including skips. Model-backed finding
+IDs also include the assessment identity, so repeated classifications do not
+collide even when the original event is unchanged. Deterministic finding
+identities retain their existing deduplication contract.
 
 ## Earlier migration from 0.4.0
 

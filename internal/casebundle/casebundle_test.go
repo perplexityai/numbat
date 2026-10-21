@@ -246,7 +246,7 @@ func TestBuildCarriesCaseAssessments(t *testing.T) {
 	a := jline(t, map[string]any{
 		"record_type": "assessment", "schema_version": model.SchemaVersion, "case_id": "case-1",
 		"assessment_id": "asm-0123456789abcdef01234567", "timestamp": "2026-06-02T10:00:02Z",
-		"status": "completed", "policy_id": "local.test", "choice": "prohibited",
+		"status": "completed", "rule_id": "local.test", "choice": "prohibited",
 	})
 	opts := buildOpts(writeStream(t, e, f, a, a))
 	opts.Out = filepath.Join(t.TempDir(), "case.numbat")

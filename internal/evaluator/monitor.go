@@ -24,7 +24,7 @@ type monitorWindow struct {
 // Monitor correlates passive observations, not admitted pending calls. Its
 // windows never establish the complete, fresh prefix required by native deny.
 // Each caller owns its capture stream; artifacts and identities stay separate.
-func (c *Config) Monitor(em *output.Emitter) func(model.Event) {
+func (c *Config) Monitor(em *output.Emitter) func(context.Context, model.Event) {
 	var mu sync.Mutex
 	windows := make(map[monitorKey]*monitorWindow)
 	total := 0
@@ -34,8 +34,8 @@ func (c *Config) Monitor(em *output.Emitter) func(model.Event) {
 		withHistory = withHistory || r.View == decision.Session
 	}
 	operator, _ := json.Marshal(c.OperatorContext)
-	return func(ev model.Event) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.BudgetMS)*time.Millisecond)
+	return func(parent context.Context, ev model.Event) {
+		ctx, cancel := context.WithTimeout(parent, time.Duration(c.BudgetMS)*time.Millisecond)
 		defer cancel()
 		phase := "observed"
 		if ev.ToolResultForAnalysis() != "" {

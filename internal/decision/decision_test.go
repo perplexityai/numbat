@@ -102,6 +102,20 @@ func TestInputsAreCopiedAndBound(t *testing.T) {
 	}
 }
 
+func TestPrepareDeduplicatesEvidenceGaps(t *testing.T) {
+	c, b, e, now := fixture(t)
+	e.Subject.CallID = ""
+	e.CurrentComplete, e.PrefixComplete = false, false
+	e.Gaps = []string{"current_incomplete", "missing_call_identity_or_input", "prefix_incomplete"}
+	r := request(t, c, b, e, now)
+	if !slices.Equal(r.Gaps, e.Gaps) || r.Eligible {
+		t.Fatalf("repeated or lost gaps: %v, eligible=%v", r.Gaps, r.Eligible)
+	}
+	if !slices.Equal(e.Gaps, []string{"current_incomplete", "missing_call_identity_or_input", "prefix_incomplete"}) {
+		t.Fatal("preparing a request mutated source evidence")
+	}
+}
+
 func TestReduction(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

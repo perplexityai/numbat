@@ -286,7 +286,8 @@ numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`
 `hostname`, `os`, `arch`,
 `username`, and `uid`; set `NUMBAT_DEVICE_ID` to add a stable opaque
 `endpoint.device_id` for fleet joins.
-`enforcement` and opt-in `assessment` are hook-only; `scan_summary` is scan-only.
+`enforcement` is hook-only; opt-in `assessment` records can come from hooks,
+scan or collect. `scan_summary` is scan-only.
 
 Event and finding value fields are redacted before emission. This includes
 credential query parameters, URL userinfo passwords, Basic/Bearer authorization
@@ -387,6 +388,12 @@ compact preview.
 configuration as hooks and scans. Collection never sends native deny responses.
 Events without a captured exporter origin are classified independently rather
 than merged into a potentially cross-exporter history.
+Optional model work shares a 25-second deadline per export, including queue
+time, and stops when the requesting client disconnects. Per-event model
+budgets still apply within it. Later records receive timeout assessments
+instead of further model calls; local events, deterministic findings and
+indicators continue to be processed. This bounds model work, not total sink or
+local-processing time.
 
 `collect` runs an in-process OTLP/HTTP logs receiver and maps live agent
 telemetry through the same pipeline `scan` uses. It listens on
@@ -409,8 +416,9 @@ An empty `200` response means local acceptance, not downstream acknowledgement
 by a batched HTTP sink. A `200` response can instead contain OTLP
 `partial_success` with `rejected_log_records`; exporters should surface its
 message. Sink write failures and a pending direct-HTTP delivery failure return
-`503`. A byte-identical retry within one collector run reuses event and finding
-IDs so receivers can deduplicate it.
+`503`. A byte-identical retry within one collector run reuses event and
+deterministic finding IDs so receivers can deduplicate them. Decision
+assessments and model-backed findings identify each evaluation separately.
 
 ### collect flags
 

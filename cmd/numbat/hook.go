@@ -43,7 +43,7 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "decision-check":
-		fmt.Fprintln(stderr, "hook decision-check moved to: numbat decisions check --config FILE or numbat decisions digest --policy FILE")
+		fmt.Fprintln(stderr, "hook decision-check moved to: numbat decisions check --config FILE")
 		return 2
 	case "install", "uninstall", "status":
 		return runHookAdmin(args[0], args[1:], stdout, stderr)
@@ -740,11 +740,9 @@ func openHookState(override string, private bool) (*state.DB, error) {
 		path = filepath.Join(home, ".numbat", "state.db")
 	}
 	if private {
-		if db, err := state.OpenEvidence(path, 250*time.Millisecond); err == nil {
-			return db, nil
-		}
-		// Optional evidence privacy must not disable an existing sequence store.
-		// Its independent decision-history open will report the privacy failure.
+		// The legacy opener repairs permissions, which would make rejected
+		// decision history appear trustworthy to the next callback.
+		return state.OpenEvidence(path, 250*time.Millisecond)
 	}
 	return state.Open(path, 250*time.Millisecond)
 }

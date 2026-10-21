@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/perplexityai/numbat/internal/casebundle"
 	"github.com/perplexityai/numbat/internal/decision"
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
@@ -81,6 +83,85 @@ func runtimeEvent(id, session, path string) model.Event {
 		SchemaVersion: model.SchemaVersion, EventID: id, SourceAgent: model.AgentClaudeCode,
 		SourceType: model.SourceArtifact, SessionID: session, ToolCallID: id, EventType: model.EventFileRead,
 		FilePath: path, Confidence: "high", Evidence: model.Evidence{ArtifactType: "synthetic", LocalPath: "a.jsonl"},
+	}
+}
+
+func TestRepeatedDecisionEvaluationsHaveDistinctRecordIdentities(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		t.Run(fmt.Sprint(selected), func(t *testing.T) {
+			c, hits := runtimeConfig(t, nil)
+			r := runtimeRule(decision.Action)
+			r.Decision.Select = fmt.Sprint(selected)
+			ev := runtimeEvent("unchanged-event", "session", "/synthetic/file")
+			ev.CaseID = "synthetic-case"
+			var out bytes.Buffer
+			em := output.New(&out, io.Discard, "test")
+			if err := em.EmitEvent(ev); err != nil {
+				t.Fatal(err)
+			}
+			for _, version := range []string{"1", "1", "2"} {
+				r.Version = version
+				if err := c.ConfigureRules([]rule.Rule{r}); err != nil {
+					t.Fatal(err)
+				}
+				c.Monitor(em)(context.Background(), ev)
+			}
+			if err := em.Close(); err != nil {
+				t.Fatal(err)
+			}
+			seen := make(map[string]bool)
+			assessments, findings := 0, 0
+			for _, line := range bytes.Split(bytes.TrimSpace(out.Bytes()), []byte("\n")) {
+				var rec struct {
+					RecordType   string `json:"record_type"`
+					AssessmentID string `json:"assessment_id"`
+					FindingID    string `json:"finding_id"`
+					RequestID    string `json:"request_id"`
+				}
+				if err := json.Unmarshal(line, &rec); err != nil {
+					t.Fatal(err)
+				}
+				id := ""
+				switch rec.RecordType {
+				case output.RecordAssessment:
+					assessments++
+					id = rec.AssessmentID
+					if !selected && rec.RequestID != "" {
+						t.Fatal("skipped evaluation invented a provider request")
+					}
+				case output.RecordFinding:
+					findings++
+					id = rec.FindingID
+					if !seen[rec.AssessmentID] {
+						t.Fatal("finding does not cite its emitted assessment")
+					}
+				default:
+					continue
+				}
+				if id == "" || seen[id] {
+					t.Fatalf("missing or reused %s identity: %q", rec.RecordType, id)
+				}
+				seen[id] = true
+			}
+			if assessments != 3 || (selected && (findings != 3 || hits.Load() != 3)) ||
+				(!selected && (findings != 0 || hits.Load() != 0)) {
+				t.Fatalf("assessments=%d findings=%d requests=%d", assessments, findings, hits.Load())
+			}
+			if !selected {
+				return
+			}
+			dir := t.TempDir()
+			source := filepath.Join(dir, "records.ndjson")
+			if err := os.WriteFile(source, out.Bytes(), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := casebundle.Build(casebundle.Options{
+				CaseID: ev.CaseID, Sources: []string{source}, Out: filepath.Join(dir, "case.numbat"),
+			})
+			if err != nil || result.Findings != findings || result.Assessments != assessments {
+				t.Fatalf("case bundle lost reevaluations: %+v (%v)", result, err)
+			}
+		})
 	}
 }
 
@@ -151,12 +232,12 @@ func TestMonitorPartitionsAndNeverAuthorizesDeny(t *testing.T) {
 	em := output.New(&out, io.Discard, "test")
 	observe := c.Monitor(em)
 	a := runtimeEvent("one", "s", "/artifact-A")
-	observe(a)
+	observe(context.Background(), a)
 	b := runtimeEvent("two", "s", "/artifact-B")
 	b.Evidence.LocalPath = "b.jsonl"
-	observe(b)
+	observe(context.Background(), b)
 	a.EventID, a.ToolCallID, a.FilePath = "three", "three", "/current-A"
-	observe(a)
+	observe(context.Background(), a)
 	if hits.Load() != 3 || bytes.Contains(bodies[1], []byte("/artifact-A")) || !bytes.Contains(bodies[2], []byte("/artifact-A")) {
 		t.Fatalf("artifact partitions mixed or lost: %q", bodies)
 	}
@@ -249,7 +330,7 @@ func TestCollectorWithoutOriginDoesNotMergeExporters(t *testing.T) {
 		ev := runtimeEvent(path, "same-session", path)
 		ev.SourceType = model.SourceOTel
 		ev.Evidence = model.Evidence{ArtifactType: "otel"}
-		observe(ev)
+		observe(context.Background(), ev)
 	}
 	if len(bodies) != 2 || bytes.Contains(bodies[1], []byte("/exporter-A")) {
 		t.Fatalf("unknown exporters combined: %q", bodies)

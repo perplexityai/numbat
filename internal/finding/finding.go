@@ -29,6 +29,9 @@ type Options struct {
 	// Now stamps detected_at. A zero value uses time.Now().
 	// Tests set it for deterministic output.
 	Now time.Time
+	// AssessmentID distinguishes model reevaluations of the same event.
+	// It applies to FromMatch; deterministic callers leave it empty.
+	AssessmentID string
 }
 
 // FromMatch renders a rule match into a Finding. The finding carries no raw
@@ -66,6 +69,10 @@ func FromMatch(m rule.Match, opts Options) model.Finding {
 		EvidenceRefs:    []model.Evidence{ev.Evidence},
 		CitedEventIDs:   []string{ev.EventID},
 		Confidence:      ev.Confidence,
+	}
+	if opts.AssessmentID != "" {
+		f.AssessmentID = opts.AssessmentID
+		f.FindingID = findingID(m.Rule.ID, m.Rule.Version, ev.EventID, opts.AssessmentID)
 	}
 	f.Redacted = observed(ev, &f)
 	if ev.ProjectPath != "" {

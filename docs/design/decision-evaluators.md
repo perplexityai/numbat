@@ -33,7 +33,7 @@ For OpenRouter, replace the provider block with:
 ```yaml
 provider:
   endpoint: https://openrouter.ai/api/alpha/decisions
-  model: pplx-decider-v1.2
+  model: perplexity/pplx-decider-v1.2
   token_env: OPENROUTER_API_KEY
   headers:
     HTTP-Referer: https://example.com
@@ -51,7 +51,9 @@ or more than 8192 bytes including header separators.
 OpenRouter [attribution](https://openrouter.ai/docs/app-attribution) can create
 public application listings; omit these headers for private deployments.
 
-Verify model availability for your provider account. `expected_model` optionally
+OpenRouter uses the [namespaced model ID](https://openrouter.ai/perplexity/pplx-decider-v1.2),
+not the direct Perplexity API's unprefixed name. Verify model availability for
+your provider account. `expected_model` optionally
 specifies the exact returned ID when an API resolves the requested alias to a
 different name. Otherwise the returned model must exactly match `model`.
 An alias echoed by a provider is not proof of an immutable model checkpoint.
@@ -164,6 +166,10 @@ are released before network I/O. It stores bounded projected arguments/results,
 not complete transcripts, model answers, summaries or a verdict cache.
 User prompts and unrelated event-envelope fields are not automatically uploaded.
 Action-only configurations do not need decision-history storage.
+When decision evaluation is configured, the shared sequence/history database
+must satisfy the stricter private-state checks. A rejected file is not
+automatically chmodded and reused; sequence and contextual evaluation remain
+unavailable, without suppressing an independent stateless or action-only deny.
 
 Only verified fresh lifecycle boundaries anchor a complete prefix. Currently
 these are Claude/Codex `source: startup`, Cline task start, the generated OpenCode
@@ -189,6 +195,9 @@ Passive scans keep separate in-memory windows by artifact and session identity.
 They are always advisory and never read native admission state. The current
 collector does not establish exporter identity, so it supplies no cross-request
 history when the artifact origin is absent; `history_origin_unknown` records why.
+Collection also caps optional model work at 25 seconds per export, including
+queue time, and propagates client cancellation. The ordinary per-event budget
+still applies; expired optional work does not discard local telemetry.
 
 If history makes a request oversized, remove whole oldest entries and mark
 `history_bytes_limit`; never clip the current action to force it to fit.
@@ -234,10 +243,25 @@ cost. No model calls occur without the explicit configuration flag.
 
 ## Output and troubleshooting
 
-Each active decision rule produces an `assessment` per evaluated callback,
-including skips. It contains rule ID/version/digest, configured and returned
-model identity, probabilities, thresholds, status, reason, gaps and event IDs.
-No provider free-form explanation or raw request body is copied into it.
+Each active decision rule produces an `assessment` per evaluation, including
+non-matches, abstentions, errors and skips. This applies to configured hooks,
+scans and collection, not just matches that produce findings. Disabled rules,
+lifecycle-only callbacks and configuration-load failures do not produce
+per-rule assessments; configuration failures are diagnostics.
+
+Assessments contain rule ID/version/digest, configured and returned model
+identity, probabilities when available, thresholds, status, reason, gaps and
+action-event IDs. Input digests identify a prepared snapshot, not its contents.
+No provider free-form explanation or raw request body is copied into the
+record. Use `--emit all` to retain cited events; content retention is a separate
+choice, and hashes alone cannot reconstruct inputs.
+
+Every evaluation has a distinct `assessment_id`, even when no request was
+prepared. Model-backed findings include that identity in their `finding_id`,
+so rechecking the same event preserves separate outcomes. Deterministic finding
+IDs remain stable. Records use Numbat schema 0.6.0, not OCSF, and use the ordinary
+record sinks. A non-match is not explicit authorization; an enforcement record
+describes a computed response, not proof of host blocking.
 
 Matching findings carry `assessment_id`, `decision_gaps`, `decision_model` and a
 view tag. Native enforcement records use the ordinary `rule_ids`,

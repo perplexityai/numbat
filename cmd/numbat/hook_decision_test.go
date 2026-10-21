@@ -131,6 +131,126 @@ func (l *decisionHookLab) save(t *testing.T) {
 
 func decisionBool(v bool) *bool { return &v }
 
+func TestTypedNativeCallPreservesSessionPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input map[string]any
+	}{
+		{"Read", map[string]any{"file_path": "/synthetic/record.txt"}},
+		{"Write", map[string]any{"file_path": "/synthetic/output.txt", "content": "synthetic"}},
+		{"Edit", map[string]any{"file_path": "/synthetic/output.txt", "old_string": "old", "new_string": "new"}},
+		{"Bash", map[string]any{"command": "printf synthetic"}},
+		{"apply_patch", map[string]any{"patch": "*** Begin Patch\n*** Add File: /synthetic/a.txt\n+first\n*** Add File: /synthetic/b.txt\n+second\n*** End Patch"}},
+	} {
+		for _, changed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/changed=%t", tc.name, changed), func(t *testing.T) {
+				lab := newDecisionHookLab(t)
+				lab.invoke(t, "session-start", map[string]any{"hook_event_name": "SessionStart", "source": "startup"})
+				payload := map[string]any{
+					"tool_name": tc.name, "tool_use_id": "call-1", "tool_input": tc.input,
+					"hook_event_name": "PreToolUse",
+				}
+				lab.invoke(t, "pre-tool", payload)
+				payload["hook_event_name"] = "PostToolUse"
+				payload["tool_response"] = map[string]any{"content": "synthetic result", "exit_code": 0}
+				if changed {
+					input := make(map[string]any, len(tc.input)+1)
+					for k, v := range tc.input {
+						input[k] = v
+					}
+					input["unexpected_change"] = true
+					payload["tool_input"] = input
+				}
+				lab.invoke(t, "post-tool", payload)
+				control := lab.upload(t)
+				assessments := lab.assessments(t)
+				last := assessments[len(assessments)-1]
+				denied := strings.Contains(control, `"permissionDecision":"deny"`)
+				if denied == changed || last.InputEligible == changed ||
+					slices.Contains(last.Gaps, "changed_call_input") != changed {
+					t.Fatalf("changed=%t control=%s eligible=%t gaps=%v", changed, control, last.InputEligible, last.Gaps)
+				}
+			})
+		}
+	}
+}
+
+func TestPrivateDecisionHistoryIsNotSilentlyRepaired(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	lab.prefix(t, true)
+	path := filepath.Join(lab.dir, "state", "state.db")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		control := lab.upload(t)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assessments := lab.assessments(t)
+		last := assessments[len(assessments)-1]
+		if info.Mode().Perm() != 0o644 || last.InputEligible ||
+			strings.Contains(control, `"permissionDecision":"deny"`) ||
+			!slices.Contains(last.Gaps, "state_unavailable") {
+			t.Fatalf("unprotected state repaired or trusted: mode=%o assessment=%+v control=%s", info.Mode().Perm(), last, control)
+		}
+	}
+	lab.rules = append(lab.rules, rule.Rule{
+		ID: "local.deterministic", Version: "1", Title: "Synthetic", Severity: "high",
+		Expr: `event.tool_name == "mcp__fixture__upload"`, Enforce: decisionBool(true),
+	})
+	lab.save(t)
+	if control := lab.upload(t); !strings.Contains(control, `"permissionDecision":"deny"`) {
+		t.Fatalf("unavailable shared state suppressed an independent stateless deny: %s", control)
+	}
+}
+
+func TestDocumentedDecisionExamplesValidateOffline(t *testing.T) {
+	lab := newDecisionHookLab(t)
+	t.Setenv("PERPLEXITY_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "design", "decision-evaluators.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configs []string
+	rules := 0
+	for _, section := range strings.Split(string(raw), "```yaml\n")[1:] {
+		doc := strings.SplitN(section, "\n```", 2)[0] + "\n"
+		switch {
+		case strings.HasPrefix(doc, "version:"):
+			configs = append(configs, doc)
+		case strings.HasPrefix(doc, "provider:"):
+			configs = append(configs, "version: \"1\"\n"+doc)
+		case strings.HasPrefix(doc, "id:"):
+			path := filepath.Join(lab.dir, "decisions", fmt.Sprintf("%02d.yaml", rules))
+			if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rules++
+		default:
+			t.Fatalf("unrecognized documented YAML example: %s", doc)
+		}
+	}
+	if len(configs) == 0 || rules == 0 {
+		t.Fatal("no documented configurations or rules were checked")
+	}
+	for i, config := range configs {
+		if err := os.WriteFile(lab.config, []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, stderr bytes.Buffer
+		code := runDecisions([]string{
+			"check", "--config", lab.config, "--rules-dir",
+			filepath.Join(lab.dir, "decisions"), "--no-builtin-rules",
+		}, &out, &stderr)
+		if code != 0 {
+			t.Fatalf("documented config %d failed offline validation: %s", i, stderr.String())
+		}
+	}
+}
+
 func TestNativeActionIndependentOfBrokenSessionHistory(t *testing.T) {
 	for _, missingID := range []bool{false, true} {
 		lab := newDecisionHookLab(t)

@@ -28,9 +28,11 @@ func ProjectBatch(events []model.Event, phase, content string) Observation {
 			seen[string(part.Action)] = true
 		}
 	}
-	o.Action, _ = json.Marshal(struct {
-		Actions []json.RawMessage `json:"actions"`
-	}{actions})
+	if len(actions) > 1 {
+		o.Action, _ = json.Marshal(struct {
+			Actions []json.RawMessage `json:"actions"`
+		}{actions})
+	}
 	o.EventType = ""
 	return o
 }
@@ -47,20 +49,20 @@ func Project(ev model.Event, phase, content string) Observation {
 	}
 	input := ev.ToolInputForAnalysis()
 	action := map[string]any{"tool": ev.ToolName, "arguments_present": input != ""}
-	for name, value := range map[string]string{
-		"command": ev.Command, "file_path": ev.FilePath, "url": ev.URL,
-		"mcp_server": ev.MCPServer, "mcp_tool": ev.MCPTool,
-	} {
-		if value != "" {
-			action[name] = value
-		}
-	}
 	if input != "" && ValidJSON([]byte(input)) {
 		action["arguments"] = json.RawMessage(input)
 		o.Complete = input != "null" && !ev.ToolInputTruncatedForAnalysis()
 	} else {
 		// Some adapters expose a typed command/path rather than argument JSON.
 		// Preserve those observed fields without inventing a tool payload.
+		for name, value := range map[string]string{
+			"command": ev.Command, "file_path": ev.FilePath, "url": ev.URL,
+			"mcp_server": ev.MCPServer, "mcp_tool": ev.MCPTool,
+		} {
+			if value != "" {
+				action[name] = value
+			}
+		}
 		o.Complete = input == "" && (ev.Command != "" || ev.FilePath != "" || ev.URL != "") &&
 			!ev.ToolInputTruncatedForAnalysis()
 	}
