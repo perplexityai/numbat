@@ -409,7 +409,12 @@ func TestNativeDecisionEnvironmentCredentials(t *testing.T) {
 			lab.prefix(t, true)
 			control := lab.upload(t)
 			if strings.Contains(control, `"permissionDecision":"deny"`) != tc.deny || lab.hits.Load() != tc.calls {
-				t.Fatalf("control=%s requests=%d", control, lab.hits.Load())
+				summary := "no assessment"
+				if assessments := lab.assessments(t); len(assessments) > 0 {
+					a := assessments[len(assessments)-1]
+					summary = fmt.Sprintf("status=%s reason=%s eligible=%t gaps=%v", a.Status, a.Reason, a.InputEligible, a.Gaps)
+				}
+				t.Fatalf("control=%s requests=%d %s", control, lab.hits.Load(), summary)
 			}
 			raw, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
 			if err != nil || strings.Contains(string(raw), "synthetic-token") {

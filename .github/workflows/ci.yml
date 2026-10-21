@@ -80,6 +80,8 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
+          # Recompute facts after cached runs misclassified terminating test guards.
+          skip-cache: true
 
       # golangci-lint run does not execute formatters in v2; fmt does. This
       # gates gofumpt (and gofmt) on top of the lint pass above, reusing the
