@@ -21,7 +21,9 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 
+	"github.com/perplexityai/numbat/internal/evaluator"
 	"github.com/perplexityai/numbat/internal/finding"
+	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/otel"
 	"github.com/perplexityai/numbat/internal/output"
 	"github.com/perplexityai/numbat/internal/pipeline"
@@ -77,6 +79,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	httpGzip := fs.Bool("http-gzip", false, "gzip the HTTP POST body")
 	var rf ruleFlags
 	rf.register(fs)
+	decisionConfig := fs.String("decision-config", "", "enable model classification using this provider configuration; sends selected evidence to its endpoint")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat collect [--addr 127.0.0.1:4318] [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--output SINK ...] [--case-id ID] [--rules-dir DIR ...] [--no-builtin-rules]")
 		fmt.Fprintln(stderr, "\nReceives live OTLP/HTTP protobuf logs from supported AI agents and emits")
@@ -163,12 +166,13 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 	rid := runID()
 	em := output.NewWithSink(sink, stderr, rid, contentEmitterOptions(content, scope, *maxRecordBytes)...)
 	rcv, err := newCollector(collectorConfig{
-		emit:      em,
-		runID:     rid,
-		caseID:    *caseID,
-		sel:       sel,
-		ruleDirs:  rf.dirs,
-		noBuiltin: rf.noBuiltin,
+		emit:           em,
+		runID:          rid,
+		caseID:         *caseID,
+		sel:            sel,
+		ruleDirs:       rf.dirs,
+		noBuiltin:      rf.noBuiltin,
+		decisionConfig: *decisionConfig,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "collect: %v\n", err)
@@ -203,6 +207,7 @@ func runCollect(args []string, stdout, stderr io.Writer) int {
 // completes. It returns the process exit code: 0 on a clean signal-driven stop,
 // 1 if the listener could not bind or serve.
 func serveCollect(ctx context.Context, addr string, rcv *collector, stderr io.Writer) int {
+	defer rcv.close()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(stderr, "collect: listen %s: %v\n", addr, err)
@@ -274,12 +279,13 @@ func warnIfOffLoopback(addr string, stderr io.Writer) {
 
 // collectorConfig carries the resolved dependencies a collector needs.
 type collectorConfig struct {
-	emit      *output.Emitter
-	runID     string
-	caseID    string
-	sel       emitSelection
-	ruleDirs  multiFlag
-	noBuiltin bool
+	decisionConfig string
+	emit           *output.Emitter
+	runID          string
+	caseID         string
+	sel            emitSelection
+	ruleDirs       multiFlag
+	noBuiltin      bool
 }
 
 // collector holds the per-receiver state: the shared pipeline every record flows
@@ -287,16 +293,21 @@ type collectorConfig struct {
 // each record to a model.Event and hands it to the pipeline, exactly as the hook
 // handler and scanner do, so detection is identical across sensors.
 type collector struct {
-	emit          *output.Emitter
-	runID         string
-	caseID        string
-	pipe          *pipeline.Pipeline
-	indicators    *output.IndicatorAccumulator
-	indicatorsSel bool
-	processMu     sync.Mutex
-	indicatorMu   sync.Mutex
-	emittedCounts map[string]int
-	deliveryDown  bool
+	decisions      *evaluator.Background
+	emit           *output.Emitter
+	runID          string
+	caseID         string
+	pipe           *pipeline.Pipeline
+	indicators     *output.IndicatorAccumulator
+	indicatorsSel  bool
+	processMu      sync.Mutex
+	indicatorMu    sync.Mutex
+	emittedCounts  map[string]int
+	deliveryDown   bool
+	advisoryErrors int
+	lifecycleMu    sync.Mutex
+	closing        bool
+	active         sync.WaitGroup
 
 	processedN atomic.Int64
 	skippedN   atomic.Int64
@@ -331,6 +342,28 @@ func newCollector(cfg collectorConfig) (*collector, error) {
 		Findings:   cfg.sel.findings,
 		Indicators: cfg.sel.indicators,
 	}, finding.Options{}, c.indicators)
+	if cfg.decisionConfig != "" {
+		if !cfg.sel.findings {
+			return nil, fmt.Errorf("--decision-config requires findings output")
+		}
+		decisions, err := evaluator.LoadConfig(cfg.decisionConfig)
+		if err == nil {
+			err = decisions.ConfigureRules(eng.DecisionRules())
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(decisions.Rules) > 0 {
+			c.decisions = decisions.Background(cfg.emit, &c.processMu)
+			c.pipe.WithDecisionObserver(func(ctx context.Context, ev model.Event) {
+				before := cfg.emit.Stats().RecordErrors
+				c.decisions.Observe(ctx, ev)
+				// Immediate skip records are optional too. This callback and
+				// background writes share processMu, so the delta is scoped.
+				c.advisoryErrors += cfg.emit.Stats().RecordErrors - before
+			})
+		}
+	}
 	// Sequence rules correlate across the receiver's lifetime: one tracker for
 	// the whole run, internally locked, so the concurrent OTLP handlers feed
 	// session windows safely. Only built when findings are evaluated and the
@@ -351,6 +384,15 @@ func newCollector(cfg collectorConfig) (*collector, error) {
 // failure is a client error (the exporter sent a malformed batch), never a
 // crash.
 func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
+	c.lifecycleMu.Lock()
+	if c.closing {
+		c.lifecycleMu.Unlock()
+		writeOTLPError(w, http.StatusServiceUnavailable, "collector shutting down")
+		return
+	}
+	c.active.Add(1)
+	c.lifecycleMu.Unlock()
+	defer c.active.Done()
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeOTLPError(w, http.StatusMethodNotAllowed, "method not allowed: use POST")
@@ -386,6 +428,7 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 	defer c.processMu.Unlock()
 
 	recordErrorsBefore := c.emit.Stats().RecordErrors
+	advisoryErrorsBefore := c.advisoryErrors
 	rejected := int64(0)
 	noAnalog := 0
 	for _, res := range results {
@@ -402,7 +445,7 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 		if ev.CaseID == "" {
 			ev.CaseID = c.caseID
 		}
-		if err := c.pipe.Process(ev, "otel:"+res.SourceAgent); err != nil {
+		if err := c.pipe.ProcessContext(r.Context(), ev, "otel:"+res.SourceAgent); err != nil {
 			c.skippedN.Add(1)
 			rejected++
 			c.emit.Diag("warn", "collect: "+err.Error())
@@ -426,7 +469,8 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		c.deliveryDown = sinkStats.PendingFailure
 	}
-	if c.emit.Stats().RecordErrors > recordErrorsBefore || sinkStats.PendingFailure {
+	baseErrors := c.emit.Stats().RecordErrors-recordErrorsBefore > c.advisoryErrors-advisoryErrorsBefore
+	if baseErrors || sinkStats.PendingFailure {
 		writeOTLPError(w, http.StatusServiceUnavailable, "record delivery failed; retry the export")
 		return
 	}
@@ -436,6 +480,16 @@ func (c *collector) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeOTLPSuccess(w)
+}
+
+func (c *collector) close() {
+	c.lifecycleMu.Lock()
+	c.closing = true
+	c.lifecycleMu.Unlock()
+	c.active.Wait()
+	if c.decisions != nil {
+		c.decisions.Close()
+	}
 }
 
 // emitChangedIndicators emits each indicator on first sight and again only

@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/perplexityai/numbat/internal/model"
 )
 
 // jsonRulesTestEvent mirrors the per-event object the CLI emits when --json
@@ -219,9 +221,9 @@ func TestRulesTestJSONMalformedInputClass(t *testing.T) {
 	// Line 1 is a valid benign event; line 2 is not valid JSON. Line 3 would
 	// be valid but must never be reported: the stream stops at the malformed
 	// input.
-	body := `{"schema_version":"0.5.0","event_id":"ok1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/main.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"` + model.SchemaVersion + `","event_id":"ok1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/main.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 {not valid json
-{"schema_version":"0.5.0","event_id":"ok2","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/other.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":3}}
+{"schema_version":"` + model.SchemaVersion + `","event_id":"ok2","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/app/other.go","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":3}}
 `
 	fixture := writeTempFile(t, "malformed.ndjson", body)
 	out, _, code := runCLI("rules", "test", "--json", "--fixture", fixture)
@@ -267,7 +269,7 @@ func TestRulesTestJSONEvaluatorFailureClass(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ruleDir, "boom.yaml"), []byte(ruleYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"schema_version":"0.5.0","event_id":"boom1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"hi","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"` + model.SchemaVersion + `","event_id":"boom1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"hi","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `
 	fixture := writeTempFile(t, "eval_fail.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", ruleDir, "--fixture", fixture)
@@ -316,7 +318,7 @@ func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 		parts = append(parts, "true")
 	}
 	command := strings.Join(parts, "; ")
-	body := `{"schema_version":"0.5.0","event_id":"cov1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":` + mustJSONString(command) + `,"confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"` + model.SchemaVersion + `","event_id":"cov1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":` + mustJSONString(command) + `,"confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `
 	fixture := writeTempFile(t, "coverage.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--fixture", fixture)
@@ -363,7 +365,7 @@ func TestRulesTestJSONEnforcementEligibleFlag(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ruleDir, "enf.yaml"), []byte(ruleYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"schema_version":"0.5.0","event_id":"enf1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/tmp/target","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	body := `{"schema_version":"` + model.SchemaVersion + `","event_id":"enf1","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"/tmp/target","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `
 	fixture := writeTempFile(t, "enf.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", ruleDir, "--fixture", fixture)
@@ -455,7 +457,7 @@ func TestRulesTestJSONMalformedInputValidateKind(t *testing.T) {
 	tmp := t.TempDir()
 	fx := filepath.Join(tmp, "validate.ndjson")
 	// Structurally valid JSON, but event_type is unknown so Validate() rejects.
-	body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"v1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"WRONG_TYPE\",\"file_path\":\"/x\",\"confidence\":\"high\",\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"v1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"WRONG_TYPE\",\"file_path\":\"/x\",\"confidence\":\"high\",\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -562,7 +564,7 @@ sequence:
 		t.Fatalf("write seq.yaml: %v", err)
 	}
 	fx := filepath.Join(tmp, "both.ndjson")
-	body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"b1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"echo hi\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"b1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"echo hi\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -621,7 +623,7 @@ func TestRulesTestJSONCountIdentities(t *testing.T) {
 			}
 		}
 		fx := filepath.Join(tmp, "one.ndjson")
-		body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+		body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 		if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 			t.Fatalf("write: %v", err)
 		}
@@ -666,7 +668,7 @@ expr: 'event.event_type == "file.read" && event.tags[10] == "x"'
 			t.Fatalf("write: %v", err)
 		}
 		fx := filepath.Join(tmp, "pair.ndjson")
-		body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"p1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"file.read\",\"file_path\":\"/x\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+		body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"p1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"file.read\",\"file_path\":\"/x\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 		if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 			t.Fatalf("write fixture: %v", err)
 		}
@@ -707,8 +709,8 @@ sequence:
 			t.Fatalf("write: %v", err)
 		}
 		fx := filepath.Join(tmp, "chain.ndjson")
-		body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n" +
-			"{\"schema_version\":\"0.5.0\",\"event_id\":\"e2\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"pwd\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":2}}\n"
+		body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n" +
+			"{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"e2\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"pwd\",\"session_id\":\"s1\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":2}}\n"
 		if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 			t.Fatalf("write fixture: %v", err)
 		}
@@ -788,7 +790,7 @@ expr: 'event.event_type == "command.exec"'
 		t.Fatalf("write: %v", err)
 	}
 	fx := filepath.Join(tmp, "one.ndjson")
-	body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -823,7 +825,7 @@ expr: 'event.event_type == "command.exec"'
 		t.Fatalf("write: %v", err)
 	}
 	fx := filepath.Join(tmp, "one.ndjson")
-	body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -871,7 +873,7 @@ func TestRulesTestJSONCompiledCLIDevFull(t *testing.T) {
 		t.Fatalf("build numbat: %v\n%s", err, out)
 	}
 	fx := filepath.Join(t.TempDir(), "fx.ndjson")
-	body := "{\"schema_version\":\"0.5.0\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
+	body := "{\"schema_version\":\"" + model.SchemaVersion + "\",\"event_id\":\"e1\",\"source_agent\":\"claude-code\",\"source_type\":\"artifact\",\"event_type\":\"command.exec\",\"command\":\"ls\",\"confidence\":\"high\",\"tags\":[],\"evidence\":{\"artifact_type\":\"claude_jsonl\",\"local_path\":\"/x\",\"line\":1}}\n"
 	if err := os.WriteFile(fx, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}

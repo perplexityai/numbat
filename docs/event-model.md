@@ -70,6 +70,11 @@ Related context remains separate:
 Absent relationships stay absent. numbat does not infer them from timestamps,
 names, paths, or neighboring events.
 
+Claude hook `agent_id` populates `sub_agent_id` for subagents and in-process
+teammates, while the envelope `session_id` is preserved
+([Claude hook contract](https://code.claude.com/docs/en/hooks)).
+This separates their timeline groups without inventing a parent or tree ID.
+
 ## Message content
 
 Prompt, assistant, and source-recorded reasoning events carry a normalized
@@ -166,4 +171,4 @@ the source can be reopened on the endpoint.
 
 See [Writing rules](rules.md) for the CEL field and event-type contracts,
 [Agent coverage](agent-coverage.md) for source-specific support, and the
-[record schemas](schema/v0.5.0/) for the emitted wire format.
+[record schemas](schema/v0.6.0/) for the emitted wire format.

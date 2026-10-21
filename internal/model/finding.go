@@ -72,6 +72,9 @@ type Finding struct {
 	// from. They let downstream consumers join a finding back to live hook/otel
 	// events whose Evidence is intentionally thin and non-unique.
 	CitedEventIDs []string `json:"cited_event_ids"`
+	// Decision findings link to model evidence; gaps qualify advisory matches.
+	AssessmentID string   `json:"assessment_id,omitempty"`
+	DecisionGaps []string `json:"decision_gaps,omitempty"`
 
 	// Redacted reports whether at least one emitted finding field was actually
 	// masked. A false value does not mean raw retention was enabled: finding

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,65 @@ import (
 	internalhook "github.com/perplexityai/numbat/internal/hook"
 	"github.com/perplexityai/numbat/internal/model"
 )
+
+func TestClaudeChildTimelinesWithoutDecisionConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "events.ndjson")
+	for i, child := range []string{"", "child-a", "child-b", ""} {
+		payload := map[string]any{
+			"hook_event_name": "PreToolUse", "session_id": "shared-session",
+			"tool_name": "Read", "tool_use_id": fmt.Sprintf("call-%d", i),
+			"tool_input": map[string]any{"file_path": "/synthetic/file"},
+		}
+		if child != "" {
+			payload["agent_id"] = child
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var control, diagnostics bytes.Buffer
+		code := runHookEvent("pre-tool", []string{
+			"--agent", "claude", "--emit", "events", "--output", "file", "--output-file", path,
+		}, bytes.NewReader(raw), &control, &diagnostics)
+		if code != 0 {
+			t.Fatalf("hook exit=%d: %s", code, diagnostics.String())
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []model.Event
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		var record struct {
+			RecordType string `json:"record_type"`
+			model.Event
+		}
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.RecordType == "event" {
+			events = append(events, record.Event)
+		}
+	}
+	groups := groupSessions(events)
+	if len(events) != 4 || len(groups) != 3 {
+		t.Fatalf("events=%d groups=%d; want four events in parent and two children", len(events), len(groups))
+	}
+	for _, group := range groups {
+		want := 1
+		if group.SubAgentID == "" {
+			want = 2
+		}
+		if group.SessionID != "shared-session" || len(group.Events) != want {
+			t.Fatalf("child or legacy identity changed: %+v", group)
+		}
+	}
+}
 
 // panicWriter panics on its first Write, used to force a panic deep inside the
 // hook processing path (the first diagnostic write) so the recover guard can be

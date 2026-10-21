@@ -19,10 +19,11 @@ numbat hook EVENT --agent NAME           live integration callback (normally not
 numbat hook install --agent NAME|all     install numbat's live integrations
 numbat hook uninstall --agent NAME|all   remove numbat-owned live integrations
 numbat hook status [--agent NAME|all]    inspect numbat-owned integration configuration
+numbat decisions check --config FILE    validate decision configuration and explain activation
 numbat rules check                       validate and compile rules; run companion tests
 numbat rules list                        list effective compiled rule ids
 numbat rules test --fixture FILE         evaluate rules against NDJSON events
-numbat case build <case-id> --from FILE  bundle findings, enforcement decisions, and cited events
+numbat case build <case-id> --from FILE  bundle findings, audit records, and cited events
 numbat case verify DIR                   check a bundle against its manifest digests
 numbat version                           print version and schema version
 ```
@@ -66,6 +67,12 @@ numbat agents --format json
 ```
 
 ## scan
+
+`--decision-config FILE` optionally enables advisory model classification with
+decision rules from the ordinary catalog. It sends projected evidence to the
+configured endpoint; without the flag, scanning remains local. See
+[decision rules](decision-rules.md) for the separate inference
+content policy and history limits.
 
 `scan` parses agent artifacts at rest, runs the rules over the reconstructed
 event stream, and writes one NDJSON record stream.
@@ -169,7 +176,8 @@ NUMBAT_HTTP_HMAC_KEY=... numbat scan \
 
 ### Emit modes
 
-- `findings` (default) — rule matches over the event stream.
+- `findings` (default): rule matches over the event stream, plus decision
+  assessments when `--decision-config` is set.
 - `events` — the full typed event timeline.
 - `indicators` — a deduplicated projection of indicators mined from
   the event stream (domains, IPv4/IPv6 addresses, URLs, emails, and
@@ -199,11 +207,19 @@ NUMBAT_HTTP_HMAC_KEY=... numbat scan \
 - `all` — events, findings, and indicators; enforcement records and scan
   summaries are emitted automatically when applicable.
 
+Decision evaluation requires findings output. With `--decision-config`,
+`--emit findings` and `--emit all` include a separate `assessment` record for
+each evaluated rule, including non-matches, abstentions, errors and skips.
+These records share the stream and sinks; activity events are not modified.
+There is no independent assessment selector or per-outcome filter; filter
+downstream if needed. `--content` and `--output` control retained event content
+and destinations separately.
+
 An indicator record (a `https://get.example.sh/install` URL seen twice):
 
 ```json
 {
-  "schema_version": "0.5.0",
+  "schema_version": "0.6.0",
   "record_type": "indicator",
   "run_id": "run-example-01",
   "endpoint": {
@@ -274,12 +290,13 @@ is omitted when that event has no valid timestamp.
 ### The record stream
 
 numbat writes typed NDJSON streams. Each record carries a `record_type` (`event`,
-`finding`, `enforcement`, `indicator`, or `scan_summary`) plus a `run_id` and
-`schema_version` (`0.5.0`). Every line carries an `endpoint` object with
+`finding`, `enforcement`, `assessment`, `indicator`, or `scan_summary`) plus a `run_id` and
+`schema_version` (`0.6.0`). Every line carries an `endpoint` object with
 `hostname`, `os`, `arch`,
 `username`, and `uid`; set `NUMBAT_DEVICE_ID` to add a stable opaque
 `endpoint.device_id` for fleet joins.
-`enforcement` is hook-only; `scan_summary` is scan-only.
+`enforcement` is hook-only; opt-in `assessment` records can come from hooks,
+scan or collect. `scan_summary` is scan-only.
 
 Event and finding value fields are redacted before emission. This includes
 credential query parameters, URL userinfo passwords, Basic/Bearer authorization
@@ -314,7 +331,7 @@ A one-batch run can therefore report zero for both; use `http_failed`,
 diagnostics, and the process exit code to determine delivery health.
 
 Machine-readable JSON Schemas for the record stream and each `record_type` live
-under [schema/v0.5.0](schema/v0.5.0/). Use `record-stream.schema.json` when
+under [schema/v0.6.0](schema/v0.6.0/). Use `record-stream.schema.json` when
 validating arbitrary NDJSON lines, or route on `record_type` and validate against
 the per-record schema.
 
@@ -374,7 +391,25 @@ numbat timeline --agent codex --include-reasoning --content full --format json
 `--content full` and `--content raw` are available only with `--format json`; the text view remains a
 compact preview.
 
+Claude hook `agent_id` is preserved as `sub_agent_id`, so identified children
+sharing a host session appear as separate timeline groups, even without
+decision evaluation. Main-agent or older payloads without that field keep
+their existing grouping; this is a source-identity correction, not a model setting.
+
 ## collect
+
+`--decision-config FILE` enables advisory decision rules using the same provider
+configuration as hooks and scans. Collection never sends native deny responses.
+Events without a captured exporter origin are classified independently rather
+than merged into a potentially cross-exporter history.
+Optional model work uses a bounded, best-effort background queue, so inference
+does not hold the export response open. At most 64 queued/in-flight events and
+8 MiB of serialized evidence/metadata are retained; work waiting over five
+seconds is skipped. Per-event model budgets still apply. Accepted work is owned
+by the collector, not the client's connection, and is cancelled at shutdown.
+Queue drops produce skipped assessments without dropping local events,
+deterministic findings or indicators. There is no durable model-work queue;
+ordinary sink delivery and local-processing latency still apply.
 
 `collect` runs an in-process OTLP/HTTP logs receiver and maps live agent
 telemetry through the same pipeline `scan` uses. It listens on
@@ -397,8 +432,9 @@ An empty `200` response means local acceptance, not downstream acknowledgement
 by a batched HTTP sink. A `200` response can instead contain OTLP
 `partial_success` with `rejected_log_records`; exporters should surface its
 message. Sink write failures and a pending direct-HTTP delivery failure return
-`503`. A byte-identical retry within one collector run reuses event and finding
-IDs so receivers can deduplicate it.
+`503`. A byte-identical retry within one collector run reuses event and
+deterministic finding IDs so receivers can deduplicate them. Decision
+assessments and model-backed findings identify each evaluation separately.
 
 ### collect flags
 
@@ -578,7 +614,9 @@ runs it through the same detection pipeline as `scan`. In monitor mode
 Kiro's successful response is zero bytes because Kiro adds stdout to agent context.
 With `--enforce`, an enforce-capable pre-action callback may block after a clean
 match of a rule marked `enforce: true`; a sequence match can block
-only its final action. Rules that use `shell_commands` can deny only from the
+only its final action. An explicitly configured decision rule can also
+contribute a semantic deny on supported pre-action hooks, subject to its additional
+gates described below. Rules that use `shell_commands` can deny only from the
 [static enforcement subset](enforcement.md#rule-effect). Structured-response
 agents return native deny JSON and
 exit 0; Windsurf, Kimi Code, Qwen Code, Auggie, Kiro, Goose, OpenHands, Crush,
@@ -597,8 +635,9 @@ documented hard deny.
 For a matched, enforce-capable pre-action callback, `--emit findings` also emits
 one action-level `record_type:"enforcement"` record. It carries numbat's
 computed `decision:"deny"` or `decision:"no_override"` and joins to the
-triggering records through `finding_ids` and `action_event_ids`. A finding by
-itself never implies a deny. The decision shares the existing operator batch,
+triggering records through `finding_ids` and `action_event_ids`. Semantic
+denies name the decision rule and supporting `assessment_ids`. A finding by itself never
+implies a deny. The decision shares the existing operator batch,
 before the host control response; it does not prove response delivery or that
 the host honored it.
 `EVENT` is the agent lifecycle moment (e.g. `PreToolUse`); the
@@ -626,14 +665,18 @@ below.
                              (default 0: unlimited; omit oversized event bodies)
 --include-reasoning          include source-recorded reasoning events when the
                              integration exposes them
---enforce                    opt-in enforce mode: block an action when a rule
-                             marked enforce: true matches, including the final
-                             action of a sequence. Off by default: monitor mode
+--enforce                    opt-in enforce mode: block an action when an
+                             enforcement-enabled rule
+                             matches, including the final action of a sequence.
+                             Off by default: monitor mode
                              detects but never blocks.
                              A relevant numbat error, panic, or uncertain match
                              suppresses its deny response.
 --state-db PATH              bbolt file holding live sequence-window state
+                             and opt-in decision evidence
                              (default $HOME/.numbat/state.db)
+--decision-config PATH       explicit provider configuration for decision rules;
+                             sends projected evidence to its HTTPS endpoint
 --installed-by NAME          provenance marker written by `hook install`;
                              accepted but inert (ignored at runtime)
 --output SINK                record sink: stdout, file, or http
@@ -662,6 +705,38 @@ The HTTP sink flags (`--http-url`, `--http-auth`, `--http-batch-size`,
 `--http-allow-insecure`) and the shared rule flags (`--rules-dir`,
 `--no-builtin-rules`) have the same meaning as in the [scan section](#scan),
 including the env-only auth secrets.
+
+### Optional decision evaluation
+
+`--decision-config /etc/numbat/decisions.yaml` explicitly enables configured
+decision rules in the ordinary `--rules-dir` catalog. The config owns one provider,
+an explicit environment or file credential source, deadlines, inference content
+mode and state retention.
+Rules own their selectors, criteria, action/session views and thresholds, with
+ordinary `enabled` and `enforce` fields. Rules cannot enable network access or
+select a destination on their own. See the
+[decision rule guide](decision-rules.md) for the complete
+format, trust boundary and evidence requirements.
+
+Both modes require findings; native enforce mode requires an out-of-band file
+or HTTP sink. Monitor-mode stdout selection routes records to stderr. Every
+considered enabled decision rule produces an `assessment` with its own `assessment_id`,
+separate from findings and the action-level enforcement record. A matching probability is not proof of a
+violation, and a computed deny does not prove host blocking. Model failures,
+timeouts and abstentions never override deterministic denies or authorize an
+action. Raw inference egress is a separate explicit choice from event-output
+`--content`.
+
+Deterministic rules run first, including sequences. A monitor-only match does
+not skip decision rules; an eligible deny does. Decision rules run in
+catalog admission order, with at most two independent requests under a shared
+deadline. Results are finalized as they arrive; remaining model work is cancelled once
+a deny is established. Remaining enabled rules receive skipped assessments.
+
+Use [`numbat decisions check`](#decisions) to inspect this configuration offline.
+Digests are computed automatically; there is no manual pin catalog.
+`hook status` still checks installed hook definitions, not decision-rule
+activation or provider health.
 
 ### hook install / status / uninstall
 
@@ -713,18 +788,24 @@ default. This agent process deadline is separate from the hook handler's
                              (repeatable)
 --no-builtin-rules           install hook commands that load only --rules-dir
                              rules
+--decision-config PATH       protected provider config to pass to installed hooks
+--state-db PATH              absolute concrete path for sequence/decision state
 --enforce                    install in enforce mode: block pre-tool matches
-                             from rules marked enforce: true (claude, codex,
+                             from rules marked enforce: true, or explicitly
+                             configured decision rules.
+                             Rule enforcement supports claude, codex,
                              cursor, copilot/vscode, gemini, windsurf,
                              antigravity, factory, grok, devin, hermes,
                              openclaw, pi, kimi, qwen, cline, amp, auggie,
                              kiro, goose, kilo,
-                             openhands, crush, junie, muse). Off by default:
+                             openhands, crush, junie, muse. Off by default:
                              monitor, detection-only, never blocks.
 ```
 
 With `--enforce`, install first compiles the effective catalog and refuses to
-change agent configuration unless it contains an enabled `enforce: true` rule.
+change agent configuration unless it contains an enabled `enforce: true` rule
+with `--decision-config` when relying on a decision rule. All three rule types
+use the same catalog identity and override rules.
 Each `--rules-dir` must be a concrete, readable install-time path; deferred
 paths such as `$HOME/rules` are rejected in this mode.
 
@@ -866,13 +947,44 @@ shell-parse coverage, malformed input, and evaluator failure. It is intended
 for downstream consumers that need a stable, versioned direct-evaluation
 result (see [`docs/schema/rules-test-result.v1.md`](schema/rules-test-result.v1.md)).
 
+## decisions
+
+This offline preparation command does not initialize a provider, read
+credentials, access the state DB or send inference requests. They do not
+install hooks or establish live host enforcement.
+
+```sh
+numbat decisions check --config /etc/numbat/decisions.yaml --rules-dir ./rules
+```
+
+`check` validates the provider configuration and effective rule catalog, then
+prints the model, content mode, budget, rule modes/thresholds and independent
+history/request caps. Successful validation does not establish provider health,
+host delivery or enforcement. Runtime prerequisites remain explicitly unchecked.
+
+```
+decisions check:
+  --config FILE              absolute protected configuration path (required)
+  --rules-dir DIR            ordinary rule directory (repeatable)
+  --no-builtin-rules         load only the supplied rule directories
+```
+
+The command returns `0` on success or help, `1` for validation/read errors,
+and `2` for invalid command arguments. The [field reference](decision-rules.md#configuration-reference)
+defines required fields, actual defaults, units and bounds; example thresholds
+are not calibrated recommendations.
+
 ## case bundles
 
 `case build` curates captured record streams into a portable `case.numbat`
 directory an investigator can hand off: the case's findings, the events their
-`cited_event_ids` name, any case-scoped hook enforcement decisions, and a
+`cited_event_ids` name, any case-scoped hook enforcement decisions and decision
+assessments, and a
 `manifest.json` of per-file SHA-256 digests. Records are copied byte-for-byte
 from the source streams, deduplicated by record id, and sorted.
+Event selection remains finding-driven: assessments can reference action
+events that are not copied. Manifest verification does not prove that every
+assessment's evidence is present.
 Identical ordered inputs produce identical record files. Reusing an id for
 conflicting content is an error. If a source contains findings but not their
 cited event records, the build succeeds
@@ -931,7 +1043,7 @@ a manifest.
 ## version
 
 `numbat version` prints the tool version and the record schema version
-(`0.5.0`). Release and schema versions advance independently; the schema changes
+(`0.6.0`). Release and schema versions advance independently; the schema changes
 only when the emitted record contract changes.
 
 ## Exit status

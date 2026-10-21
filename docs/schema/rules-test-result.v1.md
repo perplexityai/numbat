@@ -1,5 +1,9 @@
 # rules-test-result.v1
 
+The offline evaluator covers `expr` and `sequence` rules. When the catalog also
+contains decision rules, the summary includes `decision_rules_skipped`, an
+array of their IDs. Model matches are not evaluated or counted as negatives.
+
 `numbat rules test --json` emits an NDJSON result stream on stdout. This
 document is the authoritative machine-readable contract; every consumer must
 treat unknown fields as reserved. The schema versions independently of the
@@ -183,7 +187,7 @@ failure or sequence-tracker error promotes the event to
   "enforce_eligible_rules": 24,
   "assertion_outcome": "unchecked",
   "numbat_version": "dev+abc123",
-  "record_schema": "0.5.0"
+  "record_schema": "0.6.0"
 }
 ```
 

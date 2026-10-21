@@ -26,7 +26,7 @@ Use `event.tool_input` and `event.tool_result` for tool content; `event.content`
 keeps its conversation-only meaning. Payloads are JSON-encoded strings so the
 flat schema accommodates objects, arrays, strings, numbers, booleans and null.
 See [rule semantics](rules.md#event-fields) and the
-[0.5.0 migration](schema/v0.5.0/README.md#migration-from-040).
+[content migration](schema/v0.6.0/README.md#earlier-migration-from-040).
 
 ## Retention and delivery
 

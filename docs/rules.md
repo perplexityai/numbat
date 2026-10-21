@@ -1,8 +1,17 @@
 # Writing rules
 
-Each numbat rule is one YAML file with [CEL](https://cel.dev/) boolean
-expressions. It evaluates either one [normalized event](event-model.md) or an
-ordered sequence of events.
+Each numbat rule is one YAML file. Use exactly one rule body: `expr:` for a
+[CEL](https://cel.dev/) match on a [normalized event](event-model.md),
+`sequence:` for an ordered chain, or experimental `decision:` for model
+classification. All three share catalog IDs, overrides and enforcement flags.
+
+[Decision rules](decision-rules.md) contain a CEL selector,
+plain-language criteria and probability thresholds. They require a separate,
+explicit `--decision-config` for model access; loading or checking the rule
+does not send evidence. `rules test` evaluates deterministic rules only and
+reports skipped decision rules. Its assertions cannot establish model accuracy.
+For a disabled, monitor-only example needing no site-specific policy, see the
+[decision starter rule](decision-rules.md#quick-start).
 
 Rule expressions can use:
 
@@ -106,6 +115,7 @@ documents, and multiple rules per file are rejected.
 | `severity` | yes | `info`, `low`, `medium`, `high`, or `critical` |
 | `expr` | one of | CEL predicate for a single event |
 | `sequence` | one of | Ordered multi-event definition |
+| `decision` | one of | CEL selector and optional model classification |
 | `description` | no | Operator-facing explanation |
 | `tags` | no | Strings copied to findings |
 | `enabled` | no | Defaults to `true`; disabled rules are still validated |
@@ -252,7 +262,7 @@ uses `0`, and `tags` uses an empty list.
 | `event.tool_name` | string | `event.url` | string |
 | `event.content_omitted` | list(string) | | |
 
-The [event schema](schema/v0.5.0/event-record.schema.json) defines closed values
+The [event schema](schema/v0.6.0/event-record.schema.json) defines closed values
 for fields such as `source_agent`, `source_type`, `actor`, `decision`, and
 `confidence`.
 
@@ -561,7 +571,7 @@ numbat rules test \
 
 Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
-See the [event schema](schema/v0.5.0/event-record.schema.json) for required
+See the [event schema](schema/v0.6.0/event-record.schema.json) for required
 fields.
 
 ## Sequence rules
