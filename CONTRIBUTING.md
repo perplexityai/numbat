@@ -16,7 +16,7 @@ implicit network access from loading a rule or running validation commands.
 
 ## Development setup
 
-Use Go 1.26.9 or newer; CI pins 1.26.9.
+Use Go 1.26.10 or newer; CI pins 1.26.10.
 
 ```sh
 go build ./cmd/numbat
