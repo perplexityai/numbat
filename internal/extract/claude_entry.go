@@ -61,11 +61,21 @@ type claudeEntry struct {
 	// entrypoint).
 	GitBranch string `json:"gitBranch"`
 	Version   string `json:"version"`
-	// PermissionMode is set only on type:"permission-mode" records, which Claude
-	// Code writes whenever the session's permission mode changes. Per Claude
-	// Code's permission docs the value is one of six modes: "default", "plan",
-	// "acceptEdits", "auto", "dontAsk", "bypassPermissions".
+	// PermissionMode is set on type:"permission-mode" records, which Claude Code
+	// writes whenever the session's permission mode changes, and — on current
+	// Claude Code builds, including the desktop app — on every human-prompt
+	// type:"user" entry as the mode in effect when the prompt was submitted. A
+	// session that starts in a mode and never switches carries the mode ONLY on
+	// its user entries. Per Claude Code's permission docs the value is one of six
+	// modes: "default", "plan", "acceptEdits", "auto", "dontAsk",
+	// "bypassPermissions".
 	PermissionMode string `json:"permissionMode"`
+	// IsMeta marks a type:"user" entry Claude Code injected into the model's
+	// context rather than one the human typed: a loaded skill body ("Base
+	// directory for this skill: ..."), hook feedback, a local-command caveat, a
+	// system reminder, a message relayed from another session. It is user-ROLE
+	// text, not a user prompt.
+	IsMeta bool `json:"isMeta"`
 	// Mode is set only on type:"mode" records, which Claude Code writes on a
 	// permission-mode switch the same way type:"permission-mode" does, but carries
 	// the new mode in the "mode" field and stamps no timestamp. Observed values
@@ -78,9 +88,11 @@ type claudeEntry struct {
 	// URL — a concrete network/output artifact.
 	PRURL string `json:"prUrl"`
 	// AgentName is set only on type:"agent-name" records, a lightweight marker
-	// Claude Code writes to identify which named subagent/skill persona is active
-	// in the session. The line carries no command, file, or tool payload and no
-	// timestamp — only type, agentName, sessionId.
+	// naming the session's agent. On current Claude Code (notably the desktop
+	// app) the value is the session's display title (e.g. "New session", then the
+	// generated title), rewritten on every turn, not a subagent identity. The line
+	// carries no command, file, or tool payload and no timestamp — only type,
+	// agentName, sessionId.
 	AgentName string `json:"agentName"`
 	// Attachment is set only on type:"attachment" records, which carry context
 	// injected into the model rather than agent activity. Its own type field

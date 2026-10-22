@@ -194,6 +194,20 @@ func TestHelpSubcommandDispatch(t *testing.T) {
 	if !strings.Contains(out, "usage: numbat hook install") {
 		t.Fatalf("hook install help should come from the hook admin command, got stdout=%q stderr=%q", out, errb)
 	}
+
+	// `numbat help hook <sub>` is an alias for `numbat hook <sub> --help`: the
+	// text must be identical, not merely similar. The direct --help form writes
+	// to stderr while `help` writes to stdout, so compare the combined streams.
+	for _, sub := range []string{"install", "uninstall", "status"} {
+		helpOut, helpErr, helpCode := runCLI("help", "hook", sub)
+		flagOut, flagErr, flagCode := runCLI("hook", sub, "--help")
+		if helpCode != 0 || flagCode != 0 || helpErr != "" {
+			t.Fatalf("hook %s help: help exit=%d stderr=%q; --help exit=%d", sub, helpCode, helpErr, flagCode)
+		}
+		if helpOut != flagOut+flagErr {
+			t.Errorf("numbat help hook %s differs from numbat hook %s --help:\n%s\n---\n%s", sub, sub, helpOut, flagOut+flagErr)
+		}
+	}
 }
 
 func TestHelpRejectsUnknownOrTrailingTopics(t *testing.T) {

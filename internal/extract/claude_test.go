@@ -866,6 +866,68 @@ func TestExtractClaudePermissionModesSuppressRepeatedSnapshots(t *testing.T) {
 	}
 }
 
+// Current Claude Code stamps permissionMode on every human-prompt user entry; a
+// session that starts in auto mode and never switches carries the mode ONLY
+// there. The first stamp must surface as an elevated config.agent (ahead of the
+// prompt it governed), repeats of the same mode must stay silent, a change must
+// surface once, and a permission-mode record repeating the current mode must
+// not double-count, since both shapes share the "/permissionMode" pointer.
+func TestExtractClaudeUserEntryPermissionMode(t *testing.T) {
+	body := `{"type":"user","uuid":"u1","sessionId":"s-1","timestamp":"2026-09-28T13:21:37.296Z","permissionMode":"auto","promptId":"p1","origin":{"kind":"human"},"message":{"role":"user","content":"start"}}
+{"type":"assistant","uuid":"a1","sessionId":"s-1","timestamp":"2026-09-28T13:21:38Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}
+{"type":"user","uuid":"u2","sessionId":"s-1","timestamp":"2026-09-28T13:22:00Z","permissionMode":"auto","message":{"role":"user","content":"again"}}
+{"type":"permission-mode","permissionMode":"auto","sessionId":"s-1"}
+{"type":"user","uuid":"u3","sessionId":"s-1","timestamp":"2026-09-28T13:23:00Z","permissionMode":"plan","message":{"role":"user","content":"plan it"}}
+{"type":"user","uuid":"u4","sessionId":"s-1","timestamp":"2026-09-28T13:24:00Z","permissionMode":"plan","message":{"role":"user","content":"still planning"}}`
+	res := extractFixture(t, body)
+	if len(res.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
+	}
+	assertUniqueEventIDs(t, res.Events)
+	var modes []model.Event
+	for _, ev := range res.Events {
+		if ev.EventType == model.EventConfigAgent {
+			modes = append(modes, ev)
+		}
+	}
+	if len(modes) != 2 {
+		t.Fatalf("got %d config.agent events, want 2 (auto, plan): %s", len(modes), dumpEvents(res.Events))
+	}
+	auto, plan := modes[0], modes[1]
+	if auto.ContentPreview != "auto" || plan.ContentPreview != "plan" {
+		t.Errorf("modes = %q, %q; want auto, plan", auto.ContentPreview, plan.ContentPreview)
+	}
+	if len(auto.Tags) != 1 || auto.Tags[0] != model.TagPermissionModeElevated {
+		t.Errorf("auto tags = %v, want [permission_mode_elevated]", auto.Tags)
+	}
+	if len(plan.Tags) != 0 {
+		t.Errorf("plan tags = %v, want none", plan.Tags)
+	}
+	if auto.Evidence.JSONPointer != "/permissionMode" || auto.Evidence.Line != 1 {
+		t.Errorf("auto evidence = %s line %d, want /permissionMode line 1", auto.Evidence.JSONPointer, auto.Evidence.Line)
+	}
+	if auto.Timestamp != "2026-09-28T13:21:37.296Z" || auto.Actor != model.ActorSystem {
+		t.Errorf("auto timestamp/actor = %q/%s, want the entry timestamp and system", auto.Timestamp, auto.Actor)
+	}
+	if plan.Evidence.Line != 5 {
+		t.Errorf("plan line = %d, want 5", plan.Evidence.Line)
+	}
+	// The mode stamp precedes the prompt it governed and does not displace it.
+	acts := activityEvents(res.Events)
+	if len(acts) < 2 || acts[0].EventType != model.EventConfigAgent || acts[1].EventType != model.EventPromptUser {
+		t.Fatalf("want config.agent then prompt.user first: %s", dumpEvents(res.Events))
+	}
+	prompts := 0
+	for _, ev := range acts {
+		if ev.EventType == model.EventPromptUser {
+			prompts++
+		}
+	}
+	if prompts != 4 {
+		t.Errorf("got %d prompt.user events, want 4", prompts)
+	}
+}
+
 // A pr-link entry surfaces as a network indicator carrying the pull request URL.
 func TestExtractClaudePRLinkEntry(t *testing.T) {
 	line := `{"type":"pr-link","sessionId":"s-1","prNumber":42,"prUrl":"https://github.com/example/repo/pull/42","prRepository":"example/repo","timestamp":"2026-05-29T12:15:50.553Z"}`
@@ -892,7 +954,7 @@ func TestExtractClaudePRLinkEntry(t *testing.T) {
 	}
 }
 
-// An agent-name entry surfaces the active named subagent as a config.agent event.
+// An agent-name entry surfaces the session's agent name as a config.agent event.
 func TestExtractClaudeAgentNameEntry(t *testing.T) {
 	// A prior timestamped entry so the timestamp-less agent-name line has
 	// something to inherit; the user line itself is unrelated activity.
@@ -911,8 +973,10 @@ func TestExtractClaudeAgentNameEntry(t *testing.T) {
 	if ev == nil {
 		t.Fatalf("no config.agent event: %s", dumpEvents(res.Events))
 	}
-	if ev.SubAgent != "supply-chain-reviewer" {
-		t.Errorf("sub_agent = %q, want supply-chain-reviewer", ev.SubAgent)
+	// agentName is a session display title on real transcripts, not a subagent
+	// identity, so it must not be stamped on SubAgent.
+	if ev.SubAgent != "" {
+		t.Errorf("sub_agent = %q, want empty (agentName is not a subagent id)", ev.SubAgent)
 	}
 	if ev.ContentPreview != "supply-chain-reviewer" {
 		t.Errorf("preview = %q, want supply-chain-reviewer", ev.ContentPreview)
@@ -970,6 +1034,61 @@ func TestExtractClaudeAgentNameEmptyOrUnknown(t *testing.T) {
 				t.Errorf("diag = %q, want it to mention unhandled entry type", res.Diagnostics[0].Msg)
 			}
 		})
+	}
+}
+
+// Claude Code rewrites agent-name on every turn (desktop transcripts carry the
+// session title, e.g. "New session" then the generated title). Only a change
+// from the last emitted name surfaces; unchanged rewrites are silent.
+func TestExtractClaudeAgentNameDedupsUnchangedValue(t *testing.T) {
+	body := `{"type":"user","sessionId":"s-1","timestamp":"2026-09-28T13:00:00Z","message":{"role":"user","content":"hi"}}
+{"type":"agent-name","agentName":"New session","sessionId":"s-1"}
+{"type":"agent-name","agentName":"New session","sessionId":"s-1"}
+{"type":"agent-name","agentName":"Release review","sessionId":"s-1"}
+{"type":"agent-name","agentName":"Release review","sessionId":"s-1"}
+{"type":"agent-name","agentName":" Release review ","sessionId":"s-1"}
+{"type":"agent-name","agentName":"New session","sessionId":"s-1"}`
+	res := extractFixture(t, body)
+	if len(res.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
+	}
+	var got []string
+	for _, ev := range res.Events {
+		if ev.EventType == model.EventConfigAgent {
+			got = append(got, ev.ContentPreview)
+			if ev.SubAgent != "" {
+				t.Errorf("sub_agent = %q, want empty", ev.SubAgent)
+			}
+		}
+	}
+	want := []string{"New session", "Release review", "New session"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("agent-name events = %q, want %q", got, want)
+	}
+}
+
+// isMeta user entries are context Claude Code injected (skill bodies, hook
+// feedback, caveats), not prompts the human typed, so they must not surface as
+// prompt.user/actor=user. A non-meta prompt in the same transcript still does,
+// and a tool_result carried on an isMeta entry is still a tool result.
+func TestExtractClaudeMetaUserEntriesAreNotPrompts(t *testing.T) {
+	body := `{"type":"user","uuid":"u1","sessionId":"s-1","timestamp":"2026-09-28T13:00:00Z","message":{"role":"user","content":"use the review skill"}}
+{"type":"user","uuid":"u2","sessionId":"s-1","timestamp":"2026-09-28T13:00:01Z","isMeta":true,"sourceToolUseID":"toolu_1","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /Users/dev/.claude/skills/review\n\n# Review\nFollow these steps"}]}}
+{"type":"user","uuid":"u3","sessionId":"s-1","timestamp":"2026-09-28T13:00:02Z","isMeta":true,"message":{"role":"user","content":"Stop hook feedback:\nBackground subagents are still running"}}
+{"type":"user","uuid":"u4","sessionId":"s-1","timestamp":"2026-09-28T13:00:03Z","isMeta":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","content":"done"}]}}`
+	res := extractFixture(t, body)
+	if len(res.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", res.Diagnostics)
+	}
+	acts := activityEvents(res.Events)
+	if len(acts) != 2 {
+		t.Fatalf("got %d activity events, want 2 (prompt + tool.result): %s", len(acts), dumpEvents(res.Events))
+	}
+	if acts[0].EventType != model.EventPromptUser || acts[0].Evidence.Line != 1 {
+		t.Errorf("event 0 = %s line %d, want prompt.user line 1", acts[0].EventType, acts[0].Evidence.Line)
+	}
+	if acts[1].EventType != model.EventToolResult || acts[1].Evidence.Line != 4 {
+		t.Errorf("event 1 = %s line %d, want tool.result line 4", acts[1].EventType, acts[1].Evidence.Line)
 	}
 }
 
@@ -1031,6 +1150,8 @@ func TestExtractClaudeBenignEntryTypesAreSilent(t *testing.T) {
 		`{"type":"file-history-delta","messageId":"m2","snapshotMessageId":"m1","trackingPath":"/home/dev/project/main.go","backup":{"backupFileName":"main.go@v1","version":1,"backupTime":"2026-04-20T20:25:17.579Z"},"timestamp":"2026-04-20T20:25:17.579Z"}`,
 		`{"type":"worktree-state","sessionId":"s-1","worktreeSession":{"originalCwd":"/Users/dev/code/app","worktreePath":"/Users/dev/code/app/.claude/worktrees/ion","worktreeName":"ion","worktreeBranch":"worktree-ion","originalBranch":"redteam/x","originalHeadCommit":"626429f6","sessionId":"s-1"}}`,
 		`{"type":"attachment","uuid":"at1","sessionId":"s-1","attachment":{"type":"selected_lines","file":"main.go"}}`,
+		`{"type":"atis-latch","atis":"","sessionId":"s-1"}`,
+		`{"type":"cost-state","sessionId":"s-1","totalCostUSD":0.2284,"totalAPIDuration":13823,"totalToolDuration":0,"totalLinesAdded":0,"totalLinesRemoved":0,"totalDuration":15012,"startTime":1792549902852,"modelUsage":{"claude-sonnet-5-5":{"inputTokens":2,"outputTokens":1513,"costUSD":0.2284}},"hasUnknownModelCost":false}`,
 		`{"type":"attachment","uuid":"at2","sessionId":"s-1","attachment":{"type":"deferred_tools_delta","addedNames":[],"removedNames":[]}}`,
 	}
 	for _, line := range lines {

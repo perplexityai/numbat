@@ -134,6 +134,30 @@ func TestScanEmitsFindings(t *testing.T) {
 	}
 }
 
+// A Claude Code session that starts in auto mode and never switches records the
+// mode only as the permissionMode stamp on its user entries — there is no
+// permission-mode record. It must still raise tamper.guardrails_off, once, not
+// once per turn.
+func TestScanClaudeAutoModeFromUserEntryRaisesGuardrailsOff(t *testing.T) {
+	body := `{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-09-28T13:21:37Z","cwd":"/home/dev/proj","permissionMode":"auto","message":{"role":"user","content":"start"}}
+{"type":"assistant","uuid":"a1","sessionId":"s1","timestamp":"2026-09-28T13:21:38Z","cwd":"/home/dev/proj","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}
+{"type":"user","uuid":"u2","sessionId":"s1","timestamp":"2026-09-28T13:22:00Z","cwd":"/home/dev/proj","permissionMode":"auto","message":{"role":"user","content":"continue"}}`
+	p := writeTranscript(t, body)
+	out, errb, code := runCLI("scan", "--path", p)
+	if code != 0 {
+		t.Fatalf("exit = %d (err=%s)", code, errb)
+	}
+	var hits int
+	for _, f := range decodeFindings(t, out) {
+		if f.RuleID == "tamper.guardrails_off" {
+			hits++
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("got %d tamper.guardrails_off findings, want 1:\n%s", hits, out)
+	}
+}
+
 func TestScanCustomRuleSeesPromptBeyondPreview(t *testing.T) {
 	prompt := strings.Repeat("padding ", 40) + "needle-after-preview"
 	entry, err := json.Marshal(map[string]any{
