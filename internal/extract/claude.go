@@ -127,6 +127,9 @@ type claudeState struct {
 	lastLine        int
 	projectPath     string
 	permissionModes map[string]string
+	// agentName is the last agent-name value emitted, so the per-turn rewrite of
+	// an unchanged session title surfaces once rather than once per turn.
+	agentName string
 	// commandCallIDs is the set of tool_use ids that were a Bash command.exec, so
 	// a later tool_result correlated by tool_use_id can be promoted from a generic
 	// tool.result to a command.result. A file read or MCP call id never enters the
@@ -301,6 +304,13 @@ func (e ClaudeExtractor) mapLine(res *Result, src Source, sha string, st *claude
 	st.observe(res, e, src, sha, line, &entry)
 	switch entry.Type {
 	case "user":
+		// Current Claude Code stamps the mode in effect on each human-prompt user
+		// entry, so a session that starts elevated and never switches has no
+		// permission-mode record at all. The stamp shares the permission-mode
+		// record's "/permissionMode" pointer and dedup, so the first observed mode
+		// and each later change surface once, whichever record shape carries them.
+		// It precedes the prompt: the mode governed the turn the prompt started.
+		e.mapPermissionMode(res, src, sha, line, st, &entry, entry.PermissionMode, "/permissionMode")
 		e.mapUser(res, src, sha, st, line, &entry)
 	case "assistant":
 		e.mapAssistant(res, src, sha, st, line, &entry, src.IncludeReasoning)
@@ -318,13 +328,18 @@ func (e ClaudeExtractor) mapLine(res *Result, src Source, sha string, st *claude
 	case "attachment":
 		e.mapAttachment(res, src, sha, line, &entry)
 	case "summary", "system", "ai-title", "custom-title", "queue-operation", "relocated",
-		"last-prompt", "file-history-snapshot", "file-history-delta", "worktree-state":
+		"last-prompt", "file-history-snapshot", "file-history-delta", "worktree-state",
+		"atis-latch", "cost-state":
 		// Metadata and noise, not agent activity: "last-prompt" duplicates the
 		// most recent user prompt already captured as a "user" entry (surfacing
 		// it would double-count); file-history entries are editor backup
 		// bookkeeping, not separate tool-driven file changes;
 		// "worktree-state" is git-worktree bookkeeping for Claude Code's worktree
-		// feature; title and relocation records describe the transcript itself.
+		// feature; title and relocation records describe the transcript itself;
+		// "atis-latch" carries only an opaque client latch value (type, atis,
+		// sessionId); "cost-state" is the running cost/token/duration tally
+		// (totalCostUSD, modelUsage, line counters), accounting rather than
+		// activity — the tool calls it totals are captured individually.
 		// Recognizing them keeps diagnostics focused on real coverage gaps.
 	default:
 		res.diag(src.Path, line, "unhandled entry type")
@@ -414,6 +429,14 @@ func (e ClaudeExtractor) mapUser(res *Result, src Source, sha string, st *claude
 		return
 	}
 
+	// An isMeta entry's text is context Claude Code injected (a skill body, hook
+	// feedback, a system reminder), not something the human typed, so emitting it
+	// as prompt.user with actor=user would misattribute it. Like Codex's injected
+	// developer/system context it is skipped; the action that caused it (the
+	// Skill tool_use, the hook) is already captured on its own record.
+	if entry.IsMeta {
+		return
+	}
 	text := entry.Message.text()
 	if text == "" {
 		return
@@ -512,7 +535,10 @@ func elevatedPermissionMode(mode string) bool {
 // mapPermissionMode handles the permission-mode-switch entries Claude Code
 // writes whenever the session's permission mode changes — both type:"permission-
 // mode" (value in "permissionMode") and type:"mode" (value in "mode", no
-// timestamp). The caller supplies the mode value and the JSON pointer to it. The
+// timestamp) — and the permissionMode stamp on type:"user" entries. The caller
+// supplies the mode value and the JSON pointer to it; repeats of the last mode
+// seen at that pointer are suppressed, so per-turn snapshots of an unchanged
+// mode surface once. The
 // mode governs how much the agent can do without interactive approval, so a
 // change is a security-posture event, not noise: it is surfaced as config.agent
 // (a change to agent configuration, distinct from a per-request permission
@@ -541,6 +567,11 @@ func (e ClaudeExtractor) mapPermissionMode(res *Result, src Source, sha string, 
 		return
 	}
 	ev := e.base(src, sha, line, entry, 0)
+	if entry.Type == "user" {
+		// The same user entry also emits its prompt (block 0), so the mode stamp
+		// carries a suffix to keep its id distinct, as session.start does.
+		ev.EventID += ".permissionMode"
+	}
 	if ev.Timestamp == "" {
 		ev.Timestamp = st.lastTimestamp
 	}
@@ -578,23 +609,26 @@ func (e ClaudeExtractor) mapPRLink(res *Result, src Source, sha string, line int
 	res.Events = append(res.Events, ev)
 }
 
-// mapAgentName handles type:"agent-name" entries, a lightweight marker Claude
-// Code writes to announce which named subagent/skill persona is driving the
-// session. It carries no command, file, or tool payload — only the agent name
-// and session id — so it is a change to agent configuration, the same home the
-// permission-mode switch uses: config.agent. The name lands in the typed
-// SubAgent field (not ContentPreview alone) so a reviewer can pivot on the
-// persona without parsing the preview; the preview mirrors it for a quick read.
-// Because config.agent sets neither command nor file_path, this event cannot
-// match any built-in detection rule (all gate on command.exec / file.read), so
-// the marker can never fabricate a finding. The line stamps no timestamp, so it
-// inherits the last observed one to stay in the timeline. An entry with no
-// agentName is skipped rather than emitting an empty event.
+// mapAgentName handles type:"agent-name" entries, a lightweight marker naming
+// the session's agent. It carries no command, file, or tool payload — only the
+// name and session id — so it is surfaced as config.agent, the same home the
+// permission-mode switch uses, with the name as the preview. Claude Code
+// rewrites the marker on every turn (in desktop transcripts the value is the
+// session's display title), so only a change from the last emitted name
+// surfaces; an unchanged rewrite is a no-op. The name is NOT stamped on
+// SubAgent: observed values are session titles, not subagent identities, and
+// SubAgent stays what base derives from agentId or the subagents/ path.
+// Because config.agent sets neither command nor file_path and carries no tag,
+// this event cannot match any built-in detection rule, so the marker can never
+// fabricate a finding. The line stamps no timestamp, so it inherits the last
+// observed one to stay in the timeline. An entry with no agentName is skipped
+// rather than emitting an empty event.
 func (e ClaudeExtractor) mapAgentName(res *Result, src Source, sha string, line int, st *claudeState, entry *claudeEntry) {
 	name := strings.TrimSpace(entry.AgentName)
-	if name == "" {
+	if name == "" || name == st.agentName {
 		return
 	}
+	st.agentName = name
 	ev := e.base(src, sha, line, entry, 0)
 	if ev.Timestamp == "" {
 		ev.Timestamp = st.lastTimestamp
@@ -602,7 +636,6 @@ func (e ClaudeExtractor) mapAgentName(res *Result, src Source, sha string, line 
 	ev.EventType = model.EventConfigAgent
 	ev.Actor = model.ActorSystem
 	ev.Confidence = model.ConfidenceHigh
-	ev.SubAgent = name
 	ev.ContentPreview = preview(name)
 	ev.Evidence.JSONPointer = "/agentName"
 	res.Events = append(res.Events, ev)
