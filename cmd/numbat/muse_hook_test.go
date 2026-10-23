@@ -14,31 +14,22 @@ import (
 // See https://meta-models.github.io/muse-code-sdk/next/guides/plugins/reference/hook-events/
 // for the enclosing payload. Inputs here exercise the real hook JSON decoder.
 func TestMuseFileToolTargets(t *testing.T) {
-	// Keep adapter target checks independent of built-in memory detection policy.
-	const targetRule = `id: test.muse_file_target
-version: "1.0"
-enabled: true
-title: Muse test file target
-description: Match the synthetic file targets used by the adapter tests.
-severity: low
-expr: event.event_type == "file.write" && event.file_path in ["/work/.agents/memory/topic.md", ".agents/memory/topic.md"]
-`
 	for _, tool := range []string{"write_file", "edit_file", "read_file"} {
 		for _, tc := range []struct {
 			name, input, path, rule string
 		}{
-			{"memory", `{"path":"/work/.agents/memory/topic.md"}`, "/work/.agents/memory/topic.md", "test.muse_file_target"},
+			{"memory", `{"path":"/work/.agents/memory/topic.md"}`, "/work/.agents/memory/topic.md", "persistence.agent_memory_write"},
 			{"settings", `{"path":"/home/user/.config/muse/settings.json"}`, "/home/user/.config/muse/settings.json", "tamper.agent_config_write"},
 			{"project-hooks", `{"path":".muse/hooks.json"}`, ".muse/hooks.json", "tamper.agent_config_write"},
-			{"relative-memory", `{"path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "test.muse_file_target"},
-			{"snake-alias", `{"file_path":"README.md","path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "test.muse_file_target"},
-			{"camel-alias", `{"filePath":"README.md","path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "test.muse_file_target"},
+			{"relative-memory", `{"path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "persistence.agent_memory_write"},
+			{"snake-alias", `{"file_path":"README.md","path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "persistence.agent_memory_write"},
+			{"camel-alias", `{"filePath":"README.md","path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "persistence.agent_memory_write"},
 			{"reverse-alias", `{"file_path":".agents/memory/topic.md","path":"README.md"}`, "README.md", ""},
 			{"alias-only", `{"file_path":".agents/memory/topic.md"}`, "", ""},
 			{"number", `{"path":42}`, "", ""},
 			{"boolean", `{"path":true}`, "", ""},
 			{"null", `{"path":null}`, "", ""},
-			{"encoded-input", `{"path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "test.muse_file_target"},
+			{"encoded-input", `{"path":".agents/memory/topic.md"}`, ".agents/memory/topic.md", "persistence.agent_memory_write"},
 		} {
 			t.Run(tool+"/"+tc.name, func(t *testing.T) {
 				setTestHome(t, t.TempDir())
@@ -69,7 +60,6 @@ expr: event.event_type == "file.write" && event.file_path in ["/work/.agents/mem
 				}
 				file := filepath.Join(t.TempDir(), "records.ndjson")
 				out, stderr, code := runCLIStdin(string(payload), "hook", "pre-tool", "--agent", "muse",
-					"--rules-dir", writeEnforceRuleFile(t, targetRule),
 					"--enforce", "--emit", "all", "--output", "file", "--output-file", file)
 				if code != 0 || strings.TrimSpace(out) != "{}" || stderr != "" {
 					t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, stderr)
