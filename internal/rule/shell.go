@@ -166,6 +166,8 @@ type shellAnalyzer struct {
 	enforcementUnsafe         bool
 	previousStatements        map[*syntax.Stmt]*syntax.Stmt
 	resolveNames              bool
+	scriptAssignments         map[string]*scriptAssignment
+	scriptOperands            map[string]bool
 	statementCounter          int64
 	pipelineCounter           int64
 	halt                      bool
@@ -279,11 +281,12 @@ func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, dept
 	if !posixEnforcementShapeSafe(file) {
 		a.enforcementUnsafe = true
 	}
-	outerPrevious, outerResolve := a.previousStatements, a.resolveNames
+	outerPrevious, outerResolve, outerAssignments, outerOperands := a.previousStatements, a.resolveNames, a.scriptAssignments, a.scriptOperands
 	a.previousStatements = previousStatements(file)
+	a.scriptAssignments, a.scriptOperands = scriptNames(file)
 	a.resolveNames = a.staticNamesResolvable(source, file)
 	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers)
-	a.previousStatements, a.resolveNames = outerPrevious, outerResolve
+	a.previousStatements, a.resolveNames, a.scriptAssignments, a.scriptOperands = outerPrevious, outerResolve, outerAssignments, outerOperands
 }
 
 func previousStatements(root syntax.Node) map[*syntax.Stmt]*syntax.Stmt {
@@ -344,7 +347,7 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 			}
 			args := call.Args
 			if resolved := a.resolveExecutable(node, args[0]); resolved != nil {
-				args = append([]*syntax.Word{resolved}, args[1:]...)
+				args = append(resolved, args[1:]...)
 			}
 			for len(args) > 0 {
 				name, ok := commandName(args)
@@ -374,15 +377,47 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 	return resolvable
 }
 
-func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) *syntax.Word {
-	if word == nil || len(word.Parts) != 1 {
+func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) []*syntax.Word {
+	name, quoted, ok := executableParameter(word)
+	if !ok {
 		return nil
+	}
+	if value, ok := literalAssignment(a.previousStatements[stmt], name); ok && !strings.ContainsAny(value, " \t\n*?[{~=") {
+		return []*syntax.Word{resolvedExecutableWord(word, quoted, value)}
+	}
+	assigned := a.scriptAssignments[name]
+	if implicitlyWrittenNames[name] || assigned == nil || assigned.writes != 1 || assigned.stmt == nil || assigned.stmt.End().Offset() > stmt.Pos().Offset() {
+		return nil
+	}
+	for operand := range a.scriptOperands {
+		if strings.HasSuffix(operand, name) {
+			return nil
+		}
+	}
+	value, ok := literalAssignment(assigned.stmt, name)
+	if !ok || strings.ContainsAny(value, "*?[]{}~\\'\"$`;&|<>()#!") || strings.IndexFunc(value, func(r rune) bool { return r < 0x20 && r != '\t' || r == 0x7f }) >= 0 {
+		return nil
+	}
+	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ' ' || r == '\t' })
+	if len(fields) == 0 || strings.Contains(fields[0], "=") || quoted != nil && (len(fields) != 1 || fields[0] != value) {
+		return nil
+	}
+	words := make([]*syntax.Word, len(fields))
+	for i, field := range fields {
+		words[i] = resolvedExecutableWord(word, quoted, field)
+	}
+	return words
+}
+
+func executableParameter(word *syntax.Word) (string, *syntax.DblQuoted, bool) {
+	if word == nil || len(word.Parts) != 1 {
+		return "", nil, false
 	}
 	part := word.Parts[0]
 	quoted, dblQuoted := part.(*syntax.DblQuoted)
 	if dblQuoted {
 		if len(quoted.Parts) != 1 {
-			return nil
+			return "", nil, false
 		}
 		part = quoted.Parts[0]
 	}
@@ -391,46 +426,113 @@ func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) 
 		param.Split != syntax.OptUnset || param.GlobSubst != syntax.OptUnset || param.RcExpand != syntax.OptUnset ||
 		param.NestedParam != nil || param.Index != nil || param.Slice != nil || param.Repl != nil ||
 		len(param.Modifiers) != 0 || param.Names != 0 || param.Exp != nil {
-		return nil
+		return "", nil, false
 	}
-	previous := a.previousStatements[stmt]
-	if previous == nil || previous.Background || previous.Coprocess || previous.Negated || len(previous.Redirs) != 0 {
-		return nil
+	return param.Param.Value, quoted, true
+}
+
+func literalAssignment(stmt *syntax.Stmt, name string) (string, bool) {
+	if stmt == nil || stmt.Background || stmt.Coprocess || stmt.Negated || len(stmt.Redirs) != 0 {
+		return "", false
 	}
-	call, ok := previous.Cmd.(*syntax.CallExpr)
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok || len(call.Args) != 0 || len(call.Assigns) != 1 {
-		return nil
+		return "", false
 	}
 	assignment := call.Assigns[0]
-	if assignment.Name == nil || assignment.Name.Value != param.Param.Value || assignment.Naked || assignment.Append ||
+	if assignment.Name == nil || assignment.Name.Value != name || assignment.Naked || assignment.Append ||
 		assignment.Index != nil || assignment.Array != nil || assignment.Value == nil {
-		return nil
+		return "", false
 	}
 	for _, valuePart := range assignment.Value.Parts {
 		switch valuePart := valuePart.(type) {
 		case *syntax.Lit:
 			if strings.ContainsRune(valuePart.Value, '\\') {
-				return nil
+				return "", false
 			}
 		case *syntax.SglQuoted:
 			if valuePart.Dollar {
-				return nil
+				return "", false
 			}
 		case *syntax.DblQuoted:
 			if valuePart.Dollar {
-				return nil
+				return "", false
 			}
 		}
 	}
 	value, ok := staticWord(assignment.Value)
-	if !ok || value == "" || strings.ContainsAny(value, " \t\n*?[{~=") {
-		return nil
+	if !ok || value == "" {
+		return "", false
 	}
+	return value, true
+}
+
+func resolvedExecutableWord(word *syntax.Word, quoted *syntax.DblQuoted, value string) *syntax.Word {
 	var resolved syntax.WordPart = &syntax.Lit{ValuePos: word.Pos(), ValueEnd: word.End(), Value: value}
-	if dblQuoted {
+	if quoted != nil {
 		resolved = &syntax.DblQuoted{Left: quoted.Left, Right: quoted.Right, Parts: []syntax.WordPart{resolved}}
 	}
 	return &syntax.Word{Parts: []syntax.WordPart{resolved}}
+}
+
+type scriptAssignment struct {
+	stmt   *syntax.Stmt
+	writes int
+}
+
+func scriptNames(file *syntax.File) (map[string]*scriptAssignment, map[string]bool) {
+	top := make(map[*syntax.Stmt]bool, len(file.Stmts))
+	for _, stmt := range file.Stmts {
+		top[stmt] = true
+	}
+	assignments := make(map[string]*scriptAssignment)
+	operands := make(map[string]bool)
+	write := func(name string, stmt *syntax.Stmt) {
+		entry := assignments[name]
+		if entry == nil {
+			entry = &scriptAssignment{}
+			assignments[name] = entry
+		}
+		entry.writes++
+		if top[stmt] {
+			entry.stmt = stmt
+		}
+	}
+	var current *syntax.Stmt
+	arithmetic := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch node := node.(type) {
+		case *syntax.BinaryArithm, *syntax.UnaryArithm:
+			arithmetic = true
+		case *syntax.Stmt:
+			current = node
+		case *syntax.Assign:
+			if node.Name != nil {
+				write(node.Name.Value, current)
+			}
+		case *syntax.WordIter:
+			if node.Name != nil {
+				write(node.Name.Value, nil)
+			}
+		case *syntax.CallExpr:
+			for _, arg := range node.Args {
+				if value, ok := staticWord(arg); ok {
+					operands[value] = true
+				}
+			}
+		}
+		return true
+	})
+	if arithmetic {
+		return nil, operands
+	}
+	return assignments, operands
+}
+
+var implicitlyWrittenNames = map[string]bool{
+	"REPLY": true, "OPTARG": true, "OPTERR": true, "PWD": true, "OLDPWD": true, "MAPFILE": true, "BASH_REMATCH": true,
+	"COPROC": true, "COLUMNS": true, "LINES": true, "READLINE_LINE": true, "READLINE_POINT": true, "READLINE_MARK": true,
+	"BASH_ARGV0": true, "BASH_XTRACEFD": true, "HISTFILE": true,
 }
 
 var shellManagedNames = map[string]bool{
@@ -487,7 +589,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 			callArgs := call.Args
 			if a.resolveNames && len(callArgs) > 0 {
 				if resolved := a.resolveExecutable(node, callArgs[0]); resolved != nil {
-					callArgs = append([]*syntax.Word{resolved}, callArgs[1:]...)
+					callArgs = append(resolved, callArgs[1:]...)
 				}
 			}
 			command, add, err := projectPOSIXCommand(source, callArgs, call.Assigns, node.Redirs, wrappers, ctx)
