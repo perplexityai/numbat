@@ -346,7 +346,7 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 				return true
 			}
 			args := call.Args
-			if resolved := a.resolveExecutable(node, args[0]); resolved != nil {
+			if resolved, _ := a.resolveExecutable(node, args[0]); resolved != nil {
 				args = append(resolved, args[1:]...)
 			}
 			for len(args) > 0 {
@@ -377,36 +377,36 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 	return resolvable
 }
 
-func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) []*syntax.Word {
+func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) ([]*syntax.Word, bool) {
 	name, quoted, ok := executableParameter(word)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	if value, ok := literalAssignment(a.previousStatements[stmt], name); ok && !strings.ContainsAny(value, " \t\n*?[{~=") {
-		return []*syntax.Word{resolvedExecutableWord(word, quoted, value)}
+		return []*syntax.Word{resolvedExecutableWord(word, quoted, value)}, false
 	}
 	assigned := a.scriptAssignments[name]
 	if implicitlyWrittenNames[name] || assigned == nil || assigned.writes != 1 || assigned.stmt == nil || assigned.stmt.End().Offset() > stmt.Pos().Offset() {
-		return nil
+		return nil, false
 	}
 	for operand := range a.scriptOperands {
 		if strings.HasSuffix(operand, name) {
-			return nil
+			return nil, false
 		}
 	}
 	value, ok := literalAssignment(assigned.stmt, name)
 	if !ok || strings.ContainsAny(value, "*?[]{}~\\'\"$`;&|<>()#!") || strings.IndexFunc(value, func(r rune) bool { return r < 0x20 && r != '\t' || r == 0x7f }) >= 0 {
-		return nil
+		return nil, false
 	}
 	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ' ' || r == '\t' })
 	if len(fields) == 0 || strings.Contains(fields[0], "=") || quoted != nil && (len(fields) != 1 || fields[0] != value) {
-		return nil
+		return nil, false
 	}
 	words := make([]*syntax.Word, len(fields))
 	for i, field := range fields {
 		words[i] = resolvedExecutableWord(word, quoted, field)
 	}
-	return words
+	return words, true
 }
 
 func executableParameter(word *syntax.Word) (string, *syntax.DblQuoted, bool) {
@@ -587,8 +587,10 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				return true
 			}
 			callArgs := call.Args
+			inferred := false
 			if a.resolveNames && len(callArgs) > 0 {
-				if resolved := a.resolveExecutable(node, callArgs[0]); resolved != nil {
+				var resolved []*syntax.Word
+				if resolved, inferred = a.resolveExecutable(node, callArgs[0]); resolved != nil {
 					callArgs = append(resolved, callArgs[1:]...)
 				}
 			}
@@ -597,6 +599,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 				a.report(err)
 				return true
 			}
+			command.enforcementUnsafe = inferred
 			if name, ok := commandName(callArgs); ok && functions[name] != nil {
 				command.FunctionCall = true
 				command.Recursive = activeFunctions[name]
@@ -646,6 +649,7 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 					a.report(err)
 					break
 				}
+				innerCommand.enforcementUnsafe = inferred
 				if add && !a.add(innerCommand) {
 					return false
 				}

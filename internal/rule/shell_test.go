@@ -683,6 +683,34 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 	}
 }
 
+func TestAnalyzeShellCommandsScriptResolvedExecutablesAreDetectionOnly(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		source string
+		unsafe bool
+	}{
+		{"adjacent", `g=gh; $g repo fork octo/repo`, false},
+		{"script", `g=gh; true; $g repo fork octo/repo`, true},
+		{"script split", `g="gh repo"; true; $g fork octo/repo`, true},
+		{"script wrapped", `g="sudo gh"; true; $g repo fork octo/repo`, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			analysis := analyzeShellCommandsDetailed(tt.source, dialectPOSIX)
+			if analysis.err != nil || !analysis.usable {
+				t.Fatalf("analysis = usable:%v err:%v", analysis.usable, analysis.err)
+			}
+			command := commandNamed(t, analysis.commands, "gh", 0)
+			if command.enforcementUnsafe != tt.unsafe || commandSafeForEnforcement(command) == tt.unsafe || tt.unsafe && analysis.enforcementSafe {
+				t.Fatalf("command unsafe = %v, analysis safe = %v, want unsafe %v", command.enforcementUnsafe, analysis.enforcementSafe, tt.unsafe)
+			}
+		})
+	}
+}
+
 func TestAnalyzeShellCommandsDeduplicatesIssues(t *testing.T) {
 	t.Parallel()
 	_, _, err := analyzeShellCommands(`"$first"; "$second"`)
