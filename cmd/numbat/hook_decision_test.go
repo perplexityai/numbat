@@ -150,12 +150,13 @@ func TestTypedNativeCallPreservesSessionPrefix(t *testing.T) {
 		for _, changed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/changed=%t", tc.name, changed), func(t *testing.T) {
 				lab := newDecisionHookLab(t)
-				lab.invoke(t, "session-start", map[string]any{"hook_event_name": "SessionStart", "source": "startup"})
+				// Unrelated catalog compilation must not consume this pairing test's hook budget.
+				lab.invoke(t, "session-start", map[string]any{"hook_event_name": "SessionStart", "source": "startup"}, "--no-builtin-rules")
 				payload := map[string]any{
 					"tool_name": tc.name, "tool_use_id": "call-1", "tool_input": tc.input,
 					"hook_event_name": "PreToolUse",
 				}
-				lab.invoke(t, "pre-tool", payload)
+				lab.invoke(t, "pre-tool", payload, "--no-builtin-rules")
 				payload["hook_event_name"] = "PostToolUse"
 				payload["tool_response"] = map[string]any{"content": "synthetic result", "exit_code": 0}
 				if changed {
@@ -166,14 +167,15 @@ func TestTypedNativeCallPreservesSessionPrefix(t *testing.T) {
 					input["unexpected_change"] = true
 					payload["tool_input"] = input
 				}
-				lab.invoke(t, "post-tool", payload)
-				control := lab.upload(t)
+				lab.invoke(t, "post-tool", payload, "--no-builtin-rules")
+				control := lab.upload(t, "--no-builtin-rules")
 				assessments := lab.assessments(t)
 				last := assessments[len(assessments)-1]
 				denied := strings.Contains(control, `"permissionDecision":"deny"`)
 				if denied == changed || last.InputEligible == changed ||
 					slices.Contains(last.Gaps, "changed_call_input") != changed {
-					t.Fatalf("changed=%t control=%s eligible=%t gaps=%v", changed, control, last.InputEligible, last.Gaps)
+					records, err := os.ReadFile(filepath.Join(lab.dir, "records.ndjson"))
+					t.Fatalf("changed=%t control=%s eligible=%t gaps=%v records=%s read_error=%v", changed, control, last.InputEligible, last.Gaps, records, err)
 				}
 			})
 		}
