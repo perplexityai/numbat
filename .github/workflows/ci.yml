@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           check-latest: true
 
       - name: go mod tidy
@@ -74,12 +74,14 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           check-latest: true
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
+          # Recompute facts after cached runs misclassified terminating test guards.
+          skip-cache: true
 
       # golangci-lint run does not execute formatters in v2; fmt does. This
       # gates gofumpt (and gofmt) on top of the lint pass above, reusing the
@@ -98,7 +100,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           check-latest: true
 
       # Each invocation selects one target, so keep every FuzzXxx function in
@@ -127,6 +129,11 @@ jobs:
       - name: fuzz record output limit
         run: go test -run='^$' -fuzz='^FuzzRecordLimit$' -fuzztime=30s ./internal/output/
 
+      - name: fuzz decision policy and response decoding
+        run: |
+          go test -run='^$' -fuzz='^FuzzPolicyDecode$' -fuzztime=30s ./internal/decision/
+          go test -run='^$' -fuzz='^FuzzUniqueJSON$' -fuzztime=30s ./internal/evaluator/
+
   coverage:
     name: coverage (informational)
     runs-on: ubuntu-latest
@@ -138,7 +145,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           check-latest: true
 
       # Non-gating: report total coverage for visibility, never fail the build
@@ -173,7 +180,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           check-latest: true
 
       - name: install govulncheck

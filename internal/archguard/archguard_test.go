@@ -29,7 +29,7 @@ const internalPrefix = modulePath + "/internal/"
 // Plane membership. Names are the package's path under internal/ (e.g. "model"
 // or a nested package such as "rule/foo").
 var (
-	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile"}
+	corePkgs       = []string{"applypatch", "model", "redact", "rule", "sequence", "finding", "pipeline", "output", "winfile", "decision", "evaluator"}
 	forensicsPkgs  = []string{"extract", "discover", "casebundle"}
 	monitoringPkgs = []string{"hook", "otel", "state"}
 )
@@ -204,6 +204,7 @@ func classifyCmdFile(name string) (forbidden []string, ok bool) {
 		name == "case.go" || strings.HasPrefix(name, "case_"):
 		return forbidMonitoring, true
 	case name == "hook.go" || strings.HasPrefix(name, "hook_") ||
+		name == "decisions.go" ||
 		name == "collect.go" || strings.HasPrefix(name, "collect_") ||
 		name == "ship.go" || strings.HasPrefix(name, "ship_"):
 		return forbidForensics, true

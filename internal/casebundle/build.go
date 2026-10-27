@@ -1,6 +1,6 @@
 // Package casebundle builds and verifies case.numbat bundles: portable,
 // self-describing directories that carry one case's findings, their enforcement
-// decisions, the events those findings cite, and a manifest of sha256 digests.
+// decisions and assessments, the cited events, and a manifest of sha256 digests.
 //
 // A bundle is plain NDJSON plus one JSON manifest, with no database.
 // Records are copied from the operator's captured record streams byte-for-byte
@@ -99,6 +99,7 @@ type Options struct {
 type Result struct {
 	Findings      int
 	Enforcements  int
+	Assessments   int
 	Events        int
 	EvidenceFiles int
 	// Warnings are non-fatal problems: unparseable input lines, cited
@@ -168,6 +169,7 @@ type probe struct {
 	CaseID        string           `json:"case_id"`
 	FindingID     string           `json:"finding_id"`
 	DecisionID    string           `json:"decision_id"`
+	AssessmentID  string           `json:"assessment_id"`
 	EventID       string           `json:"event_id"`
 	Timestamp     string           `json:"timestamp"`
 	EvidenceRefs  []model.Evidence `json:"evidence_refs"`
@@ -184,9 +186,9 @@ type findingCitation struct {
 	semantic      []byte
 }
 
-// Build assembles a bundle from the source streams. It reads the sources
-// twice — findings first, then the events those findings cite — so memory
-// holds only kept records, never the whole stream. The output directory is
+// Build assembles a bundle from the source streams. Separate passes collect
+// findings, cited events, and case-scoped audit records, so memory holds only
+// kept records, never the whole stream. The output directory is
 // created only after the first pass proves the case has findings; a case id
 // matching nothing is an error, not an empty bundle.
 func Build(opts Options) (Result, error) {
@@ -224,6 +226,10 @@ func Build(opts Options) (Result, error) {
 	if err != nil {
 		return res, err
 	}
+	assessments, err := collectAuditRecords(opts, &res, output.RecordAssessment)
+	if err != nil {
+		return res, err
+	}
 
 	evidenceFiles := 0
 	if err := publishBundle(opts.Out, func(stage string) error {
@@ -242,6 +248,12 @@ func Build(opts Options) (Result, error) {
 				name string
 				recs []record
 			}{"enforcements.ndjson", enforcements})
+		}
+		if len(assessments) > 0 {
+			recordFiles = append(recordFiles, struct {
+				name string
+				recs []record
+			}{"assessments.ndjson", assessments})
 		}
 		for _, f := range recordFiles {
 			mf, err := writeRecords(stage, f.name, f.recs)
@@ -265,6 +277,7 @@ func Build(opts Options) (Result, error) {
 	}
 	res.Findings = len(findings)
 	res.Enforcements = len(enforcements)
+	res.Assessments = len(assessments)
 	res.Events = len(events)
 	res.EvidenceFiles = evidenceFiles
 	return res, nil
@@ -274,35 +287,47 @@ func Build(opts Options) (Result, error) {
 // are unique per hook callback; conflicting duplicates are rejected rather
 // than arbitrarily choosing one policy result.
 func collectEnforcements(opts Options, res *Result) ([]record, error) {
+	return collectAuditRecords(opts, res, output.RecordEnforcement)
+}
+
+func collectAuditRecords(opts Options, res *Result, kind string) ([]record, error) {
 	byID := make(map[string]record)
 	semanticByID := make(map[string][]byte)
 	conflictingID := ""
 	var semanticErr error
+	label := kind
+	if kind == output.RecordEnforcement {
+		label += " decision"
+	}
 	err := eachLine(opts.Sources, res, false, func(p probe, raw []byte) {
-		if semanticErr != nil || p.RecordType != output.RecordEnforcement || p.CaseID != opts.CaseID {
+		if semanticErr != nil || p.RecordType != kind || p.CaseID != opts.CaseID {
 			return
+		}
+		id := p.DecisionID
+		if kind == output.RecordAssessment {
+			id = p.AssessmentID
 		}
 		if p.SchemaVersion != model.SchemaVersion {
-			res.warn(fmt.Sprintf("enforcement decision %q uses unsupported schema_version %q; skipped", p.DecisionID, p.SchemaVersion))
+			res.warn(fmt.Sprintf("%s %q uses unsupported schema_version %q; skipped", label, id, p.SchemaVersion))
 			return
 		}
-		if p.DecisionID == "" {
-			res.warn("matching enforcement record with empty decision_id skipped")
+		if id == "" {
+			res.warn(fmt.Sprintf("matching %s record with empty identity skipped", label))
 			return
 		}
 		semantic, err := canonicalRecord(raw, "run_id", "timestamp")
 		if err != nil {
-			semanticErr = fmt.Errorf("casebundle: parse enforcement decision %q: %w", p.DecisionID, err)
+			semanticErr = fmt.Errorf("casebundle: parse %s %q: %w", label, id, err)
 			return
 		}
-		if previous, ok := semanticByID[p.DecisionID]; ok {
+		if previous, ok := semanticByID[id]; ok {
 			if conflictingID == "" && !bytes.Equal(previous, semantic) {
-				conflictingID = p.DecisionID
+				conflictingID = id
 			}
 			return
 		}
-		semanticByID[p.DecisionID] = semantic
-		byID[p.DecisionID] = record{timestamp: p.Timestamp, id: p.DecisionID, raw: append([]byte(nil), raw...)}
+		semanticByID[id] = semantic
+		byID[id] = record{timestamp: p.Timestamp, id: id, raw: append([]byte(nil), raw...)}
 	})
 	if err != nil {
 		return nil, err
@@ -311,7 +336,7 @@ func collectEnforcements(opts Options, res *Result) ([]record, error) {
 		return nil, semanticErr
 	}
 	if conflictingID != "" {
-		return nil, fmt.Errorf("casebundle: duplicate enforcement decision %q has conflicting content", conflictingID)
+		return nil, fmt.Errorf("casebundle: duplicate %s %q has conflicting content", label, conflictingID)
 	}
 	decisions := make([]record, 0, len(byID))
 	for _, decision := range byID {

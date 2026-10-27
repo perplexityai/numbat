@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/perplexityai/numbat/internal/discover"
+	"github.com/perplexityai/numbat/internal/evaluator"
 	"github.com/perplexityai/numbat/internal/extract"
 	"github.com/perplexityai/numbat/internal/finding"
 	"github.com/perplexityai/numbat/internal/output"
@@ -53,6 +54,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	httpGzip := fs.Bool("http-gzip", false, "gzip the HTTP POST body")
 	var rf ruleFlags
 	rf.register(fs)
+	decisionConfig := fs.String("decision-config", "", "enable model classification using this provider configuration; sends selected evidence to its endpoint")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat scan [--agent NAME ... | --path FILE|DIR ...] [--case-id ID] [--emit KIND ...] [--content preview|full|raw] [--content-scope all|messages] [--include-reasoning] [--rules-dir DIR ...] [--no-builtin-rules] [--output SINK ...]")
 		fmt.Fprintln(stderr, "\nScans supported on-disk agent artifacts and emits redacted findings, events, or indicators as NDJSON.")
@@ -190,7 +192,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return failScan(em, err.Error())
 		}
 	}
-	captureContent := content != contentPreview || sel.indicators || sel.findings && eng != nil && eng.UsesContent()
+	captureContent := content != contentPreview || sel.indicators || sel.findings && eng != nil && (eng.UsesContent() || *decisionConfig != "")
 
 	sc := &scanner{
 		emit:             em,
@@ -207,6 +209,19 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		Findings:   sel.findings,
 		Indicators: sel.indicators,
 	}, finding.Options{}, sc.indicators)
+	if *decisionConfig != "" {
+		if !sel.findings {
+			return failScan(em, "--decision-config requires findings output")
+		}
+		c, err := evaluator.LoadConfig(*decisionConfig)
+		if err == nil {
+			err = c.ConfigureRules(eng.DecisionRules())
+		}
+		if err != nil {
+			return failScan(em, err.Error())
+		}
+		sc.pipe.WithDecisionObserver(c.Monitor(em))
+	}
 	// One tracker spans the scan; it partitions artifact-backed windows by file.
 	if sel.findings && eng != nil {
 		if seqs := eng.SequenceRules(); len(seqs) > 0 {
@@ -387,7 +402,7 @@ const (
 )
 
 func emitFlagHelp() string {
-	return "record kind to emit: findings, events, indicators, or all (repeatable; default findings)"
+	return "record kind to emit: findings, events, indicators, or all (repeatable; default findings)\nwith --decision-config, findings is required and includes assessments (no separate filter)"
 }
 
 // parseEmit validates the repeatable --emit flag and returns the selected record

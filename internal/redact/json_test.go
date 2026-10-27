@@ -79,3 +79,41 @@ func TestJSONCredentialFields(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONRedactionSignal(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		masked      bool
+		wantError   bool
+	}{
+		{"plain", "public text", false, false},
+		{"pretty JSON", " { \"count\": 7, \"text\": \"<public>\" } ", false, false},
+		{"nested JSON", `{"body":" { \"count\": 7 } "}`, false, false},
+		{"credential", `{"api_key":"private"}`, true, false},
+		{"already masked", `{"api_key":"[redacted]"}`, true, false},
+		{"text credential", "TOKEN=private", true, false},
+		{"damaged JSON", `{"cookie":"private"`, false, true},
+		{"quote-prefixed command", `"$HOME/bin/tool" --flag`, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]string{"body": tc.value})
+			clean, masked, err := JSONWithRedaction(raw)
+			if (err != nil) != tc.wantError || masked != tc.masked {
+				t.Fatalf("masked=%t err=%v", masked, err)
+			}
+			if err != nil {
+				return
+			}
+			var value map[string]string
+			if err := json.Unmarshal(clean, &value); err != nil {
+				t.Fatal(err)
+			}
+			if !masked && value["body"] != tc.value {
+				t.Fatalf("unmasked string changed: %q", value["body"])
+			}
+			if masked && strings.Contains(value["body"], "private") {
+				t.Fatal("masked value retained credential")
+			}
+		})
+	}
+}

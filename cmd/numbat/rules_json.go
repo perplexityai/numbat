@@ -90,18 +90,19 @@ type rulesTestEventErrorDetail struct {
 // --expect-none result independently of Status: a fully evaluated fixture
 // whose assertions failed is Status="completed", AssertionOutcome="failed".
 type rulesTestSummary struct {
-	Type             string                    `json:"type"`
-	SchemaVersion    string                    `json:"schema_version"`
-	Status           string                    `json:"status"`
-	EventsEvaluated  int                       `json:"events_evaluated"`
-	Matches          int                       `json:"matches"`
-	RulesLoaded      int                       `json:"rules_loaded"`
-	EnforceEligible  int                       `json:"enforce_eligible_rules"`
-	AssertionOutcome string                    `json:"assertion_outcome"`
-	AssertionMissing []string                  `json:"assertion_missing,omitempty"`
-	StoppedAt        *rulesTestSummaryStopping `json:"stopped_at,omitempty"`
-	NumbatVersion    string                    `json:"numbat_version"`
-	RecordSchema     string                    `json:"record_schema"`
+	Type                 string                    `json:"type"`
+	SchemaVersion        string                    `json:"schema_version"`
+	Status               string                    `json:"status"`
+	EventsEvaluated      int                       `json:"events_evaluated"`
+	Matches              int                       `json:"matches"`
+	RulesLoaded          int                       `json:"rules_loaded"`
+	DecisionRulesSkipped []string                  `json:"decision_rules_skipped,omitempty"`
+	EnforceEligible      int                       `json:"enforce_eligible_rules"`
+	AssertionOutcome     string                    `json:"assertion_outcome"`
+	AssertionMissing     []string                  `json:"assertion_missing,omitempty"`
+	StoppedAt            *rulesTestSummaryStopping `json:"stopped_at,omitempty"`
+	NumbatVersion        string                    `json:"numbat_version"`
+	RecordSchema         string                    `json:"record_schema"`
 }
 
 // rulesTestSummaryStopping identifies the fixture line and reason a partial
@@ -374,6 +375,9 @@ loop:
 		StoppedAt:        stopped,
 		NumbatVersion:    version.String(),
 		RecordSchema:     model.SchemaVersion,
+	}
+	for _, r := range eng.DecisionRules() {
+		summary.DecisionRulesSkipped = append(summary.DecisionRulesSkipped, r.ID)
 	}
 	if !emit(summary) {
 		return rulesTestJSONDeliveryExitCode

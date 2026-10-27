@@ -19,7 +19,7 @@ import (
 )
 
 func TestRecordLimit(t *testing.T) {
-	original := []byte(`{"schema_version":"0.5.0","record_type":"event","event_id":"e","tool_input":"{\"query\":\"keep\"}","tool_input_bytes":16,"tool_result":"` +
+	original := []byte(`{"schema_version":"0.6.0","record_type":"event","event_id":"e","tool_input":"{\"query\":\"keep\"}","tool_input_bytes":16,"tool_result":"` +
 		strings.Repeat("x", 1000) + `","tool_result_bytes":2000,"tool_result_truncated":true,"extra":{"wide":9007199254740993},"content_preview":"keep"}` + "\n")
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(original, &fields); err != nil {
@@ -49,7 +49,7 @@ func TestRecordLimit(t *testing.T) {
 }
 
 func TestRecordLimitRepeatedReduction(t *testing.T) {
-	input := []byte(`{"schema_version":"0.5.0","record_type":"event","tool_input":"` +
+	input := []byte(`{"schema_version":"0.6.0","record_type":"event","tool_input":"` +
 		strings.Repeat(`\"`, 500) + `","tool_result":"` + strings.Repeat("界", 600) +
 		`","tool_input_bytes":500,"tool_result_bytes":1800}` + "\n")
 	for _, limit := range []int{1500, 250} {
