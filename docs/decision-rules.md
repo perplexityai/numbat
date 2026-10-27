@@ -172,8 +172,9 @@ decision rules before inference. Up to two independent requests run at once
 per evaluation under one shared deadline, admitted in catalog order. Results are finalized as
 they arrive, with fresh eligibility checks; a slow first request cannot consume
 the second request's entire window. A clean deny cancels outstanding model work
-and skips requests not yet started; a monitor-only finding does not. Beyond the
-two-request bound, later rules can still miss the deadline. Concurrency reduces
+and skips requests not yet started; already completed results retain their own
+outcomes and still pass deadline/freshness checks. A monitor-only finding does not
+cancel work. Beyond the two-request bound, later rules can still miss the deadline. Concurrency reduces
 serial waiting, not request count, cost or the need for capacity headroom.
 This is not a host-wide or fleet-wide rate limiter; overlapping hooks can each
 start their own requests.
@@ -183,13 +184,25 @@ Questions are not automatically packed into one request: the
 grouped questions can affect each other's answers. A native action expanded
 into several events selects the first matching event but retains the whole
 action in its projection and citations.
+Grouping policies about the same action may help, but needs a benchmark of
+distinct policies, complete answers and threshold decisions with fixed groups.
 
 Models cannot execute tools, authorize an action or cancel a deterministic deny.
 Semantic blocking requires both enforcement opt-ins, `deny_threshold`, complete
 current input, successful output delivery and the ordinary native controller.
 Session-based blocking also requires an anchored, complete observed prefix and
-an unchanged pending call after inference. State confirmation and the host
+an unchanged pending call after inference and record delivery. Before sending a
+model-backed deny, the hook rechecks its winning contribution; action-only and
+local denies do not depend on session state. State confirmation and the host
 response are not atomic; a deny request is not proof of host blocking.
+
+With `--decision-config`, native HTTP record delivery shares an absolute
+nine-second invocation deadline across all batches, retries and final flush,
+in addition to the per-request HTTP timeout. This does not forcibly interrupt
+local filesystem or other non-HTTP work. The model-evaluation budget is separate:
+finishing inference on time does not guarantee successful delivery or blocking.
+For latency-sensitive hooks, prefer file output with a separate `numbat ship`
+process rather than synchronous HTTP.
 
 - **Evidence and privacy:** projected arguments and results go to the provider.
   User prompts and unrelated event fields are not automatically included.
@@ -244,6 +257,12 @@ Queue drops report `queue_full`, `queue_bytes_limit`, `queue_expired` or
 `collector_shutdown`, never a model verdict. In native enforce mode,
 unavailable checks and completed checks with ineligible evidence also produce
 warnings; they do not override an independent local deny.
+
+Model unavailability is distinct from audit delivery failure. A real record
+write or sink-close failure still suppresses native enforcement, including a
+local deny. The collector can acknowledge processed telemetry despite an optional
+assessment failure, but reports actual record loss with a nonzero shutdown exit;
+best-effort inference does not mean silently successful audit delivery.
 
 Each evaluation has a distinct `assessment_id`. Assessments include rule/model
 identity, available probabilities, thresholds and action-event references, not

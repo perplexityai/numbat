@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/perplexityai/numbat/internal/decision"
@@ -125,6 +127,174 @@ func TestConcurrentRuntimeFastDenyCancelsSlowAndQueued(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeRetainsCompletedSiblingsAfterDeny(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, reason string
+		err                  error
+		cancelParent         bool
+		expireBudget         bool
+		staleFirst           bool
+	}{
+		{name: "completed", status: "completed", reason: "semantic_match"},
+		{name: "invalid_response", err: ErrResponse, status: "invalid_response", reason: "provider_contract"},
+		{name: "rate_limited", err: ErrRateLimit, status: "unavailable", reason: "rate_limited"},
+		{name: "provider_error", err: errors.New("synthetic failure"), status: "unavailable", reason: "provider_error"},
+		{name: "parent_cancelled", cancelParent: true, status: "timeout", reason: "deadline"},
+		{name: "budget_expired", expireBudget: true, status: "timeout", reason: "deadline"},
+		{name: "session_changes_during_first_finding", staleFirst: true, status: "completed", reason: "semantic_match"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := &Config{
+					BudgetMS: 2000, TimeoutMS: 2000, MaxRequestBytes: 32768,
+					Provider: ProviderConfig{Profile: Profile{
+						Protocol: "decisions-v1", Endpoint: "https://provider.example/v1/decisions",
+						Model: "fixture", MaxResponseBytes: 4096,
+					}},
+				}
+				rules := concurrencyRules(decision.Action, "/first", "/second")
+				if tc.staleFirst {
+					rules[0].Decision.View, rules[0].Decision.MaxHistoryCalls = decision.Session, 4
+				}
+				if err := c.ConfigureRules(rules); err != nil {
+					t.Fatal(err)
+				}
+				in := concurrencyEvaluation("/first", "/second")
+				in.Control = &pipeline.EnforceDecision{}
+				var revision, confirmations atomic.Uint64
+				revision.Store(7)
+				firstRejected := make(chan struct{})
+				rejectFirst := sync.OnceFunc(func() { close(firstRejected) })
+				if tc.staleFirst {
+					in.Confirm = func(_ context.Context, r decision.Request) (uint64, error) {
+						confirmations.Add(1)
+						current := revision.Load()
+						if current != r.Revision {
+							rejectFirst()
+						}
+						return current, nil
+					}
+				}
+				var out bytes.Buffer
+				var writer io.Writer = &out
+				if tc.staleFirst {
+					writer = runtimeWriterFunc(func(raw []byte) (int, error) {
+						n, err := out.Write(raw)
+						if err == nil {
+							var record struct {
+								RecordType string `json:"record_type"`
+								RuleID     string `json:"rule_id"`
+							}
+							if decodeErr := json.Unmarshal(raw, &record); decodeErr != nil {
+								t.Error(decodeErr)
+							}
+							if record.RecordType == output.RecordFinding && record.RuleID == "local.first" {
+								revision.Add(1)
+							}
+						}
+						return n, err
+					})
+				}
+				em := output.New(writer, io.Discard, "test")
+				gate := &runtimeRecordGate{entered: make(chan struct{}), release: make(chan struct{})}
+				release := sync.OnceFunc(func() { close(gate.release) })
+				defer release()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				factory := func(Profile) (Provider, error) {
+					return providerFunc(func(ctx context.Context, r decision.Request, p *decision.Compiled, _ int) (decision.Reply, error) {
+						if p.Policy().ID == "local.second" {
+							<-gate.entered
+							if tc.staleFirst {
+								select {
+								case <-firstRejected:
+								case <-ctx.Done():
+									return decision.Reply{}, ctx.Err()
+								}
+							}
+							if tc.err != nil {
+								return decision.Reply{}, tc.err
+							}
+						}
+						return decision.Reply{
+							RequestDigest: r.Digest, Model: r.Model, Choice: "violation",
+							Probabilities: map[string]float64{"violation": .999, "unknown": .001},
+						}, nil
+					}), nil
+				}
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					c.prepare(in).runWithFactory(ctx, c, em, gate, factory)
+				}()
+				<-gate.entered
+				// The first record remains blocked until the sibling completes,
+				// or waits for the stale first contribution to be rejected.
+				synctest.Wait()
+				if tc.cancelParent {
+					cancel()
+				}
+				if tc.expireBudget {
+					time.Sleep(time.Duration(c.BudgetMS) * time.Millisecond)
+				}
+				release()
+				<-done
+				if err := em.Close(); err != nil {
+					t.Fatal(err)
+				}
+				records := concurrencyAssessments(t, out.Bytes())
+				first, second := records["local.first"], records["local.second"]
+				if len(records) != 2 || first.RequestID == "" || second.RequestID == "" ||
+					second.Status != tc.status || second.Reason != tc.reason {
+					t.Fatalf("first=%+v second=%+v", first, second)
+				}
+				if tc.cancelParent || tc.expireBudget {
+					if first.Status != "timeout" || first.Reason != "deadline" ||
+						first.Matched || second.Matched || first.DenyCandidate || second.DenyCandidate || in.Control.Blocked {
+						t.Fatalf("expired authority survived: first=%+v second=%+v control=%+v", first, second, in.Control)
+					}
+				} else {
+					winner, winnerID := first, "local.first"
+					if tc.staleFirst {
+						winner, winnerID = second, "local.second"
+						if revision.Load() != 8 || confirmations.Load() != 2 || !first.DenyCandidate ||
+							in.Control.ConfirmDeny == nil || !in.Control.ConfirmDeny(ctx) {
+							t.Fatalf("post-write recheck did not preserve a healthy winner: revision=%d confirmations=%d first=%+v control=%+v",
+								revision.Load(), confirmations.Load(), first, in.Control)
+						}
+					}
+					if !first.Matched || !in.Control.Blocked || in.Control.DenyRuleID != winnerID ||
+						in.Control.DenyAssessmentID != winner.AssessmentID {
+						t.Fatalf("wrong deny winner: first=%+v second=%+v control=%+v", first, second, in.Control)
+					}
+					if matched := tc.status == "completed"; second.Matched != matched || second.DenyCandidate != matched {
+						t.Fatalf("completed sibling lost its verdict: %+v", second)
+					}
+				}
+			})
+		})
+	}
+}
+
+type runtimeWriterFunc func([]byte) (int, error)
+
+func (f runtimeWriterFunc) Write(raw []byte) (int, error) { return f(raw) }
+
+type runtimeRecordGate struct {
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *runtimeRecordGate) Lock() {
+	g.once.Do(func() {
+		close(g.entered)
+		<-g.release
+	})
+}
+
+func (*runtimeRecordGate) Unlock() {}
 
 func TestCompletedResponseCannotDenyAfterFinalizationDeadline(t *testing.T) {
 	c, hits := runtimeConfig(t, nil)

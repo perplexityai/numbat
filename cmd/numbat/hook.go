@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -319,6 +320,10 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 	if err != nil {
 		return false, "", "", err
 	}
+	var httpDeadline time.Time
+	if opts.decisionConfig != "" {
+		httpDeadline = started.Add(decisionHookBudget)
+	}
 	sink, err := buildSink(sinkConfig{
 		modes:         opts.modes,
 		defaultMode:   outputModeStdout,
@@ -326,6 +331,7 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 		httpURL:       opts.httpURL,
 		httpBatch:     opts.httpBatch,
 		httpTimeout:   opts.httpTO,
+		httpDeadline:  httpDeadline,
 		httpAuth:      opts.httpAuth,
 		httpSigHeader: opts.httpSig,
 		httpTSHeader:  opts.httpTS,
@@ -488,6 +494,15 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 		return false, "", "", fmt.Errorf("output delivery failed: %d record write(s) failed", recordErrors)
 	}
 	if dec != nil && dec.Blocked {
+		if dec.DenyAssessmentID != "" {
+			// Output can block after inference. Recheck only the winning model
+			// contribution, without renewing its invocation's delivery budget.
+			ctx, cancel := context.WithDeadline(context.Background(), started.Add(decisionHookBudget))
+			defer cancel()
+			if dec.ConfirmDeny == nil || !dec.ConfirmDeny(ctx) {
+				return false, "", "", errors.New("decision evidence changed or unavailable after output delivery")
+			}
+		}
 		return true, dec.Reason, responseAgent, nil
 	}
 	return false, "", "", nil

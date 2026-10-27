@@ -21,6 +21,8 @@ import (
 	"github.com/perplexityai/numbat/internal/state"
 )
 
+const decisionHookBudget = 9 * time.Second
+
 func decodeDecisionPayload(stdin io.Reader, enabled bool) (map[string]any, bool, error) {
 	var raw bytes.Buffer
 	if enabled {
@@ -41,7 +43,7 @@ func validateDecisionHook(c *evaluator.Config, sel emitSelection, sinks outputSi
 	if sinks.http {
 		sinkBudget = httpTimeout
 	}
-	if time.Duration(c.BudgetMS)*time.Millisecond+time.Second+sinkBudget > 9*time.Second {
+	if time.Duration(c.BudgetMS)*time.Millisecond+time.Second+sinkBudget > decisionHookBudget {
 		return fmt.Errorf("decision budget %dms + local reserve 1000ms + HTTP sink timeout %dms exceeds the 9000ms hook budget", c.BudgetMS, sinkBudget.Milliseconds())
 	}
 	return nil
@@ -107,7 +109,7 @@ func runHookDecisions(started time.Time, rawEvent, agent string, lc hook.Lifecyc
 		*opts.decisionReceipt = decisionDenyReceipt{
 			path: opts.stateDB, namespace: c.Digest(), limits: c.State,
 			expected: decision.Evidence{Subject: snapshot.Subject, Revision: snapshot.Revision, Current: snapshot.Current},
-			deadline: started.Add(9 * time.Second),
+			deadline: started.Add(decisionHookBudget),
 		}
 	}
 	operator, _ := json.Marshal(c.OperatorContext)

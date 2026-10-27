@@ -50,6 +50,7 @@ type sinkConfig struct {
 	httpBatch     int
 	httpMaxBuffer int
 	httpTimeout   time.Duration
+	httpDeadline  time.Time
 	httpAuth      string
 	httpSigHeader string
 	httpTSHeader  string
@@ -154,6 +155,7 @@ func buildSink(cfg sinkConfig, stdout io.Writer) (output.Sink, error) {
 			URL:            cfg.httpURL,
 			Auth:           auth,
 			Timeout:        cfg.httpTimeout,
+			Deadline:       cfg.httpDeadline,
 			BatchSize:      cfg.httpBatch,
 			MaxBufferBytes: cfg.httpMaxBuffer,
 			UserAgent:      model.ToolName + "/" + version.String(),

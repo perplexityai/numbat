@@ -85,8 +85,14 @@ func (c *Config) prepare(in Evaluation) *evaluationPlan {
 const concurrentDecisions = 2
 
 func (p *evaluationPlan) run(parent context.Context, c *Config, em *output.Emitter, outputMu sync.Locker) {
+	p.runWithFactory(parent, c, em, outputMu, c.Factory())
+}
+
+func (p *evaluationPlan) runWithFactory(parent context.Context, c *Config, em *output.Emitter, outputMu sync.Locker, factory Factory) {
 	ctx, cancel := context.WithTimeout(parent, time.Duration(c.BudgetMS)*time.Millisecond)
 	defer cancel()
+	work, cancelWork := context.WithCancelCause(ctx)
+	defer cancelWork(nil)
 	pending := make([]int, 0, len(p.rules))
 	for i := range p.rules {
 		if p.rules[i].invocation.selected {
@@ -107,7 +113,7 @@ func (p *evaluationPlan) run(parent context.Context, c *Config, em *output.Emitt
 			i := pending[next]
 			next++
 			active++
-			go func() { done <- completed{i, evaluate(ctx, p.rules[i].invocation, c.Factory())} }()
+			go func() { done <- completed{i, evaluate(work, p.rules[i].invocation, factory)} }()
 		}
 		if active == 0 {
 			break
@@ -115,15 +121,10 @@ func (p *evaluationPlan) run(parent context.Context, c *Config, em *output.Emitt
 		finished := <-done
 		active--
 		p.rules[finished.index].result = finished.result
-		if denied {
-			p.rules[finished.index].result = evaluationResult{
-				assessment: finished.result.failure(p.rules[finished.index].invocation, "skipped", "prior_semantic_deny"),
-			}
-		}
 		p.record(ctx, c, em, finished.index, outputMu)
 		if p.in.Control != nil && p.in.Control.Blocked && p.in.Control.DenyAssessmentID != "" {
 			denied = true
-			cancel()
+			cancelWork(errPriorSemanticDeny)
 		}
 	}
 	for _, i := range pending[next:] {
@@ -196,6 +197,38 @@ func (p *evaluationPlan) record(ctx context.Context, c *Config, em *output.Emitt
 		return
 	}
 	if p.in.Control != nil {
-		p.in.Control.RecordDecisionMatch(ev, r, f.FindingID, id, a.DenyCandidate, eventIDs)
+		deny := a.DenyCandidate
+		var confirm func(context.Context) bool
+		if deny {
+			// Retain only the identity needed for a final state read, not the
+			// request's evidence. The hook supplies its remaining delivery budget.
+			request := decision.Request{Subject: job.result.request.Subject, Revision: job.result.request.Revision}
+			confirmState := job.invocation.Confirm
+			confirm = func(ctx context.Context) bool {
+				if ctx.Err() != nil {
+					return false
+				}
+				if b.View == decision.Action {
+					return true
+				}
+				if confirmState == nil {
+					return false
+				}
+				revision, err := confirmState(ctx, request)
+				return err == nil && ctx.Err() == nil && revision == request.Revision
+			}
+			// Do not choose a stale winner and cancel its siblings merely
+			// because it was eligible before blocking record writes.
+			checkCtx, cancel := context.WithDeadline(ctx, job.result.request.Deadline)
+			deny = confirm(checkCtx)
+			cancel()
+			if !deny {
+				em.Diag("warn", "decision rule "+r.ID+": eligibility changed during record delivery; no model deny")
+			}
+		}
+		p.in.Control.RecordDecisionMatch(ev, r, f.FindingID, id, deny, eventIDs)
+		if p.in.Control.DenyAssessmentID == id {
+			p.in.Control.ConfirmDeny = confirm
+		}
 	}
 }

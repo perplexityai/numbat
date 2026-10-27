@@ -84,8 +84,11 @@ Deterministic CEL and sequence rules run first. A monitor-only finding does not
 suppress decision rules; an established deny skips further model calls.
 Otherwise, at most two independent decision requests run concurrently within a
 shared deadline. Requests are admitted in catalog order, but results are
-finalized as they arrive; a clean deny cancels remaining model work. Freshness
-and deadline checks run at finalization, not merely at provider response time.
+finalized as they arrive; a clean deny cancels remaining model work without
+discarding already completed results. Freshness and deadline checks run at
+finalization, not merely at provider response time. A winning contextual
+contribution is confirmed again after record delivery, immediately before the
+native deny; action-only and deterministic denies do not depend on session state.
 After a successful native deny write, optional session evidence records
 `deny_requested`, not a confirmed host block. This permits later calls to be
 reviewed without treating that proposal as still running. A partial write or
@@ -199,8 +202,10 @@ numbat requests a deny only when all applicable checks complete cleanly:
 
 The same output gate covers decision assessments and semantic findings. An
 optional evaluator's own error is scoped to that participant, not a global
-payload or output error. Contextual candidates additionally require a complete
-observed tool prefix and an unchanged pending-call state after inference.
+payload or output error. Failure to deliver even a skipped assessment is an
+output failure, not an inference failure. Contextual candidates additionally
+require a complete observed tool prefix and an unchanged pending-call state
+after inference and record delivery.
 Reported provider truncation invalidates a reply; unreported provider-side
 truncation cannot be detected, so the provider must reject oversized inputs.
 

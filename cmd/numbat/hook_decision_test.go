@@ -947,18 +947,18 @@ func TestExitCodeDenyReceiptRequiresCompleteControlWrite(t *testing.T) {
 				var stdout bytes.Buffer
 				return runHookEvent("PreToolUse", args, bytes.NewReader(raw), &stdout, stderr)
 			}
-			code := invoke("first", "echo first", tc.err)
-			wantCode := 0
-			if tc.name == "complete" {
-				wantCode = 2
-			}
-			if calls := lab.hits.Load(); code != wantCode || calls < 1 || calls > 2 {
-				t.Fatalf("exit=%d requests=%d for %s control write", code, lab.hits.Load(), tc.name)
-			}
 			var sawReceipt atomic.Bool
+			var secondHits atomic.Int32
 			lab.check = func(_ *http.Request, raw []byte) {
 				var request struct {
 					State struct {
+						Current struct {
+							Action struct {
+								Arguments struct {
+									Command string `json:"command"`
+								} `json:"arguments"`
+							} `json:"action"`
+						} `json:"current_event"`
 						History []struct {
 							Outcome string `json:"outcome"`
 						} `json:"history"`
@@ -968,19 +968,30 @@ func TestExitCodeDenyReceiptRequiresCompleteControlWrite(t *testing.T) {
 					t.Errorf("decode provider request: %v", err)
 					return
 				}
+				if request.State.Current.Action.Arguments.Command != "echo second" {
+					return
+				}
+				secondHits.Add(1)
 				for _, call := range request.State.History {
 					if call.Outcome == "deny_requested" {
 						sawReceipt.Store(true)
 					}
 				}
 			}
-			hits := lab.hits.Load()
+			code := invoke("first", "echo first", tc.err)
+			wantCode := 0
+			if tc.name == "complete" {
+				wantCode = 2
+			}
+			if calls := lab.hits.Load(); code != wantCode || calls < 1 || calls > 2 {
+				t.Fatalf("exit=%d requests=%d for %s control write", code, lab.hits.Load(), tc.name)
+			}
 			if code := invoke("second", "echo second", io.Discard); code != 0 {
 				t.Fatalf("unanchored session denied: exit=%d", code)
 			}
-			if lab.hits.Load() != hits+1 || sawReceipt.Load() != (tc.name == "complete") {
-				t.Fatalf("next request count=%d receipt=%t; previous=%d control=%s",
-					lab.hits.Load(), sawReceipt.Load(), hits, tc.name)
+			if secondHits.Load() != 1 || sawReceipt.Load() != (tc.name == "complete") {
+				t.Fatalf("second request count=%d receipt=%t control=%s",
+					secondHits.Load(), sawReceipt.Load(), tc.name)
 			}
 		})
 	}

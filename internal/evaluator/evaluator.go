@@ -17,6 +17,8 @@ var (
 	ErrResponse  = errors.New("invalid decision response")
 	ErrInput     = errors.New("invalid or oversized decision input")
 	ErrRateLimit = errors.New("decision provider rate limited")
+
+	errPriorSemanticDeny = errors.New("prior semantic deny")
 )
 
 // Provider implementations must respect cancellation and perform no tool or
@@ -109,8 +111,14 @@ func evaluate(parent context.Context, in Invocation, factory Factory) (result ev
 	ctx, cancel := context.WithTimeout(parent, time.Duration(b.BudgetMS)*time.Millisecond)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
-	if err := ctx.Err(); err != nil {
+	cancelled := func() evaluationResult {
+		if errors.Is(context.Cause(ctx), errPriorSemanticDeny) && time.Now().Before(deadline) {
+			return fail("skipped", "prior_semantic_deny")
+		}
 		return fail("timeout", "deadline")
+	}
+	if err := ctx.Err(); err != nil {
+		return cancelled()
 	}
 	s := in.Evidence.Subject
 	if s.EventID != in.Event.EventID || s.CallID != in.Event.ToolCallID ||
@@ -130,14 +138,14 @@ func evaluate(parent context.Context, in Invocation, factory Factory) (result ev
 	result.request = request
 	provider, err := factory(in.Profile)
 	if ctx.Err() != nil || !time.Now().Before(deadline) {
-		return fail("timeout", "deadline")
+		return cancelled()
 	}
 	if err != nil || provider == nil {
 		return fail("unavailable", "provider_initialization")
 	}
 	reply, err := provider.Evaluate(ctx, request, in.Policy, b.MaxRequestBytes)
 	if ctx.Err() != nil || !time.Now().Before(deadline) {
-		return fail("timeout", "deadline")
+		return cancelled()
 	}
 	if err != nil {
 		if errors.Is(err, ErrInput) {

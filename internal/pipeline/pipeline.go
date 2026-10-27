@@ -79,6 +79,10 @@ type EnforceDecision struct {
 	// override.
 	Reason string
 
+	// ConfirmDeny rechecks the winning semantic contribution after output
+	// delivery. It must not rerun inference or gate an independent local deny.
+	ConfirmDeny func(context.Context) bool
+
 	// The remaining fields are identifier-only context for the enforcement
 	// decision record. They never retain observed command or file content.
 	Matched          bool
