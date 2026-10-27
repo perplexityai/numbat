@@ -142,9 +142,11 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   dynamic operands, other option layouts, and other agents' native memory
   paths are not inferred. It matches the attempted write at the pre-action hook,
   whether or not the agent's own policy later allows it. Muse's native
-  `add_memory` and `edit_memory` tools are not covered: their input carries a
-  `scope` and a scope-relative `path` (for example `MEMORY.md`), not a
-  `.agents/memory/` path, so changes made through them are not detected.
+  `add_memory` and `edit_memory` tools are not covered. In Muse 1.4.13 their
+  input carries a `scope` (including the committed `project` scope) and a
+  scope-relative `path` such as `MEMORY.md`, not a `.agents/memory/` path, so
+  changes made through them, including to committed project memory, are not
+  detected.
 - `persistence.ssh_authorized_keys` - a structured action writes a user
   `authorized_keys` file or Windows administrators key file.
 - `persistence.ssh_authorized_keys_command` - a shell or PowerShell command
