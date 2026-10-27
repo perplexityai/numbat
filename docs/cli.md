@@ -51,7 +51,8 @@ A product numbat recognizes on this machine but cannot parse or hook is listed
 as well, marked unsupported (`LIVE` is `none` and `NEXT` points to the
 [unsupported-agent notes](agent-coverage.md#evaluated-but-unsupported)). Today
 that is Muse Desktop, detected by its macOS bundle identifier or its per-user
-data directories. These rows are inventory only: they appear when detected, not
+data directories (presence only, so leftover data after an uninstall still
+counts, and it says nothing about what the app did). These rows are inventory only: they appear when detected, not
 under `--all` when absent, and never emit events. In JSON, each row carries
 `"supported": true|false` to tell the two kinds apart.
 
