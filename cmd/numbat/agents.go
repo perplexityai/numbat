@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -399,6 +400,10 @@ var agentDescriptors = []agentDescriptor{
 // renders. It is built from a descriptor plus the read-only on-disk signals.
 type agentRow struct {
 	Agent string `json:"agent"`
+	// Supported is false for a product numbat can recognize on this machine but
+	// cannot parse or hook (see unsupportedAgents); true for every
+	// parser- or hook-backed row.
+	Supported bool `json:"supported"`
 	// Present is true when numbat found any local signal for the agent: its
 	// config directory, a parsed or incomplete at-rest scan, or a wired/unreadable
 	// hook config. The default text/JSON report includes only present rows; --all
@@ -433,7 +438,8 @@ func runAgents(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: numbat agents [--all] [--format text|json]")
 		fmt.Fprintln(stderr, "\nReport-only: scans this machine's known agent config dirs and at-rest roots.")
-		fmt.Fprintln(stderr, "By default it reports supported agents with local signals; --all prints")
+		fmt.Fprintln(stderr, "By default it reports supported agents with local signals, plus any detected")
+		fmt.Fprintln(stderr, "product numbat cannot monitor (marked unsupported); --all prints")
 		fmt.Fprintln(stderr, "the full parser/live coverage matrix (config, artifacts, live mode, wired,")
 		fmt.Fprintln(stderr, "next step). WIRED means numbat-owned configuration is present.")
 		fmt.Fprintln(stderr, "It does not verify runtime activation.")
@@ -483,11 +489,96 @@ func runAgents(args []string, stdout, stderr io.Writer) int {
 // agent's scan error never aborts the others: detect/at-rest/wired are each
 // resolved independently and a failure degrades that one cell to "—" or "no".
 func buildAgentRows(home string) []agentRow {
-	rows := make([]agentRow, 0, len(agentDescriptors))
+	rows := make([]agentRow, 0, len(agentDescriptors)+len(unsupportedAgents))
 	for _, d := range agentDescriptors {
 		rows = append(rows, d.row(home))
 	}
+	for _, u := range unsupportedAgents {
+		if r, ok := u.row(home); ok {
+			rows = append(rows, r)
+		}
+	}
 	return rows
+}
+
+// unsupportedAgent is a product numbat can recognize on this machine but cannot
+// parse or hook, so it has no model source agent and never emits events. It is
+// kept apart from agentDescriptors on purpose: that table's sync test requires
+// every row to be parser- or hook-backed. These rows exist for inventory only
+// and appear solely when detected, so --all stays the supported-agent matrix.
+type unsupportedAgent struct {
+	display string
+	// detect is a read-only presence check; it never executes anything.
+	detect func(home string) bool
+	// atRest is the ARTIFACTS cell explaining why nothing is parsed.
+	atRest string
+	hint   string
+}
+
+var unsupportedAgents = []unsupportedAgent{
+	{
+		display: "Muse Desktop",
+		detect:  detectMuseDesktop,
+		atRest:  "n/a (unsupported: no local tool trace)",
+		hint:    "unsupported; see docs/agent-coverage.md#evaluated-but-unsupported",
+	},
+}
+
+func (u unsupportedAgent) row(home string) (agentRow, bool) {
+	if !u.detect(home) {
+		return agentRow{}, false
+	}
+	return agentRow{
+		Agent:     u.display,
+		Supported: false,
+		Present:   true,
+		Detected:  true,
+		AtRest:    u.atRest,
+		Hook:      hookModalityForensic,
+		Wired:     "n/a",
+		SetupHint: u.hint,
+	}, true
+}
+
+// museDesktopBundleID is the macOS bundle identifier of the Muse Desktop app.
+// Muse Code (the CLI) is a different product and is detected separately.
+const museDesktopBundleID = "com.meta.endo"
+
+// systemApplicationsDir is where macOS installs apps for all users. It is a
+// variable so tests can keep detection hermetic.
+var systemApplicationsDir = "/Applications"
+
+// detectMuseDesktop reports whether Muse Desktop is installed or has run for
+// this user. The bundle identifier, not the app name, is the signal: a bundle
+// named Muse.app with another identifier is not Muse Desktop.
+func detectMuseDesktop(home string) bool {
+	for _, rel := range []string{
+		"Library/Application Support/" + museDesktopBundleID,
+		"Library/Caches/" + museDesktopBundleID,
+	} {
+		if dirPresent(filepath.Join(home, rel)) {
+			return true
+		}
+	}
+	for _, apps := range []string{systemApplicationsDir, filepath.Join(home, "Applications")} {
+		if bundleHasID(filepath.Join(apps, "Muse.app", "Contents", "Info.plist"), museDesktopBundleID) {
+			return true
+		}
+	}
+	return false
+}
+
+// bundleHasID reports whether an Info.plist names the bundle identifier. Binary
+// plists store ASCII strings verbatim, so a byte search covers both plist forms
+// without a parser. The read is bounded.
+func bundleHasID(plistPath, id string) bool {
+	f, err := os.Open(plistPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	return err == nil && bytes.Contains(data, []byte(id))
 }
 
 // row computes the report row for one descriptor from read-only on-disk signals.
@@ -498,6 +589,7 @@ func (d agentDescriptor) row(home string) agentRow {
 	wired := d.wiredColumn(home)
 	return agentRow{
 		Agent:                d.display,
+		Supported:            true,
 		Present:              detected || found || incomplete || wired == "yes" || strings.HasPrefix(wired, "error"),
 		Detected:             detected,
 		AtRest:               atRest,

@@ -13,6 +13,9 @@ func setTestHome(t *testing.T, home string) {
 	previousManagedHooksPath := inventoryManagedHooksPath
 	inventoryManagedHooksPath = func(string) (string, bool) { return "", false }
 	t.Cleanup(func() { inventoryManagedHooksPath = previousManagedHooksPath })
+	previousApplicationsDir := systemApplicationsDir
+	systemApplicationsDir = filepath.Join(home, ".test-system-applications")
+	t.Cleanup(func() { systemApplicationsDir = previousApplicationsDir })
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
