@@ -1505,3 +1505,56 @@ func TestStringNoPanicOnAdversarialInput(t *testing.T) {
 		})
 	}
 }
+
+func TestStringPreservesShellParameterExpansionOperators(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`[[ -n ${GH_TOKEN:-} ]] || exit 3`, `[[ -n ${GH_TOKEN:-} ]] || exit 3`},
+		{`echo ${API_TOKEN:=}`, `echo ${API_TOKEN:=}`},
+		{`echo ${SECRET:?}`, `echo ${SECRET:?}`},
+		{`echo ${TOKEN:+}`, `echo ${TOKEN:+}`},
+		{`echo ${API_TOKEN:-fallbackvalue123}`, `echo ${API_TOKEN:-[redacted]}`},
+		{`: ${API_TOKEN:=fallbackvalue123}`, `: ${API_TOKEN:=[redacted]}`},
+		{`: ${SECRET:?missing}`, `: ${SECRET:?[redacted]}`},
+		{`echo ${TOKEN:+set}`, `echo ${TOKEN:+[redacted]}`},
+		{`echo "${API_TOKEN:-fallbackvalue123}"`, `echo "${API_TOKEN:-[redacted]}"`},
+		{`echo ${API_TOKEN:---??++==}`, `echo ${API_TOKEN:-[redacted]}`},
+		{`echo ${API_TOKEN:=--fallback}`, `echo ${API_TOKEN:=[redacted]}`},
+		{`echo ${API_TOKEN:??missing}`, `echo ${API_TOKEN:?[redacted]}`},
+		{`echo ${API_TOKEN:++set}`, `echo ${API_TOKEN:+[redacted]}`},
+		{`echo ${API_TOKEN:-first} ${DB_PASSWORD:+second}`, `echo ${API_TOKEN:-[redacted]} ${DB_PASSWORD:+[redacted]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := String(c.in); got != c.want {
+				t.Fatalf("String(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestStringMasksAssignmentOperatorPrefixes(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`password: -Xyz123secret`, `password: [redacted]`},
+		{`echo API_TOKEN:-fallback`, `echo API_TOKEN:[redacted]`},
+		{`DB_PASSWORD="--??++=="`, `DB_PASSWORD="[redacted]"`},
+		{`DB_PASSWORD='--??++=='`, `DB_PASSWORD='[redacted]'`},
+	} {
+		t.Run(c.in, func(t *testing.T) {
+			if got := String(c.in); got != c.want {
+				t.Fatalf("String(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+	for _, key := range []string{"DB_PASSWORD", "GH_TOKEN"} {
+		for _, sep := range []string{"=", ": ", ":", " = "} {
+			for _, value := range []string{"-", "=", "?", "+", "--??++==", "-Xyz123secret", "+abc123", "--hunter2"} {
+				in := key + sep + value
+				t.Run(in, func(t *testing.T) {
+					if got, want := String(in), key+sep+Mask; got != want {
+						t.Fatalf("String(%q) = %q, want %q", in, got, want)
+					}
+				})
+			}
+		}
+	}
+}
