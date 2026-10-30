@@ -1150,6 +1150,12 @@ func TestLateralWorkloadExecReassignedCommandVariableStaysUnresolved(t *testing.
 		`if true; then K="kubectl --context c -n ns"; fi; $K exec p -- sh`,
 		`K="kubectl --context c -n ns"; true; K="kubectl --context d"; true; $K exec p -- sh`,
 		`(K="kubectl --context c -n ns"); $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; read "$dest" <<<'printf'; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; printf -v "$dest" '%s' printf; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; mapfile "$dest" <<<'printf'; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; printf '%n' "$dest"; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; a=(x); test -v 'a[K=0]'; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; a=(x); [[ -v 'a[K=0]' ]]; true; $K exec p -- sh`,
 	} {
 		ms, err := eng.Eval(cmd(source))
 		if err == nil || !strings.Contains(err.Error(), "dynamic command executable") || len(ms) != 0 {

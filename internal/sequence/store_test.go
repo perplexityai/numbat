@@ -294,7 +294,7 @@ func TestStoreFingerprintInvalidatesStaleVerdicts(t *testing.T) {
 }
 
 func TestStoreProjectionRevisionInvalidatesEnforcementMasks(t *testing.T) {
-	for _, revision := range []string{"sequence-projection-v3", "sequence-projection-v4", "sequence-projection-v5", "sequence-projection-v6"} {
+	for _, revision := range []string{"sequence-projection-v3", "sequence-projection-v4", "sequence-projection-v5", "sequence-projection-v6", "sequence-projection-v12"} {
 		revision := revision
 		t.Run(revision, func(t *testing.T) {
 			observation := observeSeededProjection(t, revision)

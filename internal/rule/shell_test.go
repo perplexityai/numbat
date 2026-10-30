@@ -547,6 +547,8 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 		{"spaced value", `g="gh repo"; $g fork octo/repo`, "$g"},
 		{"spaced value in loop", `g="gh repo"; for i in 1; do $g fork octo/repo; done`, "$g"},
 		{"braced spaced value", `g="gh  repo"; true; ${g} fork octo/repo`, "${g}"},
+		{"name in ordinary data", `g=gh; echo g; true; $g repo fork octo/repo`, "$g"},
+		{"suffix in ordinary data", `g=gh; cat /tmp/log; true; $g repo fork octo/repo`, "$g"},
 	}
 	for _, tt := range resolved {
 		tt := tt
@@ -606,6 +608,27 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 		{"spaced assignment word", `g="X=1 gh repo"; true; $g fork octo/repo`},
 		{"read writer", `g=gh; read g; true; $g repo fork octo/repo`},
 		{"printf writer", `g=gh; printf -vg %s echo; true; $g repo fork octo/repo`},
+		{"indirect read writer", `g=gh; dest=g; read "$dest" <<<'echo'; true; $g repo fork octo/repo`},
+		{"indirect printf writer", `g=gh; dest=g; printf -v "$dest" %s echo; true; $g repo fork octo/repo`},
+		{"indirect mapfile writer", `g=gh; dest=g; mapfile "$dest" <<<'echo'; true; $g repo fork octo/repo`},
+		{"indirect readarray writer", `g=gh; dest=g; readarray "$dest" <<<'echo'; true; $g repo fork octo/repo`},
+		{"indirect getopts writer", `g=gh; dest=g; getopts x "$dest" -x; true; $g repo fork octo/repo`},
+		{"indirect wait writer", `g=gh; dest=g; wait -n -p "$dest"; true; $g repo fork octo/repo`},
+		{"indirect compgen writer", `g=gh; dest=g; compgen -V "$dest" -W echo; true; $g repo fork octo/repo`},
+		{"printf count writer", `g=gh; dest=g; printf '%n' "$dest"; true; $g repo fork octo/repo`},
+		{"printf formatted count writer", `g=gh; dest=g; printf -- '%5n' "$dest"; true; $g repo fork octo/repo`},
+		{"printf dynamic format", `g=gh; format='%n'; dest=g; printf "$format" "$dest"; true; $g repo fork octo/repo`},
+		{"wrapped writer", `g=gh; dest=g; command builtin read "$dest"; true; $g repo fork octo/repo`},
+		{"resolved indirect writer", `w=read; g=gh; dest=g; true; $w "$dest"; true; $g repo fork octo/repo`},
+		{"adjacent after writer", `read dest; g=gh; $g repo fork octo/repo`},
+		{"writer after use", `g=gh; true; $g repo fork octo/repo; read dest`},
+		{"printing guard", `g=gh; printf '%s\n' start; true; $g repo fork octo/repo`},
+		{"arithmetic test", `g=gh; a=(x); test -v 'a[g=0]'; true; $g repo fork octo/repo`},
+		{"arithmetic bracket test", `g=gh; a=(x); [ -v 'a[g=0]' ]; true; $g repo fork octo/repo`},
+		{"arithmetic test clause", `g=gh; a=(x); [[ -v 'a[g=0]' ]]; true; $g repo fork octo/repo`},
+		{"dynamic test flag", `g=gh; flag=-v; test "$flag" 'a[g=0]'; true; $g repo fork octo/repo`},
+		{"statement bound", `g=gh; $g repo fork octo/repo; ` + strings.Repeat("true;", maxShellCommands)},
+		{"split value bound", `g="gh ` + strings.Repeat("x ", maxShellListItems) + `"; true; $g repo fork octo/repo`},
 		{"prefix writer", `g=gh; g=echo true; $g repo fork octo/repo`},
 		{"implicit reply writer", `REPLY=gh; read; $REPLY repo fork octo/repo`},
 		{"implicit pwd writer", `PWD=gh; cd /; $PWD repo fork octo/repo`},
@@ -694,6 +717,11 @@ func TestAnalyzeShellCommandsScriptResolvedExecutablesAreDetectionOnly(t *testin
 		{"script", `g=gh; true; $g repo fork octo/repo`, true},
 		{"script split", `g="gh repo"; true; $g fork octo/repo`, true},
 		{"script wrapped", `g="sudo gh"; true; $g repo fork octo/repo`, true},
+		{"script env wrapped", `g="env gh"; true; $g repo fork octo/repo`, true},
+		{"script command wrapped", `g="command gh"; true; $g repo fork octo/repo`, true},
+		{"script nested", `sh -c 'g="gh repo"; true; $g fork octo/repo'`, true},
+		{"script quoted", `g=gh; true; "$g" repo fork octo/repo`, true},
+		{"script braced", `g="gh repo"; true; ${g} fork octo/repo`, true},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -1765,6 +1793,23 @@ func BenchmarkAnalyzeShellCommands(b *testing.B) {
 		b.Run(fmt.Sprintf("%d_bytes", size), func(b *testing.B) {
 			for range b.N {
 				_, _, _ = analyzeShellCommands(source)
+			}
+		})
+	}
+}
+
+func BenchmarkAnalyzeShellCommandsScriptResolution(b *testing.B) {
+	for _, count := range []int{8000, 26000} {
+		var source strings.Builder
+		source.WriteString("K=echo; :")
+		for i := 0; i < count; i++ {
+			fmt.Fprintf(&source, " x%05d", i)
+		}
+		source.WriteString("; true; ")
+		source.WriteString(strings.Repeat("$K;", count))
+		b.Run(fmt.Sprintf("%d_bytes", source.Len()), func(b *testing.B) {
+			for range b.N {
+				_, _, _ = analyzeShellCommands(source.String())
 			}
 		})
 	}

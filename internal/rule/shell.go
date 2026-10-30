@@ -167,7 +167,6 @@ type shellAnalyzer struct {
 	previousStatements        map[*syntax.Stmt]*syntax.Stmt
 	resolveNames              bool
 	scriptAssignments         map[string]*scriptAssignment
-	scriptOperands            map[string]bool
 	statementCounter          int64
 	pipelineCounter           int64
 	halt                      bool
@@ -281,12 +280,12 @@ func (a *shellAnalyzer) parseDialect(source string, dialect commandDialect, dept
 	if !posixEnforcementShapeSafe(file) {
 		a.enforcementUnsafe = true
 	}
-	outerPrevious, outerResolve, outerAssignments, outerOperands := a.previousStatements, a.resolveNames, a.scriptAssignments, a.scriptOperands
+	outerPrevious, outerResolve, outerAssignments := a.previousStatements, a.resolveNames, a.scriptAssignments
 	a.previousStatements = previousStatements(file)
-	a.scriptAssignments, a.scriptOperands = scriptNames(file)
+	a.scriptAssignments = scriptNames(file)
 	a.resolveNames = a.staticNamesResolvable(source, file)
 	a.walk(source, file, depth, make(map[string]*syntax.Stmt), make(map[string]bool), wrappers)
-	a.previousStatements, a.resolveNames, a.scriptAssignments, a.scriptOperands = outerPrevious, outerResolve, outerAssignments, outerOperands
+	a.previousStatements, a.resolveNames, a.scriptAssignments = outerPrevious, outerResolve, outerAssignments
 }
 
 func previousStatements(root syntax.Node) map[*syntax.Stmt]*syntax.Stmt {
@@ -325,12 +324,13 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 		return false
 	}
 	resolvable := true
+	statements := 0
 	syntax.Walk(root, func(node syntax.Node) bool {
 		if !resolvable {
 			return false
 		}
 		switch node := node.(type) {
-		case *syntax.DeclClause, *syntax.ArithmCmd, *syntax.ArithmExp, *syntax.LetClause, *syntax.CStyleLoop, *syntax.CoprocClause:
+		case *syntax.DeclClause, *syntax.ArithmCmd, *syntax.ArithmExp, *syntax.LetClause, *syntax.CStyleLoop, *syntax.CoprocClause, *syntax.TestClause:
 			resolvable = false
 		case *syntax.Redirect:
 			if node.N != nil && strings.HasPrefix(node.N.Value, "{") {
@@ -341,6 +341,12 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 				resolvable = false
 			}
 		case *syntax.Stmt:
+			// Apply the projection's work bound before resolving commands here.
+			statements++
+			if statements > maxShellCommands {
+				resolvable = false
+				return false
+			}
 			call, ok := node.Cmd.(*syntax.CallExpr)
 			if !ok || len(call.Args) == 0 {
 				return true
@@ -366,7 +372,10 @@ func (a *shellAnalyzer) staticNamesResolvable(source string, root syntax.Node) b
 					}
 					continue
 				case "trap", "eval", "source", ".", "unset", "readonly", "declare", "typeset", "local", "nameref",
-					"export", "set", "shopt", "enable", "alias", "emulate", "setopt", "print":
+					"export", "set", "shopt", "enable", "alias", "emulate", "setopt", "print",
+					"read", "readarray", "mapfile", "getopts", "wait", "compgen", "printf", "test", "[":
+					// Builtins can write through expanded names, printf formats,
+					// or arithmetic test operands; do not infer their targets.
 					resolvable = false
 				}
 				return true
@@ -389,17 +398,12 @@ func (a *shellAnalyzer) resolveExecutable(stmt *syntax.Stmt, word *syntax.Word) 
 	if implicitlyWrittenNames[name] || assigned == nil || assigned.writes != 1 || assigned.stmt == nil || assigned.stmt.End().Offset() > stmt.Pos().Offset() {
 		return nil, false
 	}
-	for operand := range a.scriptOperands {
-		if strings.HasSuffix(operand, name) {
-			return nil, false
-		}
-	}
 	value, ok := literalAssignment(assigned.stmt, name)
 	if !ok || strings.ContainsAny(value, "*?[]{}~\\'\"$`;&|<>()#!") || strings.IndexFunc(value, func(r rune) bool { return r < 0x20 && r != '\t' || r == 0x7f }) >= 0 {
 		return nil, false
 	}
 	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ' ' || r == '\t' })
-	if len(fields) == 0 || strings.Contains(fields[0], "=") || quoted != nil && (len(fields) != 1 || fields[0] != value) {
+	if len(fields) == 0 || len(fields) > maxShellListItems || strings.Contains(fields[0], "=") || quoted != nil && (len(fields) != 1 || fields[0] != value) {
 		return nil, false
 	}
 	words := make([]*syntax.Word, len(fields))
@@ -480,13 +484,12 @@ type scriptAssignment struct {
 	writes int
 }
 
-func scriptNames(file *syntax.File) (map[string]*scriptAssignment, map[string]bool) {
+func scriptNames(file *syntax.File) map[string]*scriptAssignment {
 	top := make(map[*syntax.Stmt]bool, len(file.Stmts))
 	for _, stmt := range file.Stmts {
 		top[stmt] = true
 	}
 	assignments := make(map[string]*scriptAssignment)
-	operands := make(map[string]bool)
 	write := func(name string, stmt *syntax.Stmt) {
 		entry := assignments[name]
 		if entry == nil {
@@ -514,19 +517,13 @@ func scriptNames(file *syntax.File) (map[string]*scriptAssignment, map[string]bo
 			if node.Name != nil {
 				write(node.Name.Value, nil)
 			}
-		case *syntax.CallExpr:
-			for _, arg := range node.Args {
-				if value, ok := staticWord(arg); ok {
-					operands[value] = true
-				}
-			}
 		}
 		return true
 	})
 	if arithmetic {
-		return nil, operands
+		return nil
 	}
-	return assignments, operands
+	return assignments
 }
 
 var implicitlyWrittenNames = map[string]bool{

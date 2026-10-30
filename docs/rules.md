@@ -422,12 +422,24 @@ syntax whose final value depends on runtime state. Use `arguments` instead of
 
 The parser identifies only statically visible commands. It does not execute
 code or read referenced scripts. A POSIX command name given by one plain
-variable (`$g`, `"$g"`, `${g}`) resolves only when the immediately preceding
-statement in the same list is a single static scalar assignment to that
-variable and the script contains nothing that can change variables behind the
-analyzer's back, such as `trap`, `eval`, `source`, `declare`, `export`,
-`readonly`, `set`, `IFS`, or arithmetic assignment; this list is not
-exhaustive and inline child scripts do not inherit assignments.
+variable (`$g`, `"$g"`, `${g}`) can resolve from an immediately preceding
+single static scalar assignment in the same list. Detection also accepts one
+literal top-level assignment earlier in the script when the variable is
+written exactly once. That value may split on spaces and tabs, as in
+`K="kubectl --context c -n ns"; true; $K exec p -- sh`; a quoted use must
+remain one word. Globs, substitutions, arithmetic, and runtime-dependent
+values stay unresolved. Script-wide inference is detection-only, including
+commands unwrapped from an inferred launcher.
+
+Both paths abstain when the script contains variable-mutating constructs such
+as `trap`, `eval`, `source`, `declare`, `export`, `readonly`, `set`, or `IFS`.
+Builtins that can write through expanded names or arithmetic operands,
+including `read`, `mapfile`, `getopts`, `wait`, `compgen`, `printf`, and
+`test`/`[`/`[[`, also disable inference. This intentionally includes ordinary
+printing and tests rather than interpreting formats or possible write targets.
+The safety prepass stops inferring names beyond 64 statements, and split
+assignment values are limited to 512 words. Inline child scripts keep their
+own assignment scope.
 Shell-managed names such as `RANDOM`, `OPTIND`, `BASH_SUBSHELL`, and
 `BASH_MONOSECONDS` also stay unresolved: an assignment is not proof of their
 runtime value.
@@ -617,9 +629,9 @@ Sequence matching is conservative:
 hook callbacks persist their bounded window in `$HOME/.numbat/state.db`
 (`--state-db` overrides the path). A change to the loaded sequence-rule set
 that affects matching, enforcement, or rule version invalidates old windows.
-Parser and projection updates also invalidate old verdicts; the current
-projection revision is `sequence-projection-v10`. If
-the state cannot be opened, correlation fails open with a warning.
+Parser and projection updates also invalidate old verdicts through
+`sequenceProjectionRevision` in `internal/sequence/store.go`. If the state
+cannot be opened, correlation fails open with a warning.
 
 An enforced sequence may block only the action matching its final step.
 Earlier steps have already been observed. Scan, OTLP, post-action, and monitor
