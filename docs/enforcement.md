@@ -93,9 +93,10 @@ previews, parser diagnostics, and truncated projections stay detection-only.
 The gate is event-wide: one non-static command makes the whole input
 detection-only. A matching command inside a list, branch, or loop is denied as
 requested intent even if the shell would not reach it at run time.
-A command name given by a variable is static only when the immediately
-preceding statement assigns it a static value (see Analysis boundary in
-`rules.md`).
+A command name given by a variable is static for enforcement only when the
+immediately preceding statement assigns it a static value and the
+variable-resolution safety guards pass (see Analysis boundary in `rules.md`).
+Script-wide assignment inference remains detection-only.
 
 numbat recognizes explicit `-WhatIf` and a statically visible
 `$WhatIfPreference = $true` for known cmdlets. It does not infer ambient

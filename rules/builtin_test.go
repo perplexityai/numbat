@@ -3,6 +3,7 @@ package rules_test
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -1142,10 +1143,34 @@ func TestPrivilegeHostNamespaceEntry(t *testing.T) {
 	})
 }
 
+func TestLateralWorkloadExecReassignedCommandVariableStaysUnresolved(t *testing.T) {
+	eng := builtinEngine(t)
+	for _, source := range []string{
+		`K="kubectl --context c -n ns"; if true; then K=echo; fi; $K exec p -- sh`,
+		`if true; then K="kubectl --context c -n ns"; fi; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; true; K="kubectl --context d"; true; $K exec p -- sh`,
+		`(K="kubectl --context c -n ns"); $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; read "$dest" <<<'printf'; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; printf -v "$dest" '%s' printf; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; mapfile "$dest" <<<'printf'; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; dest=K; printf '%n' "$dest"; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; a=(x); test -v 'a[K=0]'; true; $K exec p -- sh`,
+		`K="kubectl --context c -n ns"; a=(x); [[ -v 'a[K=0]' ]]; true; $K exec p -- sh`,
+	} {
+		ms, err := eng.Eval(cmd(source))
+		if err == nil || !strings.Contains(err.Error(), "dynamic command executable") || len(ms) != 0 {
+			t.Fatalf("Eval(%q) = (%v, %v), want dynamic-executable error without matches", source, ms, err)
+		}
+	}
+}
+
 func TestLateralWorkloadExec(t *testing.T) {
 	eng := builtinEngine(t)
 	runCases(t, eng, []ruleCase{
 		{"Kubernetes workload exec", cmd("kubectl -n prod exec pod/api -- /bin/sh"), "lateral.workload_exec"},
+		{"Kubernetes exec through a static command variable", cmd(`K="kubectl --context c -n ns"; $K exec p -- sh -c 'id'`), "lateral.workload_exec"},
+		{"Kubernetes exec through a static command variable in a loop", cmd(`K="kubectl --context c -n ns"; for p in a b; do $K exec "$p" -- sh -c 'id'; done`), "lateral.workload_exec"},
+		{"Kubernetes get through a static command variable stays quiet", cmd(`K="kubectl --context c -n ns"; $K get pods`), ""},
 		{"Kubernetes node debug", cmd("kubectl debug node/worker-1 -it --image=ubuntu"), "lateral.workload_exec"},
 		{"OpenShift remote shell", cmd("oc -n prod rsh deployment/api"), "lateral.workload_exec"},
 		{"CRI workload exec", cmd("sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock exec -it abc sh"), "lateral.workload_exec"},

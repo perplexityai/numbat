@@ -543,6 +543,12 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 		{"optarg", `OPTARG=gh; $OPTARG repo fork octo/repo`, "$OPTARG"},
 		{"opterr", `OPTERR=gh; $OPTERR repo fork octo/repo`, "$OPTERR"},
 		{"reply", `REPLY=gh; $REPLY repo fork octo/repo`, "$REPLY"},
+		{"not adjacent", `g=gh; true; $g repo fork octo/repo`, "$g"},
+		{"spaced value", `g="gh repo"; $g fork octo/repo`, "$g"},
+		{"spaced value in loop", `g="gh repo"; for i in 1; do $g fork octo/repo; done`, "$g"},
+		{"braced spaced value", `g="gh  repo"; true; ${g} fork octo/repo`, "${g}"},
+		{"name in ordinary data", `g=gh; echo g; true; $g repo fork octo/repo`, "$g"},
+		{"suffix in ordinary data", `g=gh; cat /tmp/log; true; $g repo fork octo/repo`, "$g"},
 	}
 	for _, tt := range resolved {
 		tt := tt
@@ -574,7 +580,6 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 		source string
 	}{
 		{"unknown", `$g repo fork octo/repo`},
-		{"not adjacent", `g=gh; true; $g repo fork octo/repo`},
 		{"reassigned elsewhere", `g=gh; (g=echo); $g repo fork octo/repo`},
 		{"block", `{ g=gh; }; $g repo fork octo/repo`},
 		{"conditional", `g=gh && $g repo fork octo/repo`},
@@ -584,13 +589,50 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 		{"redirected assignment", `g=gh >/dev/null; $g repo fork octo/repo`},
 		{"substitution", `g=$(which gh); $g repo fork octo/repo`},
 		{"expansion", `g=$GH; $g repo fork octo/repo`},
-		{"spaced value", `g="gh repo"; $g fork octo/repo`},
 		{"glob value", `g=g*; $g repo fork octo/repo`},
 		{"tilde value", `g=~/gh; $g repo fork octo/repo`},
 		{"brace value", `g={gh,echo}; $g repo fork octo/repo`},
 		{"ansi quoted value", `g=$'g\x68'; $g repo fork octo/repo`},
 		{"escaped value", `g=g\h; $g repo fork octo/repo`},
 		{"loop variable", `for g in gh; do $g repo fork octo/repo; done`},
+		{"spaced reassigned", `g="gh repo"; g=echo; true; $g fork octo/repo`},
+		{"spaced conditional", `if true; then g="gh repo"; fi; true; $g fork octo/repo`},
+		{"spaced subshell", `(g="gh repo"); true; $g fork octo/repo`},
+		{"spaced loop assignment", `for i in 1; do g="gh repo"; done; $g fork octo/repo`},
+		{"spaced function assignment", `f() { g="gh repo"; }; f; $g fork octo/repo`},
+		{"spaced use before assignment", `true; $g fork octo/repo; g="gh repo"`},
+		{"spaced quoted use", `g="gh repo"; true; "$g" fork octo/repo`},
+		{"spaced substitution", `g="$(printf gh) repo"; true; $g fork octo/repo`},
+		{"spaced expansion", `g="$GH repo"; true; $g fork octo/repo`},
+		{"spaced glob", `g="gh re*"; true; $g fork octo/repo`},
+		{"spaced assignment word", `g="X=1 gh repo"; true; $g fork octo/repo`},
+		{"read writer", `g=gh; read g; true; $g repo fork octo/repo`},
+		{"printf writer", `g=gh; printf -vg %s echo; true; $g repo fork octo/repo`},
+		{"indirect read writer", `g=gh; dest=g; read "$dest" <<<'echo'; true; $g repo fork octo/repo`},
+		{"indirect printf writer", `g=gh; dest=g; printf -v "$dest" %s echo; true; $g repo fork octo/repo`},
+		{"indirect mapfile writer", `g=gh; dest=g; mapfile "$dest" <<<'echo'; true; $g repo fork octo/repo`},
+		{"indirect readarray writer", `g=gh; dest=g; readarray "$dest" <<<'echo'; true; $g repo fork octo/repo`},
+		{"indirect getopts writer", `g=gh; dest=g; getopts x "$dest" -x; true; $g repo fork octo/repo`},
+		{"indirect wait writer", `g=gh; dest=g; wait -n -p "$dest"; true; $g repo fork octo/repo`},
+		{"indirect compgen writer", `g=gh; dest=g; compgen -V "$dest" -W echo; true; $g repo fork octo/repo`},
+		{"printf count writer", `g=gh; dest=g; printf '%n' "$dest"; true; $g repo fork octo/repo`},
+		{"printf formatted count writer", `g=gh; dest=g; printf -- '%5n' "$dest"; true; $g repo fork octo/repo`},
+		{"printf dynamic format", `g=gh; format='%n'; dest=g; printf "$format" "$dest"; true; $g repo fork octo/repo`},
+		{"wrapped writer", `g=gh; dest=g; command builtin read "$dest"; true; $g repo fork octo/repo`},
+		{"resolved indirect writer", `w=read; g=gh; dest=g; true; $w "$dest"; true; $g repo fork octo/repo`},
+		{"adjacent after writer", `read dest; g=gh; $g repo fork octo/repo`},
+		{"writer after use", `g=gh; true; $g repo fork octo/repo; read dest`},
+		{"printing guard", `g=gh; printf '%s\n' start; true; $g repo fork octo/repo`},
+		{"arithmetic test", `g=gh; a=(x); test -v 'a[g=0]'; true; $g repo fork octo/repo`},
+		{"arithmetic bracket test", `g=gh; a=(x); [ -v 'a[g=0]' ]; true; $g repo fork octo/repo`},
+		{"arithmetic test clause", `g=gh; a=(x); [[ -v 'a[g=0]' ]]; true; $g repo fork octo/repo`},
+		{"dynamic test flag", `g=gh; flag=-v; test "$flag" 'a[g=0]'; true; $g repo fork octo/repo`},
+		{"statement bound", `g=gh; $g repo fork octo/repo; ` + strings.Repeat("true;", maxShellCommands)},
+		{"split value bound", `g="gh ` + strings.Repeat("x ", maxShellListItems) + `"; true; $g repo fork octo/repo`},
+		{"prefix writer", `g=gh; g=echo true; $g repo fork octo/repo`},
+		{"implicit reply writer", `REPLY=gh; read; $REPLY repo fork octo/repo`},
+		{"implicit pwd writer", `PWD=gh; cd /; $PWD repo fork octo/repo`},
+		{"arithmetic writer", `g=gh; : "${a[g+=1]}"; true; $g repo fork octo/repo`},
 		{"append", `g=g; g+=h; $g repo fork octo/repo`},
 		{"array", `g=(gh); $g repo fork octo/repo`},
 		{"index", `g[0]=gh; $g repo fork octo/repo`},
@@ -659,6 +701,39 @@ func TestAnalyzeShellCommandsResolvesAssignedExecutables(t *testing.T) {
 				if command.Executable == "gh" || command.Executable == "echo" {
 					t.Fatalf("resolved %q from %q: %#v", command.Executable, tt.source, command)
 				}
+			}
+		})
+	}
+}
+
+func TestAnalyzeShellCommandsScriptResolvedExecutablesAreDetectionOnly(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		source string
+		unsafe bool
+	}{
+		{"adjacent", `g=gh; $g repo fork octo/repo`, false},
+		{"script", `g=gh; true; $g repo fork octo/repo`, true},
+		{"script split", `g="gh repo"; true; $g fork octo/repo`, true},
+		{"script wrapped", `g="sudo gh"; true; $g repo fork octo/repo`, true},
+		{"script env wrapped", `g="env gh"; true; $g repo fork octo/repo`, true},
+		{"script command wrapped", `g="command gh"; true; $g repo fork octo/repo`, true},
+		{"script nested", `sh -c 'g="gh repo"; true; $g fork octo/repo'`, true},
+		{"script quoted", `g=gh; true; "$g" repo fork octo/repo`, true},
+		{"script braced", `g="gh repo"; true; ${g} fork octo/repo`, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			analysis := analyzeShellCommandsDetailed(tt.source, dialectPOSIX)
+			if analysis.err != nil || !analysis.usable {
+				t.Fatalf("analysis = usable:%v err:%v", analysis.usable, analysis.err)
+			}
+			command := commandNamed(t, analysis.commands, "gh", 0)
+			if command.enforcementUnsafe != tt.unsafe || commandSafeForEnforcement(command) == tt.unsafe || tt.unsafe && analysis.enforcementSafe {
+				t.Fatalf("command unsafe = %v, analysis safe = %v, want unsafe %v", command.enforcementUnsafe, analysis.enforcementSafe, tt.unsafe)
 			}
 		})
 	}
@@ -1718,6 +1793,23 @@ func BenchmarkAnalyzeShellCommands(b *testing.B) {
 		b.Run(fmt.Sprintf("%d_bytes", size), func(b *testing.B) {
 			for range b.N {
 				_, _, _ = analyzeShellCommands(source)
+			}
+		})
+	}
+}
+
+func BenchmarkAnalyzeShellCommandsScriptResolution(b *testing.B) {
+	for _, count := range []int{8000, 26000} {
+		var source strings.Builder
+		source.WriteString("K=echo; :")
+		for i := 0; i < count; i++ {
+			fmt.Fprintf(&source, " x%05d", i)
+		}
+		source.WriteString("; true; ")
+		source.WriteString(strings.Repeat("$K;", count))
+		b.Run(fmt.Sprintf("%d_bytes", source.Len()), func(b *testing.B) {
+			for range b.N {
+				_, _, _ = analyzeShellCommands(source.String())
 			}
 		})
 	}
