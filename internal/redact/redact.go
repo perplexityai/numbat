@@ -42,8 +42,8 @@ var (
 const urlUserinfoMask = "***"
 
 // secretKey matches a secret-looking assignment key (env var, JSON field,
-// YAML key). Capture group 1 is the key text as written.
-const secretKey = `([A-Za-z0-9_."'-]*` + secretKeyTerm + `[A-Za-z0-9_."'-]*)`
+// YAML key). Capture group 1 includes a shell expansion's opening ${, if present.
+const secretKey = `((?:\$\{)?[A-Za-z0-9_."'-]*` + secretKeyTerm + `[A-Za-z0-9_."'-]*)`
 
 // credentialQueryKeys is the set of URL query-parameter keys that carry
 // credential or signature material — the live-auth params a presigned URL
@@ -528,7 +528,7 @@ var assignPatterns = []assignPattern{
 	{regexp.MustCompile(secretKey + `(\s*[:=]\s*')([^']*)(')`), 1, 2, 3, 4},
 	// Unquoted value: KEY=value / KEY: value (stops at whitespace, comma,
 	// or closing brace/bracket so it never eats trailing structure).
-	{regexp.MustCompile(secretKey + `(\s*[:=]\s*[-=?+]*)([^\s,}\]"'=?+-][^\s,}\]"']*)()`), 1, 2, 3, 4},
+	{regexp.MustCompile(secretKey + `(\s*[:=]\s*)([^\s,}\]"']+)()`), 1, 2, 3, 4},
 }
 
 // assignPattern pairs a compiled regex with the submatch indices for the key,
@@ -552,7 +552,18 @@ func maskAssign(ap assignPattern, s string) string {
 		if ap.postIdx < len(sub) {
 			post = sub[ap.postIdx]
 		}
-		return sub[ap.keyIdx] + sub[ap.preIdx] + Mask + post
+		masked := Mask
+		value := sub[ap.valIdx]
+		// Only ${KEY:op...} has an operator outside the secret value. Preserve
+		// exactly one byte: a fallback can itself begin with operator characters.
+		if strings.HasPrefix(sub[ap.keyIdx], "${") && sub[ap.preIdx] == ":" &&
+			len(value) > 0 && strings.IndexByte("-=?+", value[0]) >= 0 {
+			masked = value[:1]
+			if len(value) > 1 {
+				masked += Mask
+			}
+		}
+		return sub[ap.keyIdx] + sub[ap.preIdx] + masked + post
 	})
 }
 

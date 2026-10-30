@@ -215,6 +215,8 @@ applies when replaying preview records with a byte count but no body. Rules
 can inspect the truncation flags without reading the body. Content rules use
 the bounded CEL evaluation budget. Output redaction never changes local rule
 input; redacted exports cannot reconstruct original values during replay.
+Simple colon-form shell parameter operators such as `${GH_TOKEN:-}` are
+preserved, but redacted commands are not lossless shell source.
 
 `event.content_omitted` lists bodies withheld by the output limit or shared with
 another event from the same call. Reading a listed body during replay also
