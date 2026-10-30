@@ -1505,3 +1505,19 @@ func TestStringNoPanicOnAdversarialInput(t *testing.T) {
 		})
 	}
 }
+
+func TestStringPreservesShellParameterExpansionOperators(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`[[ -n ${GH_TOKEN:-} ]] || exit 3`, `[[ -n ${GH_TOKEN:-} ]] || exit 3`},
+		{`echo ${API_TOKEN:-fallbackvalue123}`, `echo ${API_TOKEN:-[redacted]}`},
+		{`: ${API_TOKEN:=fallbackvalue123}`, `: ${API_TOKEN:=[redacted]}`},
+		{`: ${SECRET:?missing}`, `: ${SECRET:?[redacted]}`},
+		{`echo ${TOKEN:+set}`, `echo ${TOKEN:+[redacted]}`},
+		{`password: -Xyz123secret`, `password: -[redacted]`},
+	}
+	for _, c := range cases {
+		if got := String(c.in); got != c.want {
+			t.Fatalf("String(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

@@ -528,7 +528,7 @@ var assignPatterns = []assignPattern{
 	{regexp.MustCompile(secretKey + `(\s*[:=]\s*')([^']*)(')`), 1, 2, 3, 4},
 	// Unquoted value: KEY=value / KEY: value (stops at whitespace, comma,
 	// or closing brace/bracket so it never eats trailing structure).
-	{regexp.MustCompile(secretKey + `(\s*[:=]\s*)([^\s,}\]"']+)()`), 1, 2, 3, 4},
+	{regexp.MustCompile(secretKey + `(\s*[:=]\s*[-=?+]*)([^\s,}\]"'=?+-][^\s,}\]"']*)()`), 1, 2, 3, 4},
 }
 
 // assignPattern pairs a compiled regex with the submatch indices for the key,
