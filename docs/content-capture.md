@@ -68,10 +68,13 @@ Keep the original artifacts when analysis needs content beyond these bounds.
 Full mode also masks recognized credential keys inside JSON-serialized strings,
 preserving their string representation. Strings beginning with `{`, `[` or `"`
 after whitespace must decode as JSON, matching the tool-input preview policy.
-Malformed JSON-shaped strings, including nested result text, cause the exported
-payload to be omitted with its truncation flag set. The same applies beyond
-eight nested serialization layers. Raw output and the originals used by rules
-are unchanged; use raw mode when downstream analysis needs the supplied text.
+Full mode replaces a malformed JSON-shaped string, including nested result
+text, with an omission marker and sets the payload's truncation flag, retaining
+safe siblings. A serialized value that cannot be safely redacted, including
+one beyond eight serialization layers, is also omitted. Invalid or incomplete
+outer JSON still causes the whole payload to be omitted. Raw output and the
+originals used by rules are unchanged; use raw mode when downstream analysis
+needs the supplied text.
 
 ## What is preserved
 
