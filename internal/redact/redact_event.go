@@ -118,9 +118,9 @@ func payload(text string, truncated bool) (string, bool) {
 	if truncated {
 		return "[payload omitted: incomplete JSON]", true
 	}
-	masked, err := redactedJSONValue([]byte(text))
+	masked, omitted, err := redactedPayloadValue([]byte(text))
 	if err != nil {
-		return "[payload omitted: JSON redaction failed]", true
+		return omittedSerializedString, true
 	}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
@@ -128,7 +128,8 @@ func payload(text string, truncated bool) (string, bool) {
 	if err := encoder.Encode(masked); err != nil {
 		return "[payload omitted: encoding error]", true
 	}
-	return model.LimitToolPayload(string(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))))
+	limited, limitTruncated := model.LimitToolPayload(string(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))))
+	return limited, limitTruncated || omitted
 }
 
 // EventWithRawContent is the explicit unredacted event projection. Raw here

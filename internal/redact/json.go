@@ -45,7 +45,7 @@ var tokenMetricKeys = map[string]struct{}{
 
 // JSON redacts one JSON value without producing invalid JSON.
 func JSON(raw []byte) ([]byte, error) {
-	value, err := redactedJSONValue(raw)
+	value, err := redactedJSONValueAtDepth(raw, 0, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -56,11 +56,15 @@ func JSON(raw []byte) ([]byte, error) {
 // nesting is already bounded by encoding/json's decoder.
 const maxSerializedJSONDepth = 8
 
-func redactedJSONValue(raw []byte) (any, error) {
-	return redactedJSONValueAtDepth(raw, 0)
+const omittedSerializedString = "[payload omitted: JSON redaction failed]"
+
+func redactedPayloadValue(raw []byte) (any, bool, error) {
+	omitted := false
+	value, err := redactedJSONValueAtDepth(raw, 0, &omitted)
+	return value, omitted, err
 }
 
-func redactedJSONValueAtDepth(raw []byte, depth int) (any, error) {
+func redactedJSONValueAtDepth(raw []byte, depth int, omitted *bool) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var value any
@@ -74,14 +78,14 @@ func redactedJSONValueAtDepth(raw []byte, depth int) (any, error) {
 		}
 		return nil, err
 	}
-	redacted, err := redactJSONValue(value, depth)
+	redacted, err := redactJSONValue(value, depth, omitted)
 	if err != nil {
 		return nil, err
 	}
 	return redacted, nil
 }
 
-func redactJSONValue(value any, depth int) (any, error) {
+func redactJSONValue(value any, depth int, omitted *bool) (any, error) {
 	switch value := value.(type) {
 	case map[string]any:
 		for key, child := range value {
@@ -97,7 +101,7 @@ func redactJSONValue(value any, depth int) (any, error) {
 				value[key] = Mask
 				continue
 			}
-			redacted, err := redactJSONValue(child, depth)
+			redacted, err := redactJSONValue(child, depth, omitted)
 			if err != nil {
 				return nil, err
 			}
@@ -106,7 +110,7 @@ func redactJSONValue(value any, depth int) (any, error) {
 		return value, nil
 	case []any:
 		for i := range value {
-			redacted, err := redactJSONValue(value[i], depth)
+			redacted, err := redactJSONValue(value[i], depth, omitted)
 			if err != nil {
 				return nil, err
 			}
@@ -121,9 +125,13 @@ func redactJSONValue(value any, depth int) (any, error) {
 			if depth >= maxSerializedJSONDepth {
 				return nil, fmt.Errorf("serialized JSON nesting exceeds redaction limit")
 			}
-			masked, err := redactedJSONValueAtDepth(raw, depth+1)
+			masked, err := redactedJSONValueAtDepth(raw, depth+1, omitted)
 			if err != nil {
-				return nil, err
+				if omitted == nil {
+					return nil, err
+				}
+				*omitted = true
+				return omittedSerializedString, nil
 			}
 			var buf bytes.Buffer
 			encoder := json.NewEncoder(&buf)

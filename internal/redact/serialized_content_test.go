@@ -134,3 +134,21 @@ func TestSerializedToolContentOrdinaryText(t *testing.T) {
 		}
 	}
 }
+
+func TestDamagedSerializedStringKeepsSiblings(t *testing.T) {
+	for _, stdout := range []string{
+		"{\"api_key\":\"PRIVATE_CANARY\"}\n\ntotal 8\ndrwxr-xr-x 2 dev dev 4096 .\n",
+		"{\"n\":1}\n{\"token\":\"PRIVATE_CANARY\"}\n",
+		"{\"a\":\"x\",\"token\":\"PRIVATE_CANARY",
+	} {
+		var ev model.Event
+		ev.SetToolResult(map[string]any{"stdout": stdout, "stderr": "STDERR_VISIBLE", "returnCodeInterpretation": "EXIT_VISIBLE"})
+		full := EventWithContent(ev)
+		if strings.Contains(full.ToolResult, "PRIVATE_CANARY") || !strings.Contains(full.ToolResult, "payload omitted") || !full.ToolResultTruncated {
+			t.Fatalf("damaged serialized string must be omitted: %q", full.ToolResult)
+		}
+		if !json.Valid([]byte(full.ToolResult)) || !strings.Contains(full.ToolResult, "STDERR_VISIBLE") || !strings.Contains(full.ToolResult, "EXIT_VISIBLE") {
+			t.Fatalf("siblings of a damaged serialized string lost: %q", full.ToolResult)
+		}
+	}
+}
