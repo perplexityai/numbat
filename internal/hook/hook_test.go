@@ -90,7 +90,7 @@ func TestSubagentStopPreservesFinalResponseAndBoundary(t *testing.T) {
 				if events[0].SessionID != "child-1" || events[0].SessionTreeID != "s1" || events[0].SubAgent != "" || events[0].SubAgentID != "child-1" {
 					t.Fatalf("Codex assistant context = %+v", events[0])
 				}
-			} else if events[0].SessionID != "s1" || events[0].SubAgent != "child-1" || events[0].SubAgentID != "" {
+			} else if events[0].SessionID != "s1" || events[0].SubAgent != "child-1" || events[0].SubAgentID != "child-1" {
 				t.Fatalf("Claude assistant context = %+v", events[0])
 			}
 		})

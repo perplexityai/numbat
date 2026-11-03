@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "numbat decision assessment",
+  "description": "A bounded model assessment of an observed or proposed action. A deny candidate is not proof of control-response delivery or host blocking.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "run_id", "endpoint", "version", "timestamp", "assessment_id",
+    "source_agent", "source_type", "action_event_ids", "provider", "provider_model",
+    "config_digest", "mode", "status", "reason", "input_eligible",
+    "matched", "deny_candidate"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.6.0" },
+    "record_type": { "const": "assessment" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "endpoint": { "$ref": "#/$defs/endpoint" },
+    "version": { "const": "numbat.evaluation.v1" },
+    "assessment_id": { "type": "string", "pattern": "^asm-[a-f0-9]{24}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "case_id": { "type": "string" },
+    "request_id": { "type": "string" },
+    "request_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "rule_id": { "type": "string" },
+    "rule_version": { "type": "string" },
+    "rule_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "returned_model": { "type": "string", "minLength": 1 },
+    "view": { "enum": ["action", "session"] },
+    "status": { "enum": ["completed", "timeout", "unavailable", "invalid_response", "skipped"] },
+    "reason": { "type": "string", "minLength": 1 },
+    "choice": { "type": "string" },
+    "probabilities": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 32,
+      "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+    },
+    "match_threshold": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+    "deny_threshold": { "type": "number", "exclusiveMinimum": 0.5, "maximum": 1 },
+    "input_eligible": { "type": "boolean" },
+    "gaps": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "matched": { "type": "boolean" },
+    "deny_candidate": { "type": "boolean" },
+    "source_agent": { "$ref": "event-record.schema.json#/properties/source_agent" },
+    "source_type": { "$ref": "event-record.schema.json#/properties/source_type" },
+    "session_id": { "type": "string" },
+    "session_tree_id": { "type": "string" },
+    "sub_agent_id": { "type": "string" },
+    "tool_call_id": { "type": "string" },
+    "action_event_ids": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "provider": { "type": "string" },
+    "provider_model": { "type": "string" },
+    "config_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "mode": { "enum": ["monitor", "enforce"] }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "os", "arch", "username", "uid"],
+      "properties": {
+        "hostname": { "type": "string" },
+        "os": { "type": "string" },
+        "arch": { "type": "string" },
+        "username": { "type": "string" },
+        "uid": { "type": "string" },
+        "device_id": { "type": "string" }
+      }
+    }
+  }
+}

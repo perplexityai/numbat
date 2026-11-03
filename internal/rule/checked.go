@@ -90,6 +90,9 @@ func BuildCheckedExpressions(sources []Source) (CheckedExpressions, error) {
 }
 
 func ruleExpressions(r Rule) []string {
+	if r.Decision != nil {
+		return []string{r.Decision.Select}
+	}
 	if r.Sequence == nil {
 		return []string{r.Expr}
 	}

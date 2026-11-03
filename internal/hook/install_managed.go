@@ -27,7 +27,7 @@ func installClaudeManagedWithArgs(path, binary string, runtimeArgs []string, enf
 	rep.Installed = true
 	rep.Changed = true
 	if enforce {
-		rep.Message = "installed numbat managed hooks (enforce mode: blocks matches from rules marked enforce=true)"
+		rep.Message = "installed numbat managed hooks (enforce mode: requests denies for enforcement-enabled rules or configured decision policies)"
 	} else {
 		rep.Message = "installed numbat managed hooks"
 	}

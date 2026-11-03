@@ -330,6 +330,12 @@ func validateRecordLine(file, caseID string, line int, raw []byte) string {
 		}
 		return ""
 	}
+	if file == "assessments.ndjson" {
+		if p.RecordType != output.RecordAssessment || p.AssessmentID == "" || p.CaseID != caseID {
+			return fmt.Sprintf("%s:%d: invalid assessment identity", file, line)
+		}
+		return ""
+	}
 	if p.RecordType != output.RecordEvent || p.EventID == "" || p.CaseID != "" && p.CaseID != caseID {
 		return fmt.Sprintf("%s:%d: invalid event identity", file, line)
 	}
@@ -433,7 +439,8 @@ func withinDir(cleanDir, joined string) bool {
 // isRecordFile reports whether a bundle path is an NDJSON record file, whose
 // manifest entry carries a line count (omitted when zero).
 func isRecordFile(path string) bool {
-	return path == "findings.ndjson" || path == "events.ndjson" || path == "enforcements.ndjson"
+	return path == "findings.ndjson" || path == "events.ndjson" ||
+		path == "enforcements.ndjson" || path == "assessments.ndjson"
 }
 
 // findUnlisted walks the bundle for anything the manifest does not vouch for.

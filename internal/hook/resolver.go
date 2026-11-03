@@ -192,10 +192,15 @@ func (r resolver) sessionTreeID() string {
 	return treeID
 }
 
-// subAgentID returns a source-defined stable child identity. Codex defines
-// agent_id as the active child thread id; no generic fallback is used because
-// similarly named fields on other agents have different contracts.
+// subAgentID returns a source-defined stable child identity. Claude keeps the
+// envelope session_id; Codex uses the child id as its active thread. Do not
+// infer relationships from similarly named fields on other agents.
 func (r resolver) subAgentID() string {
+	if r.agent == AgentClaude {
+		// https://code.claude.com/docs/en/hooks
+		id, _ := r.payload["agent_id"].(string)
+		return id
+	}
 	if r.agent != AgentCodex {
 		return ""
 	}

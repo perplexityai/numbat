@@ -7,6 +7,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -35,13 +36,21 @@ type Selection struct {
 // Indicators are folded over the whole run, so Process feeds each event to the
 // accumulator but never materializes it; the caller chooses when to snapshot it.
 type Pipeline struct {
-	engine     *rule.Engine
-	emit       *output.Emitter
-	sel        Selection
-	fopts      finding.Options
-	indicators *output.IndicatorAccumulator
-	enforce    *EnforceDecision
-	seq        SequenceObserver
+	decisionObserver func(context.Context, model.Event)
+	engine           *rule.Engine
+	emit             *output.Emitter
+	sel              Selection
+	fopts            finding.Options
+	indicators       *output.IndicatorAccumulator
+	enforce          *EnforceDecision
+	seq              SequenceObserver
+}
+
+// WithDecisionObserver enables an explicitly configured classifier after local
+// rules. The callback has no native control authority.
+func (p *Pipeline) WithDecisionObserver(observe func(context.Context, model.Event)) *Pipeline {
+	p.decisionObserver = observe
+	return p
 }
 
 // SequenceObserver is the window that evaluates sequence rules per event —
@@ -70,26 +79,32 @@ type EnforceDecision struct {
 	// override.
 	Reason string
 
+	// ConfirmDeny rechecks the winning semantic contribution after output
+	// delivery. It must not rerun inference or gate an independent local deny.
+	ConfirmDeny func(context.Context) bool
+
 	// The remaining fields are identifier-only context for the enforcement
 	// decision record. They never retain observed command or file content.
-	Matched         bool
-	ActionEventIDs  []string
-	FindingIDs      []string
-	RuleIDs         []string
-	DenyRuleID      string
-	DenyRuleVersion string
-	CaseID          string
-	SourceAgent     string
-	SourceType      string
-	SessionID       string
-	SessionTreeID   string
-	ParentSessionID string
-	Model           string
-	ModelProvider   string
-	SubAgent        string
-	SubAgentID      string
-	ToolName        string
-	ToolCallID      string
+	Matched          bool
+	ActionEventIDs   []string
+	FindingIDs       []string
+	RuleIDs          []string
+	DenyRuleID       string
+	DenyRuleVersion  string
+	AssessmentIDs    []string
+	DenyAssessmentID string
+	CaseID           string
+	SourceAgent      string
+	SourceType       string
+	SessionID        string
+	SessionTreeID    string
+	ParentSessionID  string
+	Model            string
+	ModelProvider    string
+	SubAgent         string
+	SubAgentID       string
+	ToolName         string
+	ToolCallID       string
 }
 
 // WithEnforce attaches the live hook's enforcement accumulator. Monitor mode
@@ -130,6 +145,12 @@ func New(engine *rule.Engine, emit *output.Emitter, sel Selection, fopts finding
 // not abort the surrounding run. An event that violates the normalized contract
 // is rejected before emission or evaluation and returned to the sensor.
 func (p *Pipeline) Process(ev model.Event, source string) error {
+	return p.ProcessContext(context.Background(), ev, source)
+}
+
+// ProcessContext bounds optional model work by the caller's lifetime.
+// Cancellation does not discard local telemetry or deterministic findings.
+func (p *Pipeline) ProcessContext(ctx context.Context, ev model.Event, source string) error {
 	ev = ev.NormalizePaths()
 	if err := ev.Validate(); err != nil {
 		return fmt.Errorf("invalid %q event %s: %w", source, ev.EventID, err)
@@ -224,6 +245,9 @@ func (p *Pipeline) Process(ev model.Event, source string) error {
 		if p.indicators.Add(ev) {
 			p.emit.Diag("warn", "indicator analysis reached a safety limit; some candidates may be omitted")
 		}
+	}
+	if p.decisionObserver != nil && p.sel.Findings {
+		p.decisionObserver(ctx, ev)
 	}
 	return nil
 }

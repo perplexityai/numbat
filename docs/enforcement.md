@@ -2,7 +2,8 @@
 
 numbat hooks monitor by default. Enforce mode is an explicit opt-in that lets a
 supported synchronous pre-action hook ask the host to deny an action matched by
-a rule marked `enforce: true`.
+a rule marked `enforce: true`. Decision rules additionally require an explicit
+provider configuration and sufficient evidence.
 
 This page defines the enforcement model and trust boundary. See
 [agent-coverage.md](agent-coverage.md#enforcement) for per-agent coverage,
@@ -48,7 +49,8 @@ The shipped catalog is monitor-only; `--enforce` alone does not turn its
 findings into denies.
 An enforce-mode install compiles the effective catalog before changing agent
 configuration and refuses unless at least one enabled rule sets
-`enforce: true`. Its rule directories must be concrete and readable at install
+`enforce: true`; decision rules also require `--decision-config`.
+Its rule directories must be concrete and readable at install
 time; deferred paths such as `$HOME/rules` are not accepted for enforcement.
 
 To enforce a shipped detection selectively, copy its complete YAML file from
@@ -70,9 +72,32 @@ numbat exposes only observe and deny effects. Agent hosts do not share portable
 approval, rewrite, or stop semantics, and an explicit allow could bypass a
 host's own approval flow.
 
-Enforcement uses the same CEL expressions as detection; setting `enforce: true`
-is the only rule-format change. Raw `event.command` is valid, but it matches
-literal input and can include comments, quoted examples, or other text the
+An optional [decision rule](decision-rules.md) can contribute
+a semantic deny candidate through the ordinary native pre-action gate. It uses
+the same rule catalog, is inactive without `--decision-config`, and does not
+change deterministic evaluation. The rule requires `enforce: true` and the hook
+requires `--enforce`, with complete current input and, for contextual rules,
+complete/fresh observed history.
+An unavailable or uncertain evaluator contributes only `no_override`; it cannot
+cancel a deterministic deny or grant an explicit allow.
+Deterministic CEL and sequence rules run first. A monitor-only finding does not
+suppress decision rules; an established deny skips further model calls.
+Otherwise, at most two independent decision requests run concurrently within a
+shared deadline. Requests are admitted in catalog order, but results are
+finalized as they arrive; a clean deny cancels remaining model work without
+discarding already completed results. Freshness and deadline checks run at
+finalization, not merely at provider response time. A winning contextual
+contribution is confirmed again after record delivery, immediately before the
+native deny; action-only and deterministic denies do not depend on session state.
+After a successful native deny write, optional session evidence records
+`deny_requested`, not a confirmed host block. This permits later calls to be
+reviewed without treating that proposal as still running. A partial write or
+stale state leaves it unresolved; an unexpected subsequent result creates a
+capture gap and disables contextual enforcement for that prefix.
+
+Deterministic enforcement uses the same CEL expressions as detection; setting
+`enforce: true` is the only rule-format change. Raw `event.command` is valid, but
+it matches literal input and can include comments, quoted examples, or other text the
 shell would not execute. Use the parsed `shell_commands` view when a deny
 depends on executable command semantics.
 
@@ -121,10 +146,12 @@ produce a decision.
 
 When findings are selected, each matched, enforce-capable pre-action callback
 also emits a `record_type:"enforcement"` record. Its `deny` or `no_override`
-decision joins to findings and action events by identifier and names the deny
-rule when applicable. The record is written in the existing operator batch
-before the control response; it does not prove response delivery or host
-behavior.
+decision joins to findings and action events by identifier. Deterministic
+denies use `reason: enforce_rule_match` and name the deny rule. Semantic denies
+use `reason: semantic_policy_match`, name the rule/version, and join to the
+supporting assessment through `deny_assessment_id` and `assessment_ids`.
+The record is written in the existing operator batch before the control
+response; it does not prove response delivery or host behavior.
 
 ## Deny reason and operator output
 
@@ -164,13 +191,23 @@ numbat requests a deny only when all applicable checks complete cleanly:
 
 - the callback is a supported synchronous pre-action lifecycle
 - the payload is a bounded JSON object that maps to a valid normalized event
-- an enabled rule with `enforce: true` matches
+- an enabled rule with `enforce: true` matches, including any evidence and
+  probability gates required by a decision rule
 - any shell command match is within the static enforcement subset above
 - the matching rule's relevant projection evaluates successfully
 - finding emission is enabled
 - every selected event, finding, indicator, and enforcement record is accepted,
   and the configured sink closes cleanly
 - sequence state is available when the decision depends on a sequence
+
+The same output gate covers decision assessments and semantic findings. An
+optional evaluator's own error is scoped to that participant, not a global
+payload or output error. Failure to deliver even a skipped assessment is an
+output failure, not an inference failure. Contextual candidates additionally
+require a complete observed tool prefix and an unchanged pending-call state
+after inference and record delivery.
+Reported provider truncation invalidates a reply; unreported provider-side
+truncation cannot be detected, so the provider must reject oversized inputs.
 
 Malformed payloads, relevant evaluation errors, panics, and output failures
 suppress the numbat deny. If sequence state is unavailable, correlation is
@@ -192,6 +229,9 @@ and at-rest artifacts arrive after execution and are observation-only.
 OpenCode is currently monitor-only. Other integrations remain bounded by the
 events and tools their hosts actually expose; hook coverage is not a complete
 endpoint policy boundary.
+Decision rules share those host-control boundaries. Delegation, background
+effects and missing outcomes invalidate contextual completeness; complete
+action-view checks remain independent of that history.
 
 OpenClaw has two distinct failure boundaries. Its generated wrapper returns no
 block when the numbat child fails or reaches its internal nine-second deadline,

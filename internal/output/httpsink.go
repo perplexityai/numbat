@@ -14,6 +14,7 @@ package output
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -80,6 +81,9 @@ type HTTPConfig struct {
 	Auth      HTTPAuth
 	Timeout   time.Duration
 	BatchSize int
+	// Deadline, when set, bounds delivery across all batches and the final
+	// Close attempt. Timeout still limits each individual request.
+	Deadline time.Time
 	// MaxBufferBytes bounds the in-memory NDJSON batch buffer. The sink normally
 	// flushes by BatchSize, but this cap also protects long-running receivers when
 	// a destination fails and records continue to arrive. Zero uses a safe default.
@@ -473,7 +477,13 @@ func (h *HTTPSink) flushLocked() error {
 		wireBody = gz.Bytes()
 	}
 
-	req, err := http.NewRequest(http.MethodPost, h.cfg.URL, bytes.NewReader(wireBody))
+	ctx := context.Background()
+	if !h.cfg.Deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, h.cfg.Deadline)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.URL, bytes.NewReader(wireBody))
 	if err != nil {
 		return errors.New("http sink: build request failed")
 	}

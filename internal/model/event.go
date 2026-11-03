@@ -13,7 +13,7 @@ import (
 
 // SchemaVersion is the version of the emitted record schema. It is stamped
 // on every emitted record so receivers can route and migrate deterministically.
-const SchemaVersion = "0.5.0"
+const SchemaVersion = "0.6.0"
 
 // ToolName is the identifier emitted in records and reports.
 const ToolName = "numbat"

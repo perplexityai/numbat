@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,10 @@ func TestPublishedRecordSchemasStayCurrent(t *testing.T) {
 			recordType: RecordEnforcement,
 			fields:     withEnvelope(jsonFields(reflect.TypeOf(model.EnforcementDecision{})), true),
 		},
+		"assessment-record.schema.json": {
+			recordType: RecordAssessment,
+			fields:     withEnvelope(jsonFields(reflect.TypeOf(DecisionAssessment{})), true),
+		},
 		"indicator-record.schema.json": {
 			recordType: RecordIndicator,
 			fields:     withEnvelope(jsonFields(reflect.TypeOf(Indicator{})), false),
@@ -44,6 +49,7 @@ func TestPublishedRecordSchemasStayCurrent(t *testing.T) {
 			fields:     jsonFields(reflect.TypeOf(Diagnostic{})),
 		},
 	}
+	agentEnums := make(map[string][]string)
 	for file, tc := range cases {
 		t.Run(file, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join(dir, file))
@@ -54,7 +60,8 @@ func TestPublishedRecordSchemasStayCurrent(t *testing.T) {
 				AdditionalProperties *bool    `json:"additionalProperties"`
 				Required             []string `json:"required"`
 				Properties           map[string]struct {
-					Const string `json:"const"`
+					Const string   `json:"const"`
+					Enum  []string `json:"enum"`
 				} `json:"properties"`
 				Defs map[string]struct {
 					AdditionalProperties *bool                      `json:"additionalProperties"`
@@ -78,6 +85,10 @@ func TestPublishedRecordSchemasStayCurrent(t *testing.T) {
 				t.Fatal("published record schemas must require endpoint")
 			}
 			assertEndpointSchema(t, schema.Defs["endpoint"])
+			if agents := schema.Properties["source_agent"].Enum; len(agents) != 0 {
+				slices.Sort(agents)
+				agentEnums[file] = agents
+			}
 			for field := range tc.fields {
 				if _, ok := schema.Properties[field]; !ok {
 					t.Fatalf("schema missing emitted field %q", field)
@@ -89,6 +100,15 @@ func TestPublishedRecordSchemasStayCurrent(t *testing.T) {
 				}
 			}
 		})
+	}
+	wantAgents := agentEnums["event-record.schema.json"]
+	if !slices.Contains(wantAgents, model.AgentMuseCode) {
+		t.Fatal("event schema missing Muse source agent")
+	}
+	for file, agents := range agentEnums {
+		if !slices.Equal(agents, wantAgents) {
+			t.Errorf("%s: source_agent enum differs from event schema", file)
+		}
 	}
 
 	raw, err := os.ReadFile(filepath.Join(dir, "record-stream.schema.json"))
@@ -261,6 +281,11 @@ func jsonFields(typ reflect.Type) map[string]struct{} {
 	for i := 0; i < typ.NumField(); i++ {
 		tag := typ.Field(i).Tag.Get("json")
 		name, _, _ := strings.Cut(tag, ",")
+		if typ.Field(i).Anonymous && name == "" && typ.Field(i).Type.Kind() == reflect.Struct {
+			for embedded := range jsonFields(typ.Field(i).Type) {
+				fields[embedded] = struct{}{}
+			}
+		}
 		if name != "" && name != "-" {
 			fields[name] = struct{}{}
 		}
