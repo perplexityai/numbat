@@ -204,6 +204,11 @@ func (st *claudeState) observe(res *Result, e ClaudeExtractor, src Source, sha s
 		return
 	}
 	start := &res.Events[st.startIdx]
+	// Use only a timestamp captured in this transcript. Metadata may precede
+	// the first dated entry; never replace an already observed start time.
+	if start.Timestamp == "" && entry.SessionID == start.SessionID {
+		start.Timestamp = entry.Timestamp
+	}
 	if start.GitBranch == "" {
 		start.GitBranch = entry.GitBranch
 	}

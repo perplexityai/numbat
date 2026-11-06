@@ -1322,3 +1322,27 @@ func itoa(i int) string {
 	}
 	return string(d)
 }
+
+// Metadata can identify the session before its first dated entry.
+func TestClaudeSessionStartObservedTimestamp(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"metadata then activity", `{"type":"ai-title","sessionId":"s-1"}
+{"type":"user","sessionId":"s-1","timestamp":"2026-06-02T10:00:00Z","message":{"content":"hello"}}
+{"type":"user","sessionId":"s-1","timestamp":"2026-06-02T10:01:00Z","message":{"content":"later"}}`, "2026-06-02T10:00:00Z"},
+		{"undated stays absent", `{"type":"ai-title","sessionId":"s-1"}
+{"type":"user","sessionId":"s-1","message":{"content":"hello"}}`, ""},
+		{"dated opener preserved", `{"type":"user","sessionId":"s-1","timestamp":"2026-06-02T10:00:00Z","message":{"content":"hello"}}
+{"type":"user","sessionId":"s-1","timestamp":"2026-06-02T10:01:00Z","message":{"content":"later"}}`, "2026-06-02T10:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := extractFixture(t, tc.body)
+			if len(res.Events) == 0 || res.Events[0].EventType != model.EventSessionStart {
+				t.Fatal("missing session.start")
+			}
+			if got := res.Events[0].Timestamp; got != tc.want {
+				t.Errorf("session.start timestamp = %q, want %q", got, tc.want)
+			}
+			assertUniqueEventIDs(t, res.Events)
+		})
+	}
+}
