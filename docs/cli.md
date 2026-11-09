@@ -76,6 +76,13 @@ automatic discovery, for example `--agent claude --agent codex`. Use repeated
 `--path` instead for mounted or acquired artifacts; the two flags cannot be
 combined because `--agent` is a discovery filter, not a parser override.
 
+Claude Code discovery also reads persisted permission rules from
+`~/.claude/settings{,.local}.json` and from the project
+`.claude/settings{,.local}.json` files of each transcript `cwd`, probing
+ancestors up to the first `.git` directory. `--path` instead finds those files
+inside the given tree. The project probe applies to `scan` only, not
+`timeline`.
+
 On native Windows, default `~` roots resolve under `%USERPROFILE%`; WSL has its
 own Linux home. Classification is path-based, so preserve each vendor's
 documented directory layout when copying artifacts. A bare JSONL outside a

@@ -38,6 +38,20 @@ func fuzzExtractor(f *testing.F, e Extractor) {
 
 func FuzzClaudeExtract(f *testing.F) { fuzzExtractor(f, ClaudeExtractor{}) }
 
+// FuzzClaudeSettingsExtract drives the settings-file route, which the generic
+// artifact path above never selects.
+func FuzzClaudeSettingsExtract(f *testing.F) {
+	for _, seed := range extractSeeds {
+		f.Add(seed)
+	}
+	f.Add(`{"permissions":{"allow":["Bash(ls)",1,null,{"x":1},"WebSearch"]}}`)
+	f.Add(`{"permissions":{"allow":"Bash(ls)"}}`)
+	f.Add(`{"permissions":null}`)
+	f.Fuzz(func(t *testing.T, body string) {
+		_, _ = (ClaudeExtractor{}).Extract(strings.NewReader(body), Source{Path: "/fuzz/.claude/settings.local.json"})
+	})
+}
+
 func FuzzCodexExtract(f *testing.F) {
 	f.Add(promptRetractionHistory)
 	fuzzExtractor(f, CodexExtractor{})

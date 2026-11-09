@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -224,6 +225,9 @@ func DefaultRootsFor(home string, agents []string) []string {
 	// trees above, so each joins as its own single-file root.
 	if selected(model.AgentClaudeCode) {
 		addFile(claudeRootCandidates(home, "history.jsonl")...)
+		for _, name := range claudeSettingsNames {
+			addFile(claudeRootCandidates(home, name)...)
+		}
 	}
 	if selected(model.AgentCodex) {
 		addFile(codexRootCandidates(home, "history.jsonl")...)
@@ -508,6 +512,9 @@ func logicalWalkPath(root, walkRoot, path string) string {
 // classify maps a recognized path shape to its parser. A bare JSONL falls back
 // to Claude only after known agent roots and bookkeeping files are excluded.
 func classify(path string) (Artifact, bool) {
+	if isClaudeSettings(path) {
+		return Artifact{Path: path, Agent: model.AgentClaudeCode}, true
+	}
 	if isCodexArtifact(path) || isCodexHistoryFile(path) {
 		return Artifact{Path: path, Agent: model.AgentCodex}, true
 	}
@@ -551,6 +558,80 @@ func classify(path string) (Artifact, bool) {
 		return Artifact{Path: path, Agent: model.AgentClaudeCode}, true
 	}
 	return Artifact{}, false
+}
+
+// claudeSettingsNames are the Claude Code settings files that can hold
+// persisted permission rules. The local file is where an interactive "don't ask
+// again" approval is written by default.
+var claudeSettingsNames = []string{"settings.json", "settings.local.json"}
+
+// maxClaudeSettingsProjects bounds the ancestor probes derived from transcript
+// project paths so a hostile or huge transcript corpus cannot fan out the scan.
+const maxClaudeSettingsProjects = 4096
+
+// isClaudeSettings reports whether path is a Claude Code user or project
+// settings file: settings.json or settings.local.json directly under a .claude
+// directory, or directly under CLAUDE_CONFIG_DIR when that override is set.
+func isClaudeSettings(path string) bool {
+	base := filepath.Base(path)
+	if !slices.Contains(claudeSettingsNames, base) {
+		return false
+	}
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) == ".claude" {
+		return true
+	}
+	if root := os.Getenv("CLAUDE_CONFIG_DIR"); root != "" {
+		return samePath(dir, root)
+	}
+	return false
+}
+
+// ClaudeProjectSettings returns existing project settings files for the given
+// project directories. Claude Code reads project settings at the repository
+// root even when started in a subdirectory, so each existing absolute project
+// directory and its ancestors are probed for .claude/settings.json and
+// .claude/settings.local.json, stopping after the first directory that
+// contains .git. The walk also stops below home, whose .claude directory holds
+// the user-scope files that DefaultRootsFor already returns. Relative or
+// missing project paths are ignored because they cannot be resolved against
+// the host that wrote the transcript. Only regular files are returned,
+// deduplicated, in first-seen order.
+func ClaudeProjectSettings(home string, projects []string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	probed := map[string]struct{}{}
+	homeKey := ""
+	if home != "" {
+		homeKey = pathIdentity(filepath.Clean(home))
+	}
+	for i, project := range projects {
+		if i >= maxClaudeSettingsProjects {
+			break
+		}
+		if project == "" || !filepath.IsAbs(project) || !dirExists(project) {
+			continue
+		}
+		for dir := filepath.Clean(project); ; dir = filepath.Dir(dir) {
+			if pathIdentity(dir) == homeKey {
+				break
+			}
+			if _, ok := probed[dir]; ok {
+				break
+			}
+			probed[dir] = struct{}{}
+			for _, name := range claudeSettingsNames {
+				addExisting(&out, seen, filepath.Join(dir, ".claude", name), fileExists)
+			}
+			if pathExists(filepath.Join(dir, ".git")) {
+				break
+			}
+			if parent := filepath.Dir(dir); parent == dir {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // isHistoryFile matches an agent-root history file in absolute or relative form.
