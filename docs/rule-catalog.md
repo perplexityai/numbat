@@ -26,6 +26,10 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   Face, Poetry, or Kaggle credential store.
 - `secrets.process_environment_read` - read a Linux process environment block
   from `/proc`.
+- `secrets.persisted_permission_credential` - an agent settings file stores a
+  persisted allow rule containing a literal credential, such as a password
+  assignment, bearer or custom token header, URL userinfo, or a well-known token
+  format. `$VAR`, `$(...)`, `${...}` and wildcard values are not literals.
 
 ## Exfiltration
 

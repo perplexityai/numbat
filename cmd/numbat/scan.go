@@ -12,6 +12,7 @@ import (
 	"github.com/perplexityai/numbat/internal/discover"
 	"github.com/perplexityai/numbat/internal/extract"
 	"github.com/perplexityai/numbat/internal/finding"
+	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
 	"github.com/perplexityai/numbat/internal/pipeline"
 	"github.com/perplexityai/numbat/internal/rule"
@@ -161,8 +162,11 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	em := output.NewWithSink(sink, stderr, runID(), contentEmitterOptions(content, scope, *maxRecordBytes)...)
 
 	roots := []string(paths)
-	if len(roots) == 0 {
-		home, err := os.UserHomeDir()
+	defaultDiscovery := len(roots) == 0
+	home := ""
+	if defaultDiscovery {
+		var err error
+		home, err = os.UserHomeDir()
 		if err != nil {
 			return failScan(em, fmt.Sprintf("cannot resolve home directory: %v", err))
 		}
@@ -198,6 +202,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		sel:              sel,
 		includeReasoning: reasoning,
 		captureContent:   captureContent,
+		// Default discovery also probes the projects named by Claude transcripts
+		// for persisted settings. Explicit --path scans walk their own trees.
+		collectClaudeProjects: defaultDiscovery,
 	}
 	if sel.indicators {
 		sc.indicators = output.NewIndicatorAccumulator()
@@ -216,11 +223,11 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 
 	discovered := 0
 	seenArtifacts := map[string]struct{}{}
-	for _, root := range roots {
+	scanRoot := func(root string) {
 		arts, skips, err := discover.Walk(root)
 		if err != nil {
 			em.Diag("error", fmt.Sprintf("scan root %q: %v", root, err))
-			continue
+			return
 		}
 		for _, sk := range skips {
 			em.Diag("warn", fmt.Sprintf("skipped unreadable path %q: %v", sk.Path, sk.Err))
@@ -234,6 +241,14 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			sc.scanArtifact(a)
 			discovered++
 		}
+	}
+	for _, root := range roots {
+		scanRoot(root)
+	}
+	// Project settings live in the working trees, outside the agent home, so
+	// they are found through the project paths the transcripts recorded.
+	for _, settings := range discover.ClaudeProjectSettings(home, sc.claudeProjects) {
+		scanRoot(settings)
 	}
 
 	// Indicators are materialized after all artifacts contribute to the fold.
@@ -469,6 +484,11 @@ type scanner struct {
 	indicators       *output.IndicatorAccumulator
 	parsed           int
 	failed           int
+	// collectClaudeProjects records distinct Claude project paths, in first-seen
+	// order, so their settings files can be scanned after the agent roots.
+	collectClaudeProjects bool
+	claudeProjects        []string
+	claudeProjectSeen     map[string]struct{}
 	// lookup is overridden only by tests.
 	lookup func(agent string) (extract.Extractor, bool)
 }
@@ -525,6 +545,7 @@ func (s *scanner) scanArtifact(a discover.Artifact) {
 
 	eventFailed := false
 	for _, ev := range res.Events {
+		s.noteClaudeProject(ev)
 		if err := s.pipe.Process(ev, a.Path); err != nil {
 			s.emit.Diag("error", err.Error())
 			eventFailed = true
@@ -538,6 +559,21 @@ func (s *scanner) scanArtifact(a discover.Artifact) {
 	// diagnostics walk or emit loop above is recovered and counted failed instead.
 	succeeded = true
 	s.parsed++
+}
+
+// noteClaudeProject records the project path of a parsed Claude event.
+func (s *scanner) noteClaudeProject(ev model.Event) {
+	if !s.collectClaudeProjects || ev.SourceAgent != model.AgentClaudeCode || ev.ProjectPath == "" {
+		return
+	}
+	if s.claudeProjectSeen == nil {
+		s.claudeProjectSeen = map[string]struct{}{}
+	}
+	if _, ok := s.claudeProjectSeen[ev.ProjectPath]; ok {
+		return
+	}
+	s.claudeProjectSeen[ev.ProjectPath] = struct{}{}
+	s.claudeProjects = append(s.claudeProjects, ev.ProjectPath)
 }
 
 // multiFlag collects a repeatable string flag into a slice.

@@ -88,6 +88,9 @@ func (e ClaudeExtractor) Extract(r io.Reader, src Source) (*Result, error) {
 	if isClaudeHistory(src.Path) {
 		return e.extractHistory(data, sha, src)
 	}
+	if isClaudeSettingsName(src.Path) {
+		return e.extractSettings(data, sha, src)
+	}
 
 	res := &Result{}
 	st := &claudeState{}

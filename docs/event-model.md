@@ -55,6 +55,22 @@ Some agents persist only one side, and long-running commands may emit more than
 one result update. An absent `exit_code` means the source did not provide one;
 it does not mean success.
 
+## Persisted permission rules
+
+Agent settings files can store standing approvals. For Claude Code, each string
+in `permissions.allow` of `~/.claude/settings.json`, `.claude/settings.json` or
+`.claude/settings.local.json` becomes one `permission.approved` event with
+`source_type:"artifact"`, `decision` and `approval_decision` set to `allowed`,
+and `tool_name` taken from the rule prefix, such as `Bash` in
+`Bash(npm run test *)`. `tool_input` holds the rule string as a JSON string for
+rule evaluation. As with other tool payloads, it is emitted only with
+`--content full` or `raw`. `evidence.artifact_type` is `claude_settings` and
+`evidence.json_pointer` locates the entry, for example
+`/permissions/allow/3`.
+
+The file records no session, time or author, so these events carry no
+`session_id`, `timestamp` or `actor`. `ask` and `deny` rules are not mapped.
+
 ## Session and sub-agent identity
 
 `session_id` identifies the active session or thread represented by an event.
