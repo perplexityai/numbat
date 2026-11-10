@@ -545,6 +545,16 @@ func openShipSource(path string, checkpoint shipCheckpoint) (shipSource, error) 
 			rotated:      true,
 		}, nil
 	}
+	if checkpoint.GuardBytes > 0 {
+		contentMatches, err := shipCheckpointContentMatches(active, checkpoint)
+		if err != nil {
+			_ = active.Close()
+			return shipSource{}, err
+		}
+		if contentMatches {
+			return shipSource{file: active, fileID: activeID, activeFileID: activeID}, nil
+		}
+	}
 	return shipSource{file: active, activeFileID: activeID, reset: true}, nil
 }
 
