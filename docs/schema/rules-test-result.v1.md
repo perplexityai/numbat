@@ -154,8 +154,7 @@ failure or sequence-tracker error promotes the event to
     `shell_commands` without `shell_parse_failed` are not evaluated on this
     event; a consumer must not infer a clean no-match.
     Other sequence-analysis failures are reported in `evaluator_errors` and
-    `error` and can coexist with any `shell_parse` value, including
-    `unusable` when a skipped step and a failing step share the event.
+    `error` and can coexist with `shell_parse: "ok"`.
     Unlike the legacy tab-separated mode, a degraded stateless shell analysis
     alone does not make the JSON event fail or change its exit status. An
     unusable shell analysis alone does neither in either mode; the legacy
@@ -183,7 +182,6 @@ failure or sequence-tracker error promotes the event to
   "schema_version": "rules-test-result.v1",
   "status": "completed",
   "events_evaluated": 3,
-  "events_shell_unusable": 0,
   "matches": 2,
   "rules_loaded": 51,
   "enforce_eligible_rules": 24,
@@ -200,10 +198,6 @@ failure or sequence-tracker error promotes the event to
   reached direct evaluation, including any final line that ended in
   `evaluation_failure`. Lines that failed decode/validate/scan before
   evaluation are excluded.
-- `events_shell_unusable` (int, required): number of evaluated fixture lines
-  whose `coverage.shell_parse` is `unusable`. Rules that read
-  `shell_commands` without `shell_parse_failed` are not evaluated on those
-  lines, whatever `status` and `assertion_outcome` say.
 - `matches` (int, required): total findings emitted across all
   `event_results` (single-event and sequence combined). `matches` may
   exceed `events_evaluated`: several direct rules can match one event, and

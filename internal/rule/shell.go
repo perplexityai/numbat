@@ -61,7 +61,6 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 
 	detection["event"] = adapter.NativeToValue(detection["event"])
 	if !needShellCommands {
-		detection[shellParseFailedVariable] = false
 		return sequenceActivations{
 			detection:            detection,
 			shellUsable:          true,
@@ -186,13 +185,6 @@ func IsShellAnalysisUnusable(err error) bool {
 		}
 	}
 	return len(children) > 0
-}
-
-// HasShellAnalysisUnusable reports whether err holds that diagnostic, alone or
-// next to other errors.
-func HasShellAnalysisUnusable(err error) bool {
-	var unusable *unusableShellAnalysisError
-	return errors.As(err, &unusable)
 }
 
 type shellAnalyzer struct {

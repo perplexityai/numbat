@@ -605,8 +605,7 @@ fields.
 A fixture line whose command has no usable projection does not fail the run,
 but rules that read `shell_commands` without `shell_parse_failed` skip it.
 Text mode names each such line on stderr, and `--json` reports it as
-`coverage.shell_parse: "unusable"` and in the summary's
-`events_shell_unusable`. `--expect-none` can pass on such a run.
+`coverage.shell_parse: "unusable"`. `--expect-none` can pass on such a run.
 
 ## Sequence rules
 
@@ -660,7 +659,7 @@ hook callbacks persist their bounded window in `$HOME/.numbat/state.db`
 (`--state-db` overrides the path). A change to the loaded sequence-rule set
 that affects matching, enforcement, or rule version invalidates old windows.
 Parser and projection updates also invalidate old verdicts; the current
-projection revision is `sequence-projection-v13`. If
+projection revision is `sequence-projection-v10`. If
 the state cannot be opened, correlation fails open with a warning.
 
 An enforced sequence may block only the action matching its final step.

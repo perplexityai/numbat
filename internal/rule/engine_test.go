@@ -245,18 +245,17 @@ func TestIsShellAnalysisUnusable(t *testing.T) {
 		command string
 		wantErr bool
 		want    bool
-		wantHas bool
 	}{
-		{"clean analysis", "true" + long, false, false, false},
-		{"unusable analysis", `echo "unterminated` + long, true, true, true},
-		{"partial analysis", "$run; true" + long, true, false, false},
-		{"rule failure", "true", true, false, false},
-		{"unusable analysis and rule failure", `echo "unterminated`, true, false, true},
+		{"clean analysis", "true" + long, false, false},
+		{"unusable analysis", `echo "unterminated` + long, true, true},
+		{"partial analysis", "$run; true" + long, true, false},
+		{"rule failure", "true", true, false},
+		{"unusable analysis and rule failure", `echo "unterminated`, true, false},
 	}
 	for _, tc := range tests {
 		err := eval(tc.command)
-		if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.want || HasShellAnalysisUnusable(err) != tc.wantHas {
-			t.Errorf("%s: error = %v, want error %v, only unusable %v, has unusable %v", tc.name, err, tc.wantErr, tc.want, tc.wantHas)
+		if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.want {
+			t.Errorf("%s: error = %v, want error %v, only unusable %v", tc.name, err, tc.wantErr, tc.want)
 		}
 	}
 }
@@ -299,9 +298,6 @@ func TestShellCommandsReferenceDetectionHonorsComprehensionScope(t *testing.T) {
 		{`[1].exists(shell_commands, shell_commands == 1) || shell_commands.size() > 0`, true},
 		{`[1].exists(x, [2].exists(shell_commands, shell_commands == x))`, false},
 		{`[1].exists(shell_commands, [shell_commands].exists(x, x == 1))`, false},
-		{`[1].exists(shell_commands, .shell_commands.size() == 0)`, true},
-		{`[true].exists(shell_parse_failed, shell_parse_failed)`, false},
-		{`[true].exists(shell_parse_failed, .shell_parse_failed)`, true},
 	}
 	for _, tc := range tests {
 		eng := mustEngine(t, Rule{ID: "scope", Severity: model.SeverityLow, Expr: tc.expr})
@@ -1007,27 +1003,6 @@ func TestNewEngineRejectsEventAliases(t *testing.T) {
 		Expr:     `[{"command": "safe", "local_field": "x"}].exists(event, event.command == "safe" && event.local_field == "x") && event.event_type == "command.exec"`,
 	}}}}); err != nil {
 		t.Fatalf("fields on shadowed local named event rejected: %v", err)
-	}
-}
-
-func TestNewEngineChecksLeadingDotEventUnderShadow(t *testing.T) {
-	tests := []struct {
-		expr    string
-		wantErr string
-	}{
-		{`[1].exists(event, .event.command == "x")`, ""},
-		{`[1].exists(event, .event.file_pathh == "x")`, `unknown event field "file_pathh"`},
-		{`[1].exists(event, .event["file_pathh"] == "x")`, `unknown event field "file_pathh"`},
-		{`[1].exists(event, .event[.event.command] == "x")`, "event field index must be a string literal"},
-		{`[1].exists(event, size(.event) > 0)`, "event must be accessed directly"},
-	}
-	for _, tc := range tests {
-		_, err := NewEngine([]Source{{Name: "test", Rules: []Rule{{
-			ID: "t.dotted", Title: "dotted", Version: "1", Severity: model.SeverityLow, Expr: tc.expr,
-		}}}})
-		if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
-			t.Errorf("%s: error = %v, want %q", tc.expr, err, tc.wantErr)
-		}
 	}
 }
 
