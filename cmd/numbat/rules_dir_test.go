@@ -422,7 +422,7 @@ cases:
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
 	}
 
-	fixture := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"0.5.0","event_id":"u1","source_agent":"codex","source_type":"hook","event_type":"command.exec","tool_name":"Bash","command":"$config = Get-Content example/config.json -Raw | ConvertFrom-Json\nif ($config.token) { Write-Output 'present' }","confidence":"high","evidence":{"artifact_type":"hook_payload"}}
+	fixture := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"`+model.SchemaVersion+`","event_id":"u1","source_agent":"codex","source_type":"hook","event_type":"command.exec","tool_name":"Bash","command":"$config = Get-Content example/config.json -Raw | ConvertFrom-Json\nif ($config.token) { Write-Output 'present' }","confidence":"high","evidence":{"artifact_type":"hook_payload"}}
 `)
 	out, errb, code = runCLI("rules", "test", "--no-builtin-rules", "--rules-dir", dir, "--fixture", fixture)
 	if code != 0 || strings.TrimSpace(out) != "custom.config_read\tu1" {

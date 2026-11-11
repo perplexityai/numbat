@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/perplexityai/numbat/internal/model"
 )
 
 // jsonRulesTestEvent mirrors the per-event object the CLI emits when --json
@@ -914,7 +916,7 @@ sequence:
 `), 0o600); err != nil {
 		t.Fatalf("write seq.yaml: %v", err)
 	}
-	fx := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"0.5.0","event_id":"u1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"echo \"unterminated","session_id":"s1","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+	fx := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"`+model.SchemaVersion+`","event_id":"u1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"echo \"unterminated","session_id":"s1","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `)
 	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx)
 	if code != 0 {
