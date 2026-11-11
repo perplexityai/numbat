@@ -899,3 +899,39 @@ func TestRulesTestJSONCompiledCLIDevFull(t *testing.T) {
 		t.Fatalf("stderr missing write-failure notice: %q", stderr.String())
 	}
 }
+
+func TestRulesTestSequenceOnlyCatalogReportsUnusableShellParse(t *testing.T) {
+	rulesDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rulesDir, "seq.yaml"), []byte(`id: chain.demo
+version: "1.0"
+title: demo sequence
+severity: medium
+sequence:
+  within_events: 8
+  steps:
+    - expr: 'shell_commands.exists(command, command.name == "first")'
+    - expr: 'shell_commands.exists(command, command.name == "second")'
+`), 0o600); err != nil {
+		t.Fatalf("write seq.yaml: %v", err)
+	}
+	fx := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"0.5.0","event_id":"u1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"echo \"unterminated","session_id":"s1","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+`)
+	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%q, stdout=%q", code, errb, out)
+	}
+	events, summary := parseJSONStream(t, out)
+	if summary.Status != "completed" || len(events) != 1 {
+		t.Fatalf("summary = %+v, events = %+v", summary, events)
+	}
+	ev := events[0]
+	if ev.Status != "completed" || ev.Error != nil || len(ev.EvaluatorErrors) != 0 || len(ev.Findings) != 0 {
+		t.Fatalf("event = %+v, want a no-match without evaluator errors", ev)
+	}
+	if ev.Coverage == nil || ev.Coverage.ShellParse != "unusable" || !ev.Coverage.SequenceTrackerActive {
+		t.Fatalf("coverage = %+v, want shell_parse unusable with an active tracker", ev.Coverage)
+	}
+	if out, errb, code := runCLI("rules", "test", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx, "--expect-none"); code != 0 {
+		t.Fatalf("--expect-none exit = %d, want 0; stderr=%q, stdout=%q", code, errb, out)
+	}
+}

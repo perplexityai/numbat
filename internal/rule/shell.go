@@ -72,7 +72,7 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 	detection[shellCommandsVariable] = shellCommandList(adapter, analysis.commands)
 	detection[shellParseFailedVariable] = !analysis.usable
 	if !analysis.usable {
-		analysis.err = nil
+		analysis.err = &unusableShellAnalysisError{err: analysis.err}
 	}
 	return sequenceActivations{
 		detection:            detection,
@@ -160,6 +160,34 @@ func (e *fatalShellAnalysisError) Unwrap() error { return e.err }
 func hasFatalShellAnalysisError(err error) bool {
 	var fatal *fatalShellAnalysisError
 	return errors.As(err, &fatal)
+}
+
+type unusableShellAnalysisError struct {
+	err error
+}
+
+func (e *unusableShellAnalysisError) Error() string   { return e.err.Error() }
+func (e *unusableShellAnalysisError) Unwrap() []error { return []error{e.err} }
+
+// IsShellAnalysisUnusable reports whether err holds nothing but the diagnostic
+// for a command with no usable projection. Rules that handle such a command
+// were still evaluated, so a caller that stops on evaluation errors can
+// continue past it.
+func IsShellAnalysisUnusable(err error) bool {
+	if _, ok := err.(*unusableShellAnalysisError); ok {
+		return true
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return false
+	}
+	children := joined.Unwrap()
+	for _, child := range children {
+		if !IsShellAnalysisUnusable(child) {
+			return false
+		}
+	}
+	return len(children) > 0
 }
 
 type shellAnalyzer struct {

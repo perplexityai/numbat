@@ -11,7 +11,7 @@ Rule expressions can use:
 - `shell_commands`, a rule-only parsed view of commands found in
   `event.command`.
 - `shell_parse_failed`, a rule-only boolean that is true when analysis of
-  `event.command` failed and produced no parsed command.
+  `event.command` produced no usable projection.
 
 Embedded rules are monitor-only by default. See the
 [built-in catalog](rule-catalog.md) for coverage and [`rules/`](../rules/) for
@@ -449,9 +449,11 @@ Set `tool_name` in a fixture when a Windows command depends on a specific dialec
 
 If part of a command is dynamic, malformed, unsupported, or over a parser
 bound, numbat emits a diagnostic. Proven independent commands remain available
-for detection. If no usable projection remains, numbat emits no diagnostic and
-rules that reference `shell_commands` skip that event. This happens, for
-example, when a PowerShell script is recorded under a POSIX shell `tool_name`.
+for detection. If no usable projection remains, rules that reference
+`shell_commands` skip that event. This happens, for example, when a command
+cannot be parsed (such as a PowerShell script recorded under a POSIX shell
+`tool_name`), when its only executable is dynamic (such as `"$run" curl ...`),
+or when the input is over 262144 bytes.
 
 A rule that must still see such a command references `shell_parse_failed`. It
 is then evaluated with an empty `shell_commands` and `shell_parse_failed` set
@@ -462,10 +464,21 @@ shell_commands.exists(command, command.name == "curl") ||
 (shell_parse_failed && event.command.matches("(^|\\s)curl\\s"))
 ```
 
-The raw-text clause has the limits of any `event.command` match, and a match
-on an unparsed command is always detection-only. `shell_parse_failed` is false
-when at least one command was parsed, when analysis reported no problem, and
-when the event has no command.
+`shell_parse_failed` is false when at least one command was projected, when
+analysis reported no problem, and when the event has no command. The diagnostic
+is emitted either way.
+
+A reference to `shell_parse_failed` anywhere in an expression, even in a branch
+that can never be true, opts the whole rule in to these events. A rule that
+matches on absence, such as `!shell_commands.exists(...)` or
+`shell_commands.size() == 0`, then matches every such command unless it also
+tests the flag.
+
+The raw-text clause has the limits of any `event.command` match. A match by a
+rule that references `shell_commands` or `shell_parse_failed` is detection-only
+on such a command. A rule that reads only `event.command` is not shell-derived:
+with `enforce: true` it can still deny such a command, and adding a
+`shell_parse_failed` clause to it makes it detection-only there.
 
 Detection recognizes explicit PowerShell `-WhatIf` requests and a statically
 visible `$WhatIfPreference = $true` for known cmdlet names and exact

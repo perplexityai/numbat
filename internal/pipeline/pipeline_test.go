@@ -13,6 +13,7 @@ import (
 	"github.com/perplexityai/numbat/internal/model"
 	"github.com/perplexityai/numbat/internal/output"
 	"github.com/perplexityai/numbat/internal/rule"
+	"github.com/perplexityai/numbat/internal/sequence"
 )
 
 // testEngine compiles a one-rule engine that fires on command.exec events. It is
@@ -349,6 +350,64 @@ func TestProcessEnforceErrorsStayScoped(t *testing.T) {
 	}
 	if dec.Tainted || !dec.Blocked || dec.Reason == "" {
 		t.Fatalf("decision after clean match then error = %+v, want retained clean block", dec)
+	}
+}
+
+func TestProcessKeepsDiagnosticForUnparsedCommand(t *testing.T) {
+	enforce := true
+	eng, err := rule.NewEngine([]rule.Source{{Name: "test", Rules: []rule.Rule{
+		{ID: "test.typed", Title: "typed", Severity: model.SeverityHigh, Version: "1", Expr: `shell_commands.size() == 0`},
+		{
+			ID: "test.fallback", Title: "fallback", Severity: model.SeverityHigh, Version: "1", Enforce: &enforce,
+			Expr: `shell_parse_failed && event.command.contains("unterminated")`,
+		},
+		{
+			ID: "test.chain", Title: "chain", Severity: model.SeverityHigh, Version: "1",
+			Sequence: &rule.SequenceSpec{Within: "30m", Steps: []rule.SequenceStep{
+				{Expr: `shell_commands.exists(command, command.name == "first")`},
+				{Expr: `shell_commands.exists(command, command.name == "second")`},
+			}},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("compile engine: %v", err)
+	}
+	tests := []struct {
+		name         string
+		command      string
+		wantFindings int
+	}{
+		{"no rule handles the command", `echo "open`, 0},
+		{"a rule handles the command", `echo "unterminated`, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf, diag bytes.Buffer
+			em := output.New(&buf, &diag, "run-x")
+			dec := &EnforceDecision{}
+			p := New(eng, em, Selection{Findings: true}, finding.Options{}, nil).
+				WithEnforce(dec).
+				WithSequences(sequence.NewTracker(eng.SequenceRules(), sequence.DefaultConfig()))
+			ev := sampleEvent()
+			ev.Command = tc.command
+			if err := p.Process(ev, "src"); err != nil {
+				t.Fatal(err)
+			}
+			const message = "shell command analysis: unsupported or malformed syntax"
+			if got := strings.Count(diag.String(), message); got != 1 || !strings.Contains(diag.String(), `"level":"warn"`) {
+				t.Fatalf("diagnostics = %q, want one warn record with %q", diag.String(), message)
+			}
+			if got := em.Stats().Diagnostics; got != 1 {
+				t.Fatalf("diagnostics count = %d, want 1", got)
+			}
+			findings := findingLines(t, &buf)
+			if len(findings) != tc.wantFindings || len(findings) == 1 && findings[0]["rule_id"] != "test.fallback" {
+				t.Fatalf("findings = %+v, want %d", findings, tc.wantFindings)
+			}
+			if dec.Blocked {
+				t.Fatal("Blocked = true for a command with no usable projection")
+			}
+		})
 	}
 }
 

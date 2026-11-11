@@ -135,7 +135,7 @@ func TestSequenceStepUsesShellCommands(t *testing.T) {
 	}
 }
 
-func TestSequenceSkipsShellStepForUnparsedCommand(t *testing.T) {
+func TestSequenceShellAnalysisErrorIsReported(t *testing.T) {
 	r := secretThenEgress(func(spec *rule.SequenceSpec) {
 		spec.Steps[0].Expr = `shell_commands.size() == 0`
 		spec.Steps[1].Expr = `shell_commands.exists(command, command.name == "finish")`
@@ -144,8 +144,8 @@ func TestSequenceSkipsShellStepForUnparsedCommand(t *testing.T) {
 	malformed := ev("e1", "", model.EventCommandExec, func(e *model.Event) {
 		e.Command = `echo "unterminated`
 	})
-	if _, err := tr.Observe(malformed); err != nil {
-		t.Fatalf("Observe: %v", err)
+	if _, err := tr.Observe(malformed); err == nil || !strings.Contains(err.Error(), "shell command analysis") {
+		t.Fatalf("Observe error = %v, want shell analysis error", err)
 	}
 	finish := ev("e2", "", model.EventCommandExec, func(e *model.Event) {
 		e.Command = "finish"
@@ -167,8 +167,8 @@ func TestSequenceStepSeesUnparsedCommandViaShellParseFailed(t *testing.T) {
 	malformed := ev("e1", "2026-06-01T10:00:00Z", model.EventCommandExec, func(e *model.Event) {
 		e.Command = `echo "unterminated`
 	})
-	if observation, err := tr.Observe(malformed); err != nil || len(observation.Findings) != 0 {
-		t.Fatalf("first observation = %+v, %v", observation, err)
+	if observation, err := tr.Observe(malformed); !rule.IsShellAnalysisUnusable(err) || len(observation.Findings) != 0 {
+		t.Fatalf("first observation = %+v, %v; want only the unusable analysis diagnostic", observation, err)
 	}
 	finish := ev("e2", "2026-06-01T10:01:00Z", model.EventCommandExec, func(e *model.Event) {
 		e.Command = "finish"

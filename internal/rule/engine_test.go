@@ -158,12 +158,16 @@ func TestEngineCompleteShellAnalysisFailureSkipsOnlyTypedRules(t *testing.T) {
 		Rule{ID: "raw", Severity: model.SeverityLow, Expr: `event.event_type == "command.exec"`},
 		Rule{ID: "shell", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0`},
 	)
-	matches, failures, diagnostics := eng.EvalDetailed(model.Event{
+	const command = `"$private_action"`
+	matches, err := eng.Eval(model.Event{
 		EventType: model.EventCommandExec,
-		Command:   `"$private_action"`,
+		Command:   command,
 	})
-	if len(failures) != 0 || diagnostics.ShellParseError != nil || diagnostics.ShellUsable {
-		t.Fatalf("failures = %+v, diagnostics = %+v, want an unusable analysis without an error", failures, diagnostics)
+	if err == nil || !strings.Contains(err.Error(), "shell command analysis") {
+		t.Fatalf("Eval error = %v, want shell analysis diagnostic", err)
+	}
+	if strings.Contains(err.Error(), "private_action") || strings.Contains(err.Error(), command) {
+		t.Fatalf("diagnostic leaked command content: %v", err)
 	}
 	if len(matches) != 1 || matches[0].Rule.ID != "raw" {
 		t.Fatalf("matches = %+v, want only raw-independent rule", matches)
@@ -192,8 +196,10 @@ func TestShellParseFailedExposesUnparsedCommand(t *testing.T) {
 		want            []string
 		wantEnforcement bool
 		wantErr         bool
+		wantUnusable    bool
 	}{
-		{name: "script under a POSIX label", toolName: "Bash", command: script, want: []string{"fallback", "failed"}},
+		{name: "script under a POSIX label", toolName: "Bash", command: script, want: []string{"fallback", "failed"}, wantErr: true, wantUnusable: true},
+		{name: "dynamic executable only", command: `"$run" Get-Content`, want: []string{"fallback", "failed"}, wantErr: true, wantUnusable: true},
 		{name: "script under its own label", toolName: "PowerShell", command: script, want: []string{"typed", "fallback"}},
 		{name: "parsed cmdlet", toolName: "PowerShell", command: "Get-Content example/config.json", want: []string{"typed", "fallback"}, wantEnforcement: true},
 		{name: "parsed command naming the cmdlet", toolName: "Bash", command: "echo Get-Content", want: []string{"absent"}},
@@ -207,8 +213,8 @@ func TestShellParseFailedExposesUnparsedCommand(t *testing.T) {
 				ToolName:  tc.toolName,
 				Command:   tc.command,
 			})
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("Eval error = %v, want error %v", err, tc.wantErr)
+			if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.wantUnusable {
+				t.Fatalf("Eval error = %v, want error %v and unusable %v", err, tc.wantErr, tc.wantUnusable)
 			}
 			var got []string
 			for _, match := range matches {
@@ -224,6 +230,36 @@ func TestShellParseFailedExposesUnparsedCommand(t *testing.T) {
 	}
 }
 
+func TestIsShellAnalysisUnusable(t *testing.T) {
+	eng := mustEngine(t,
+		Rule{ID: "shell", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0`},
+		Rule{ID: "boom", Severity: model.SeverityLow, Expr: `event.command.size() > 50 ? false : event.command[50] == "x"`},
+	)
+	eval := func(command string) error {
+		_, err := eng.Eval(model.Event{EventType: model.EventCommandExec, Command: command})
+		return err
+	}
+	long := strings.Repeat(" ", 64)
+	tests := []struct {
+		name    string
+		command string
+		wantErr bool
+		want    bool
+	}{
+		{"clean analysis", "true" + long, false, false},
+		{"unusable analysis", `echo "unterminated` + long, true, true},
+		{"partial analysis", "$run; true" + long, true, false},
+		{"rule failure", "true", true, false},
+		{"unusable analysis and rule failure", `echo "unterminated`, true, false},
+	}
+	for _, tc := range tests {
+		err := eval(tc.command)
+		if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.want {
+			t.Errorf("%s: error = %v, want error %v and unusable %v", tc.name, err, tc.wantErr, tc.want)
+		}
+	}
+}
+
 func TestShellCommandsReferenceDetectionHonorsComprehensionScope(t *testing.T) {
 	tests := []struct {
 		expr string
@@ -236,6 +272,9 @@ func TestShellCommandsReferenceDetectionHonorsComprehensionScope(t *testing.T) {
 		{`[1].exists(shell_commands, shell_commands == 1) || shell_commands.size() > 0`, true},
 		{`[1].exists(x, [2].exists(shell_commands, shell_commands == x))`, false},
 		{`[1].exists(shell_commands, [shell_commands].exists(x, x == 1))`, false},
+		{`[1].exists(shell_commands, .shell_commands.size() == 0)`, true},
+		{`[true].exists(shell_parse_failed, shell_parse_failed)`, false},
+		{`[true].exists(shell_parse_failed, .shell_parse_failed)`, true},
 	}
 	for _, tc := range tests {
 		eng := mustEngine(t, Rule{ID: "scope", Severity: model.SeverityLow, Expr: tc.expr})

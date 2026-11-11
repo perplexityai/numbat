@@ -417,7 +417,7 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 			return matched, matchedRules, fmt.Errorf("fixture line %d: %w", line, err)
 		}
 		matches, err := eng.Eval(ev)
-		if err != nil {
+		if err != nil && !rule.IsShellAnalysisUnusable(err) {
 			return matched, matchedRules, fmt.Errorf("fixture line %d: %w", line, err)
 		}
 		for _, m := range matches {
@@ -429,7 +429,7 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 		}
 		if tracker != nil {
 			observation, err := tracker.Observe(ev)
-			if err != nil {
+			if err != nil && !rule.IsShellAnalysisUnusable(err) {
 				return matched, matchedRules, fmt.Errorf("fixture line %d: %w", line, err)
 			}
 			for _, c := range observation.Findings {

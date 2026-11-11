@@ -57,17 +57,17 @@ type rulesTestEvaluatorError struct {
 	Message string `json:"message"`
 }
 
-// rulesTestCoverage carries the stateless engine's shell-analysis health signal.
+// rulesTestCoverage carries the shell-analysis health signal.
 // shell_parse is one of "ok" (no stateless shell analysis run or the parse was
 // clean), "degraded" (analysis produced errors but at least one command was
-// still usable), and "unusable" (parse produced no usable commands and rules
-// that depend on shell_commands without shell_parse_failed were skipped).
-// Sequence-analysis failures are reported separately in evaluator_errors and
-// error. sequence_tracker_active is true when the compiled catalog contains at
-// least one sequence rule (i.e. a window tracker exists for this run); it does
-// not imply this specific event was folded into a window. Live events require
-// a session_id; artifact events require evidence.local_path and may correlate
-// without a session_id.
+// still usable), and "unusable" (stateless or sequence analysis produced no
+// usable commands, and rules and sequence steps that depend on shell_commands
+// without shell_parse_failed were skipped). Other sequence-analysis failures are
+// reported separately in evaluator_errors and error. sequence_tracker_active is
+// true when the compiled catalog contains at least one sequence rule (i.e.
+// a window tracker exists for this run); it does not imply this specific
+// event was folded into a window. Live events require a session_id; artifact
+// events require evidence.local_path and may correlate without a session_id.
 type rulesTestCoverage struct {
 	ShellParse            string `json:"shell_parse"`
 	SequenceTrackerActive bool   `json:"sequence_tracker_active"`
@@ -235,7 +235,9 @@ loop:
 		sequenceErrorMessage := ""
 		if tracker != nil {
 			observation, err := tracker.Observe(ev)
-			if err != nil {
+			if rule.IsShellAnalysisUnusable(err) {
+				coverage.ShellParse = "unusable"
+			} else if err != nil {
 				// Tracker errors are scoped to the failed step; independent
 				// observations below remain usable.
 				sequenceErrorMessage = err.Error()
@@ -393,11 +395,11 @@ loop:
 // consumer can distinguish a bounded/unusable shell parse from a clean
 // no-match without reading log lines.
 func classifyShellParse(diag rule.EvalDiagnostics) string {
-	if !diag.ShellUsable {
-		return "unusable"
-	}
 	if diag.ShellParseError == nil {
 		return "ok"
 	}
-	return "degraded"
+	if diag.ShellUsable {
+		return "degraded"
+	}
+	return "unusable"
 }

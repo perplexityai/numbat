@@ -258,7 +258,7 @@ func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEven
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		matches, err := eng.Eval(ev)
-		if err != nil {
+		if err != nil && !rule.IsShellAnalysisUnusable(err) {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		for _, m := range matches {
@@ -268,7 +268,7 @@ func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEven
 			}
 		}
 		observation, err := tracker.Observe(ev)
-		if err != nil {
+		if err != nil && !rule.IsShellAnalysisUnusable(err) {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		for _, c := range observation.Findings {

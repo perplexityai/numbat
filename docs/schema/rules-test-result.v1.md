@@ -108,7 +108,8 @@ failure or sequence-tracker error promotes the event to
     `status: partial`. A `scan` failure attributes the failing
     `fixture_line` to the next unread line and carries no `event_id`.
   - `evaluation_failure`: at least one rule's CEL program errored at
-    runtime, or the sequence tracker returned an error. Matches from other
+    runtime, or the sequence tracker returned an error other than an unusable
+    shell analysis (see `coverage.shell_parse`). Matches from other
     rules on the same event still appear in `findings`; every failing rule
     still appears in `evaluator_errors`, and a per-rule CEL failure and a
     sequence-tracker failure may both surface for the same event.
@@ -147,17 +148,18 @@ failure or sequence-tracker error promotes the event to
     error text or input content; treat as diagnostic only.
 - `coverage` (object, optional):
   - `shell_parse` (string enum, required): `ok`, `degraded`, or `unusable`.
-    This describes the stateless engine's shell analysis, not aggregate
-    sequence-analysis health. `ok` also covers cases where no stateless rule
-    needed shell analysis. `unusable` means stateless rules that read
+    This describes shell analysis for the stateless engine and the sequence
+    tracker. `ok` also covers cases where no rule needed shell analysis.
+    `unusable` means stateless rules and sequence steps that read
     `shell_commands` without `shell_parse_failed` were skipped; a consumer must
     not infer a clean no-match.
-    Sequence-analysis failures are reported in `evaluator_errors` and `error`
-    and can coexist with `shell_parse: "ok"`.
-    Unlike the legacy tab-separated mode, a stateless shell-analysis error
-    alone does not make the JSON event fail or change its exit status.
+    Other sequence-analysis failures are reported in `evaluator_errors` and
+    `error` and can coexist with `shell_parse: "ok"`.
+    Unlike the legacy tab-separated mode, a degraded stateless shell analysis
+    alone does not make the JSON event fail or change its exit status. An
+    unusable shell analysis alone does neither in either mode.
     Assertions count emitted findings, not coverage: `--expect-none` can pass
-    with unusable stateless shell analysis. Consumers must inspect coverage
+    with unusable shell analysis. Consumers must inspect coverage
     independently of assertion success.
   - `sequence_tracker_active` (bool, required): true when the compiled
     catalog contains at least one sequence rule (i.e. a window tracker
