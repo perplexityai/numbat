@@ -34,6 +34,7 @@ func TestStoreParserUpgradeInvalidatesVerdicts(t *testing.T) {
 		{"sequence-projection-v9", 0},
 		{"sequence-projection-v10", 0},
 		{"sequence-projection-v11", 0},
+		{"sequence-projection-v12", 0},
 		{sequenceProjectionRevision, 1},
 	} {
 		t.Run(tc.revision, func(t *testing.T) {
