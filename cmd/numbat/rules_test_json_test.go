@@ -903,37 +903,59 @@ func TestRulesTestJSONCompiledCLIDevFull(t *testing.T) {
 }
 
 func TestRulesTestSequenceOnlyCatalogReportsUnusableShellParse(t *testing.T) {
-	rulesDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(rulesDir, "seq.yaml"), []byte(`id: chain.demo
+	const note = "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed were not evaluated\n"
+	tests := []struct {
+		name       string
+		firstStep  string
+		wantCode   int
+		wantStatus string
+		wantStream string
+	}{
+		{"skipped steps only", `shell_commands.exists(command, command.name == "first")`, 0, "completed", "completed"},
+		{"skipped step and failing step", `event.tags[11] == "x"`, 1, "evaluation_failure", "partial"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rulesDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(rulesDir, "seq.yaml"), []byte(`id: chain.demo
 version: "1.0"
 title: demo sequence
 severity: medium
 sequence:
   within_events: 8
   steps:
-    - expr: 'shell_commands.exists(command, command.name == "first")'
+    - expr: '`+tc.firstStep+`'
     - expr: 'shell_commands.exists(command, command.name == "second")'
 `), 0o600); err != nil {
-		t.Fatalf("write seq.yaml: %v", err)
-	}
-	fx := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"`+model.SchemaVersion+`","event_id":"u1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"echo \"unterminated","session_id":"s1","confidence":"high","evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+				t.Fatalf("write seq.yaml: %v", err)
+			}
+			fx := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"`+model.SchemaVersion+`","event_id":"u1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"echo \"unterminated","session_id":"s1","confidence":"high","tags":[],"evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
 `)
-	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx)
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0; stderr=%q, stdout=%q", code, errb, out)
-	}
-	events, summary := parseJSONStream(t, out)
-	if summary.Status != "completed" || len(events) != 1 {
-		t.Fatalf("summary = %+v, events = %+v", summary, events)
-	}
-	ev := events[0]
-	if ev.Status != "completed" || ev.Error != nil || len(ev.EvaluatorErrors) != 0 || len(ev.Findings) != 0 {
-		t.Fatalf("event = %+v, want a no-match without evaluator errors", ev)
-	}
-	if ev.Coverage == nil || ev.Coverage.ShellParse != "unusable" || !ev.Coverage.SequenceTrackerActive {
-		t.Fatalf("coverage = %+v, want shell_parse unusable with an active tracker", ev.Coverage)
-	}
-	if out, errb, code := runCLI("rules", "test", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx, "--expect-none"); code != 0 {
-		t.Fatalf("--expect-none exit = %d, want 0; stderr=%q, stdout=%q", code, errb, out)
+			out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx)
+			if code != tc.wantCode {
+				t.Fatalf("exit = %d, want %d; stderr=%q, stdout=%q", code, tc.wantCode, errb, out)
+			}
+			events, summary := parseJSONStream(t, out)
+			if summary.Status != tc.wantStream || len(events) != 1 {
+				t.Fatalf("summary = %+v, events = %+v", summary, events)
+			}
+			ev := events[0]
+			if ev.Status != tc.wantStatus || (ev.Error != nil) != (tc.wantCode != 0) || len(ev.Findings) != 0 {
+				t.Fatalf("event = %+v, want status %s without findings", ev, tc.wantStatus)
+			}
+			if ev.Coverage == nil || ev.Coverage.ShellParse != "unusable" || !ev.Coverage.SequenceTrackerActive {
+				t.Fatalf("coverage = %+v, want shell_parse unusable with an active tracker", ev.Coverage)
+			}
+			if !strings.Contains(out, `"events_evaluated":1,"events_shell_unusable":1,`) {
+				t.Fatalf("summary lacks events_shell_unusable 1: %q", out)
+			}
+			out, errb, code = runCLI("rules", "test", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx, "--expect-none")
+			if tc.wantCode == 0 && (code != 0 || out != "" || errb != note) {
+				t.Fatalf("--expect-none exit = %d stdout=%q stderr=%q, want exit 0 with %q", code, out, errb, note)
+			}
+			if tc.wantCode != 0 && (code != 1 || strings.Contains(errb, "were not evaluated")) {
+				t.Fatalf("--expect-none exit = %d stderr=%q, want the evaluation failure", code, errb)
+			}
+		})
 	}
 }

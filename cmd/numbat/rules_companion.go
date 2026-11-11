@@ -252,13 +252,14 @@ func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEven
 		tracker = sequence.NewTracker(seqs, sequence.DefaultConfig())
 	}
 	var result companionCaseResult
+	skipped := eng.SkipsUnusableShellAnalysis(ruleID)
 	for i, fixture := range events {
 		ev := normalizeRuleTestEvent(fixture.Event, i)
 		if err := ev.Validate(); err != nil {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		matches, err := eng.Eval(ev)
-		if err != nil && !rule.IsShellAnalysisUnusable(err) {
+		if err != nil && (skipped || !rule.IsShellAnalysisUnusable(err)) {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		for _, m := range matches {
@@ -268,7 +269,7 @@ func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEven
 			}
 		}
 		observation, err := tracker.Observe(ev)
-		if err != nil && !rule.IsShellAnalysisUnusable(err) {
+		if err != nil && (skipped || !rule.IsShellAnalysisUnusable(err)) {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		for _, c := range observation.Findings {

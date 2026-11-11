@@ -620,6 +620,26 @@ func isGlobalIdent(ast *celast.AST, expr celast.Expr, name string, shadowed bool
 	return ok && ref.Name == name
 }
 
+// SkipsUnusableShellAnalysis reports whether rule id, or one of its sequence
+// steps, is not evaluated on a command with no usable shell projection.
+func (e *Engine) SkipsUnusableShellAnalysis(id string) bool {
+	for _, c := range e.rules {
+		if c.rule.ID != id {
+			continue
+		}
+		programs := []compiledExpression{c.program}
+		if c.seq != nil {
+			programs = c.seq.steps
+		}
+		for _, p := range programs {
+			if p.usesShellCommands && !p.usesShellParseFailed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Len reports the number of compiled (enabled, valid) rules of both shapes.
 func (e *Engine) Len() int { return len(e.rules) }
 

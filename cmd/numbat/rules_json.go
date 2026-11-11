@@ -95,6 +95,7 @@ type rulesTestSummary struct {
 	SchemaVersion    string                    `json:"schema_version"`
 	Status           string                    `json:"status"`
 	EventsEvaluated  int                       `json:"events_evaluated"`
+	ShellUnusable    int                       `json:"events_shell_unusable"`
 	Matches          int                       `json:"matches"`
 	RulesLoaded      int                       `json:"rules_loaded"`
 	EnforceEligible  int                       `json:"enforce_eligible_rules"`
@@ -146,6 +147,7 @@ func runRulesTestJSON(eng *rule.Engine, r io.Reader, stdout, stderr io.Writer, r
 	matched := 0
 	matchedRules := map[string]int{}
 	eventsEvaluated := 0
+	shellUnusable := 0
 	line := 0
 	var stopped *rulesTestSummaryStopping
 	streamStatus := "completed"
@@ -235,9 +237,10 @@ loop:
 		sequenceErrorMessage := ""
 		if tracker != nil {
 			observation, err := tracker.Observe(ev)
-			if rule.IsShellAnalysisUnusable(err) {
+			if rule.HasShellAnalysisUnusable(err) {
 				coverage.ShellParse = "unusable"
-			} else if err != nil {
+			}
+			if err != nil && !rule.IsShellAnalysisUnusable(err) {
 				// Tracker errors are scoped to the failed step; independent
 				// observations below remain usable.
 				sequenceErrorMessage = err.Error()
@@ -264,6 +267,10 @@ loop:
 					Via:                 "sequence",
 				})
 			}
+		}
+
+		if coverage.ShellParse == "unusable" {
+			shellUnusable++
 		}
 
 		status := "completed"
@@ -369,6 +376,7 @@ loop:
 		SchemaVersion:    rulesTestResultSchemaVersion,
 		Status:           streamStatus,
 		EventsEvaluated:  eventsEvaluated,
+		ShellUnusable:    shellUnusable,
 		Matches:          matched,
 		RulesLoaded:      eng.Len(),
 		EnforceEligible:  enforceEligible,

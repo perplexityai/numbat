@@ -577,6 +577,12 @@ eligibility, not whether a particular host or hook mode would block the action.
 For an enforce-enabled rule that uses `shell_commands`, include at least one
 eligible case and one detection-only case.
 
+A case fails with the shell analysis diagnostic when one of its commands has no
+usable projection and the rule under test would skip it, that is, when the rule
+or one of its sequence steps reads `shell_commands` without
+`shell_parse_failed`. `no_match` on an event the rule never evaluated proves
+nothing.
+
 For an ad hoc NDJSON fixture:
 
 ```sh
@@ -595,6 +601,12 @@ Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
 See the [event schema](schema/v0.5.0/event-record.schema.json) for required
 fields.
+
+A fixture line whose command has no usable projection does not fail the run,
+but rules that read `shell_commands` without `shell_parse_failed` skip it.
+Text mode names each such line on stderr, and `--json` reports it as
+`coverage.shell_parse: "unusable"` and in the summary's
+`events_shell_unusable`. `--expect-none` can pass on such a run.
 
 ## Sequence rules
 

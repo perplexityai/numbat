@@ -170,9 +170,7 @@ func (e *unusableShellAnalysisError) Error() string   { return e.err.Error() }
 func (e *unusableShellAnalysisError) Unwrap() []error { return []error{e.err} }
 
 // IsShellAnalysisUnusable reports whether err holds nothing but the diagnostic
-// for a command with no usable projection. Rules that handle such a command
-// were still evaluated, so a caller that stops on evaluation errors can
-// continue past it.
+// for a command with no usable projection.
 func IsShellAnalysisUnusable(err error) bool {
 	if _, ok := err.(*unusableShellAnalysisError); ok {
 		return true
@@ -188,6 +186,13 @@ func IsShellAnalysisUnusable(err error) bool {
 		}
 	}
 	return len(children) > 0
+}
+
+// HasShellAnalysisUnusable reports whether err holds that diagnostic, alone or
+// next to other errors.
+func HasShellAnalysisUnusable(err error) bool {
+	var unusable *unusableShellAnalysisError
+	return errors.As(err, &unusable)
 }
 
 type shellAnalyzer struct {

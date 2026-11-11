@@ -245,17 +245,44 @@ func TestIsShellAnalysisUnusable(t *testing.T) {
 		command string
 		wantErr bool
 		want    bool
+		wantHas bool
 	}{
-		{"clean analysis", "true" + long, false, false},
-		{"unusable analysis", `echo "unterminated` + long, true, true},
-		{"partial analysis", "$run; true" + long, true, false},
-		{"rule failure", "true", true, false},
-		{"unusable analysis and rule failure", `echo "unterminated`, true, false},
+		{"clean analysis", "true" + long, false, false, false},
+		{"unusable analysis", `echo "unterminated` + long, true, true, true},
+		{"partial analysis", "$run; true" + long, true, false, false},
+		{"rule failure", "true", true, false, false},
+		{"unusable analysis and rule failure", `echo "unterminated`, true, false, true},
 	}
 	for _, tc := range tests {
 		err := eval(tc.command)
-		if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.want {
-			t.Errorf("%s: error = %v, want error %v and unusable %v", tc.name, err, tc.wantErr, tc.want)
+		if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.want || HasShellAnalysisUnusable(err) != tc.wantHas {
+			t.Errorf("%s: error = %v, want error %v, only unusable %v, has unusable %v", tc.name, err, tc.wantErr, tc.want, tc.wantHas)
+		}
+	}
+}
+
+func TestEngineSkipsUnusableShellAnalysis(t *testing.T) {
+	chain := func(id string, steps ...string) Rule {
+		r := Rule{ID: id, Severity: model.SeverityLow, Sequence: &SequenceSpec{WithinEvents: 8}}
+		for _, expr := range steps {
+			r.Sequence.Steps = append(r.Sequence.Steps, SequenceStep{Expr: expr})
+		}
+		return r
+	}
+	eng := mustEngine(t,
+		Rule{ID: "raw", Severity: model.SeverityLow, Expr: `event.command.contains("x")`},
+		Rule{ID: "typed", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0`},
+		Rule{ID: "fallback", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0 && shell_parse_failed`},
+		chain("raw-chain", `event.command.contains("x")`, `event.command.contains("y")`),
+		chain("typed-chain", `event.command.contains("x")`, `shell_commands.size() == 0`),
+		chain("fallback-chain", `shell_parse_failed`, `shell_commands.size() == 0 || shell_parse_failed`),
+	)
+	for id, want := range map[string]bool{
+		"raw": false, "typed": true, "fallback": false,
+		"raw-chain": false, "typed-chain": true, "fallback-chain": false, "missing": false,
+	} {
+		if got := eng.SkipsUnusableShellAnalysis(id); got != want {
+			t.Errorf("SkipsUnusableShellAnalysis(%q) = %v, want %v", id, got, want)
 		}
 	}
 }

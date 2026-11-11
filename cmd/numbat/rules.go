@@ -366,7 +366,7 @@ func runRulesTest(args []string, stdout, stderr io.Writer) int {
 		return runRulesTestJSON(eng, f, stdout, stderr, *requireMatch, *expectNone, expect)
 	}
 
-	matched, matchedRules, evalErr := evalFixture(eng, f, stdout)
+	matched, matchedRules, evalErr := evalFixture(eng, f, stdout, stderr)
 	if evalErr != nil {
 		fmt.Fprintln(stderr, evalErr.Error())
 		return 1
@@ -392,7 +392,7 @@ func runRulesTest(args []string, stdout, stderr io.Writer) int {
 // in line order, and a completed chain prints the same rule_id\tevent_id
 // shape, citing the event that completed the chain — so a positive sequence
 // fixture is checked exactly like a single-event one.
-func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]int, error) {
+func evalFixture(eng *rule.Engine, r io.Reader, out, stderr io.Writer) (int, map[string]int, error) {
 	var tracker *sequence.Tracker
 	if seqs := eng.SequenceRules(); len(seqs) > 0 {
 		tracker = sequence.NewTracker(seqs, sequence.DefaultConfig())
@@ -417,6 +417,7 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 			return matched, matchedRules, fmt.Errorf("fixture line %d: %w", line, err)
 		}
 		matches, err := eng.Eval(ev)
+		unusable := err
 		if err != nil && !rule.IsShellAnalysisUnusable(err) {
 			return matched, matchedRules, fmt.Errorf("fixture line %d: %w", line, err)
 		}
@@ -432,6 +433,9 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 			if err != nil && !rule.IsShellAnalysisUnusable(err) {
 				return matched, matchedRules, fmt.Errorf("fixture line %d: %w", line, err)
 			}
+			if err != nil {
+				unusable = err
+			}
 			for _, c := range observation.Findings {
 				matched++
 				matchedRules[c.Rule.ID]++
@@ -439,6 +443,9 @@ func evalFixture(eng *rule.Engine, r io.Reader, out io.Writer) (int, map[string]
 					return matched, matchedRules, fmt.Errorf("write match: %w", err)
 				}
 			}
+		}
+		if unusable != nil {
+			fmt.Fprintf(stderr, "fixture line %d: %v; rules that read shell_commands without shell_parse_failed were not evaluated\n", line, unusable)
 		}
 	}
 	if err := sc.Err(); err != nil {
