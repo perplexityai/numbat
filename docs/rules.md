@@ -577,11 +577,11 @@ eligibility, not whether a particular host or hook mode would block the action.
 For an enforce-enabled rule that uses `shell_commands`, include at least one
 eligible case and one detection-only case.
 
-A case fails with the shell analysis diagnostic when one of its commands has no
-usable projection and the rule under test would skip it, that is, when the rule
-or one of its sequence steps reads `shell_commands` without
+A `no_match` case fails with the shell analysis diagnostic when one of its
+commands has no usable projection and the rule under test would skip it, that
+is, when the rule or one of its sequence steps reads `shell_commands` without
 `shell_parse_failed`. `no_match` on an event the rule never evaluated proves
-nothing.
+nothing. A `match` case runs, because a skip can only remove matches.
 
 For an ad hoc NDJSON fixture:
 

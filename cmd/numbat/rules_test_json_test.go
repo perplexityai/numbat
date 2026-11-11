@@ -903,7 +903,7 @@ func TestRulesTestJSONCompiledCLIDevFull(t *testing.T) {
 }
 
 func TestRulesTestSequenceOnlyCatalogReportsUnusableShellParse(t *testing.T) {
-	const note = "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed were not evaluated\n"
+	const note = "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed are not evaluated on this event\n"
 	tests := []struct {
 		name       string
 		firstStep  string
@@ -953,7 +953,7 @@ sequence:
 			if tc.wantCode == 0 && (code != 0 || out != "" || errb != note) {
 				t.Fatalf("--expect-none exit = %d stdout=%q stderr=%q, want exit 0 with %q", code, out, errb, note)
 			}
-			if tc.wantCode != 0 && (code != 1 || strings.Contains(errb, "were not evaluated")) {
+			if tc.wantCode != 0 && (code != 1 || strings.Contains(errb, "are not evaluated")) {
 				t.Fatalf("--expect-none exit = %d stderr=%q, want the evaluation failure", code, errb)
 			}
 		})

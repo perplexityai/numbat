@@ -61,8 +61,8 @@ type rulesTestEvaluatorError struct {
 // shell_parse is one of "ok" (no stateless shell analysis run or the parse was
 // clean), "degraded" (analysis produced errors but at least one command was
 // still usable), and "unusable" (stateless or sequence analysis produced no
-// usable commands, and rules and sequence steps that depend on shell_commands
-// without shell_parse_failed were skipped). Other sequence-analysis failures are
+// usable commands; rules and sequence steps that depend on shell_commands
+// without shell_parse_failed are not evaluated). Other sequence-analysis failures are
 // reported separately in evaluator_errors and error. sequence_tracker_active is
 // true when the compiled catalog contains at least one sequence rule (i.e.
 // a window tracker exists for this run); it does not imply this specific

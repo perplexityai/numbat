@@ -428,7 +428,7 @@ cases:
 	if code != 0 || strings.TrimSpace(out) != "custom.config_read\tu1" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
 	}
-	if want := "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed were not evaluated\n"; errb != want {
+	if want := "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed are not evaluated on this event\n"; errb != want {
 		t.Fatalf("stderr = %q, want %q", errb, want)
 	}
 	out, errb, code = runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", dir, "--fixture", fixture)

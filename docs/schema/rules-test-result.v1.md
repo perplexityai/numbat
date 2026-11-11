@@ -151,8 +151,8 @@ failure or sequence-tracker error promotes the event to
     This describes shell analysis for the stateless engine and the sequence
     tracker. `ok` also covers cases where no rule needed shell analysis.
     `unusable` means stateless rules and sequence steps that read
-    `shell_commands` without `shell_parse_failed` were skipped; a consumer must
-    not infer a clean no-match.
+    `shell_commands` without `shell_parse_failed` are not evaluated on this
+    event; a consumer must not infer a clean no-match.
     Other sequence-analysis failures are reported in `evaluator_errors` and
     `error` and can coexist with any `shell_parse` value, including
     `unusable` when a skipped step and a failing step share the event.
@@ -201,8 +201,9 @@ failure or sequence-tracker error promotes the event to
   `evaluation_failure`. Lines that failed decode/validate/scan before
   evaluation are excluded.
 - `events_shell_unusable` (int, required): number of evaluated fixture lines
-  whose `coverage.shell_parse` is `unusable`. A nonzero value means rules
-  were skipped on those lines, whatever `status` and `assertion_outcome` say.
+  whose `coverage.shell_parse` is `unusable`. Rules that read
+  `shell_commands` without `shell_parse_failed` are not evaluated on those
+  lines, whatever `status` and `assertion_outcome` say.
 - `matches` (int, required): total findings emitted across all
   `event_results` (single-event and sequence combined). `matches` may
   exceed `events_evaluated`: several direct rules can match one event, and

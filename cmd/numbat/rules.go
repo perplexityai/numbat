@@ -445,7 +445,7 @@ func evalFixture(eng *rule.Engine, r io.Reader, out, stderr io.Writer) (int, map
 			}
 		}
 		if unusable != nil {
-			fmt.Fprintf(stderr, "fixture line %d: %v; rules that read shell_commands without shell_parse_failed were not evaluated\n", line, unusable)
+			fmt.Fprintf(stderr, "fixture line %d: %v; rules that read shell_commands without shell_parse_failed are not evaluated on this event\n", line, unusable)
 		}
 	}
 	if err := sc.Err(); err != nil {

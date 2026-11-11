@@ -213,7 +213,7 @@ func runCompanionRuleTestCase(eng *rule.Engine, ruleID, path string, index int, 
 	if len(c.Events) == 0 {
 		return fmt.Errorf("rule tests %q case %s: no events", path, name)
 	}
-	result, err := companionCaseMatches(eng, ruleID, c.Events)
+	result, err := companionCaseMatches(eng, ruleID, c.Events, strings.TrimSpace(c.Expect) == "no_match")
 	if err != nil {
 		return fmt.Errorf("rule tests %q case %s: %w", path, name, err)
 	}
@@ -246,13 +246,13 @@ type companionCaseResult struct {
 	enforcement bool
 }
 
-func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEvent) (companionCaseResult, error) {
+func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEvent, noMatch bool) (companionCaseResult, error) {
 	var tracker *sequence.Tracker
 	if seqs := eng.SequenceRules(); len(seqs) > 0 {
 		tracker = sequence.NewTracker(seqs, sequence.DefaultConfig())
 	}
 	var result companionCaseResult
-	skipped := eng.SkipsUnusableShellAnalysis(ruleID)
+	skipped := noMatch && eng.SkipsUnusableShellAnalysis(ruleID)
 	for i, fixture := range events {
 		ev := normalizeRuleTestEvent(fixture.Event, i)
 		if err := ev.Validate(); err != nil {
