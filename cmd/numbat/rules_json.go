@@ -61,12 +61,13 @@ type rulesTestEvaluatorError struct {
 // shell_parse is one of "ok" (no stateless shell analysis run or the parse was
 // clean), "degraded" (analysis produced errors but at least one command was
 // still usable), and "unusable" (parse produced no usable commands and rules
-// that depend on shell_commands were skipped). Sequence-analysis failures are
-// reported separately in evaluator_errors and error. sequence_tracker_active is
-// true when the compiled catalog contains at least one sequence rule (i.e.
-// a window tracker exists for this run); it does not imply this specific
-// event was folded into a window. Live events require a session_id; artifact
-// events require evidence.local_path and may correlate without a session_id.
+// that depend on shell_commands without shell_parse_failed were skipped).
+// Sequence-analysis failures are reported separately in evaluator_errors and
+// error. sequence_tracker_active is true when the compiled catalog contains at
+// least one sequence rule (i.e. a window tracker exists for this run); it does
+// not imply this specific event was folded into a window. Live events require
+// a session_id; artifact events require evidence.local_path and may correlate
+// without a session_id.
 type rulesTestCoverage struct {
 	ShellParse            string `json:"shell_parse"`
 	SequenceTrackerActive bool   `json:"sequence_tracker_active"`
@@ -392,11 +393,11 @@ loop:
 // consumer can distinguish a bounded/unusable shell parse from a clean
 // no-match without reading log lines.
 func classifyShellParse(diag rule.EvalDiagnostics) string {
+	if !diag.ShellUsable {
+		return "unusable"
+	}
 	if diag.ShellParseError == nil {
 		return "ok"
 	}
-	if diag.ShellUsable {
-		return "degraded"
-	}
-	return "unusable"
+	return "degraded"
 }

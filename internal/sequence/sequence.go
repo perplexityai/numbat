@@ -333,7 +333,7 @@ func project(rules []*rule.SequenceRule, ev model.Event, seq uint64) (entry, []e
 	}
 	for ri, r := range rules {
 		for si := 0; si < r.StepCount(); si++ {
-			if activations.Err != nil && r.StepUsesShellCommands(si) && !activations.ShellUsable {
+			if !activations.ShellUsable && r.StepUsesShellCommands(si) && !r.StepUsesShellParseFailed(si) {
 				continue
 			}
 			ok, evalErr := r.EvalStep(si, activations.Detection)

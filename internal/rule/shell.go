@@ -14,6 +14,7 @@ import (
 
 const (
 	shellCommandsVariable    = "shell_commands"
+	shellParseFailedVariable = "shell_parse_failed"
 	maxShellCommandBytes     = 256 << 10
 	maxShellCommands         = 64
 	maxShellListItems        = 512
@@ -60,6 +61,7 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 
 	detection["event"] = adapter.NativeToValue(detection["event"])
 	if !needShellCommands {
+		detection[shellParseFailedVariable] = false
 		return sequenceActivations{
 			detection:            detection,
 			shellUsable:          true,
@@ -68,6 +70,10 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 	}
 	analysis := analyzeEventShellCommandsDetailed(ev)
 	detection[shellCommandsVariable] = shellCommandList(adapter, analysis.commands)
+	detection[shellParseFailedVariable] = !analysis.usable
+	if !analysis.usable {
+		analysis.err = nil
+	}
 	return sequenceActivations{
 		detection:            detection,
 		shellUsable:          analysis.usable,

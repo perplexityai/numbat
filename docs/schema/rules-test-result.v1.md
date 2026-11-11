@@ -150,7 +150,8 @@ failure or sequence-tracker error promotes the event to
     This describes the stateless engine's shell analysis, not aggregate
     sequence-analysis health. `ok` also covers cases where no stateless rule
     needed shell analysis. `unusable` means stateless rules that read
-    `shell_commands` were skipped; a consumer must not infer a clean no-match.
+    `shell_commands` without `shell_parse_failed` were skipped; a consumer must
+    not infer a clean no-match.
     Sequence-analysis failures are reported in `evaluator_errors` and `error`
     and can coexist with `shell_parse: "ok"`.
     Unlike the legacy tab-separated mode, a stateless shell-analysis error

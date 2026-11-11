@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -157,19 +158,69 @@ func TestEngineCompleteShellAnalysisFailureSkipsOnlyTypedRules(t *testing.T) {
 		Rule{ID: "raw", Severity: model.SeverityLow, Expr: `event.event_type == "command.exec"`},
 		Rule{ID: "shell", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0`},
 	)
-	const command = `"$private_action"`
-	matches, err := eng.Eval(model.Event{
+	matches, failures, diagnostics := eng.EvalDetailed(model.Event{
 		EventType: model.EventCommandExec,
-		Command:   command,
+		Command:   `"$private_action"`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "shell command analysis") {
-		t.Fatalf("Eval error = %v, want shell analysis diagnostic", err)
-	}
-	if strings.Contains(err.Error(), "private_action") || strings.Contains(err.Error(), command) {
-		t.Fatalf("diagnostic leaked command content: %v", err)
+	if len(failures) != 0 || diagnostics.ShellParseError != nil || diagnostics.ShellUsable {
+		t.Fatalf("failures = %+v, diagnostics = %+v, want an unusable analysis without an error", failures, diagnostics)
 	}
 	if len(matches) != 1 || matches[0].Rule.ID != "raw" {
 		t.Fatalf("matches = %+v, want only raw-independent rule", matches)
+	}
+}
+
+func TestShellParseFailedExposesUnparsedCommand(t *testing.T) {
+	eng := mustEngine(t,
+		Rule{ID: "typed", Severity: model.SeverityLow, Expr: `shell_commands.exists(command, command.name == "get-content")`},
+		Rule{ID: "absent", Severity: model.SeverityLow, Expr: `!shell_commands.exists(command, command.name == "get-content")`},
+		Rule{
+			ID:       "fallback",
+			Severity: model.SeverityCritical,
+			Enforce:  boolPtr(true),
+			Expr: `shell_commands.exists(command, command.name == "get-content") ||
+				(shell_parse_failed && shell_commands.size() == 0 && event.command.contains("Get-Content"))`,
+		},
+		Rule{ID: "failed", Severity: model.SeverityLow, Expr: `shell_parse_failed`},
+	)
+	const script = "$config = Get-Content example/config.json -Raw | ConvertFrom-Json\n" +
+		"if ($config.token) { Write-Output 'present' }"
+	tests := []struct {
+		name            string
+		toolName        string
+		command         string
+		want            []string
+		wantEnforcement bool
+		wantErr         bool
+	}{
+		{name: "script under a POSIX label", toolName: "Bash", command: script, want: []string{"fallback", "failed"}},
+		{name: "script under its own label", toolName: "PowerShell", command: script, want: []string{"typed", "fallback"}},
+		{name: "parsed cmdlet", toolName: "PowerShell", command: "Get-Content example/config.json", want: []string{"typed", "fallback"}, wantEnforcement: true},
+		{name: "parsed command naming the cmdlet", toolName: "Bash", command: "echo Get-Content", want: []string{"absent"}},
+		{name: "partly parsed command", toolName: "Bash", command: "$run; echo Get-Content", want: []string{"absent"}, wantErr: true},
+		{name: "no command", want: []string{"absent"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, err := eng.Eval(model.Event{
+				EventType: model.EventCommandExec,
+				ToolName:  tc.toolName,
+				Command:   tc.command,
+			})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Eval error = %v, want error %v", err, tc.wantErr)
+			}
+			var got []string
+			for _, match := range matches {
+				got = append(got, match.Rule.ID)
+				if match.Rule.ID == "fallback" && match.EnforcementMatch != tc.wantEnforcement {
+					t.Errorf("EnforcementMatch = %v, want %v", match.EnforcementMatch, tc.wantEnforcement)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("matches = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

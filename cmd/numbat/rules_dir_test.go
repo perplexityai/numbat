@@ -371,6 +371,79 @@ cases:
 	}
 }
 
+func TestRulesCheckCompanionUnparsedCommand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config-read.yaml"), []byte(`
+id: custom.config_read
+version: "1.0"
+title: Config read
+severity: high
+enforce: true
+expr: |-
+  event.event_type == "command.exec" &&
+  (shell_commands.exists(command, command.name == "get-content" &&
+     command.arguments.exists(argument, argument.value.endsWith("config.json"))) ||
+   (shell_parse_failed && event.command.matches("(?i)get-content\\s+\\S*config\\.json")))
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config-read_tests.yaml"), []byte(`
+rule_id: custom.config_read
+cases:
+  - name: parsed
+    expect: match
+    expect_enforcement: true
+    events:
+      - event_type: command.exec
+        tool_name: PowerShell
+        command: Get-Content example/config.json
+  - name: unparsed
+    expect: match
+    expect_enforcement: false
+    events:
+      - event_type: command.exec
+        tool_name: Bash
+        command: |-
+          $config = Get-Content example/config.json -Raw | ConvertFrom-Json
+          if ($config.token) { Write-Output 'present' }
+  - name: unparsed-other-file
+    expect: no_match
+    events:
+      - event_type: command.exec
+        tool_name: Bash
+        command: |-
+          $config = Get-Content example/other.json -Raw | ConvertFrom-Json
+          if ($config.token) { Write-Output 'present' }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runCLI("rules", "check", "--no-builtin-rules", "--rules-dir", dir)
+	if code != 0 || !strings.Contains(out, "rules ok: 1 compiled, 3 tests passed") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
+	}
+
+	fixture := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"0.5.0","event_id":"u1","source_agent":"codex","source_type":"hook","event_type":"command.exec","tool_name":"Bash","command":"$config = Get-Content example/config.json -Raw | ConvertFrom-Json\nif ($config.token) { Write-Output 'present' }","confidence":"high","evidence":{"artifact_type":"hook_payload"}}
+`)
+	out, errb, code = runCLI("rules", "test", "--no-builtin-rules", "--rules-dir", dir, "--fixture", fixture)
+	if code != 0 || strings.TrimSpace(out) != "custom.config_read\tu1" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	out, errb, code = runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", dir, "--fixture", fixture)
+	if code != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	events, summary := parseJSONStream(t, out)
+	if summary.Status != "completed" || len(events) != 1 {
+		t.Fatalf("summary = %+v, events = %+v", summary, events)
+	}
+	if cov := events[0].Coverage; cov == nil || cov.ShellParse != "unusable" {
+		t.Fatalf("coverage = %+v, want shell_parse unusable", cov)
+	}
+	if len(events[0].Findings) != 1 || events[0].Findings[0].RuleID != "custom.config_read" || events[0].Findings[0].EnforcementEligible {
+		t.Fatalf("findings = %+v, want one detection-only match", events[0].Findings)
+	}
+}
+
 func TestNormalizeRuleTestEventNormalizesPaths(t *testing.T) {
 	ev := normalizeRuleTestEvent(model.Event{
 		EventType:   model.EventFileRead,

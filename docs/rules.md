@@ -10,6 +10,8 @@ Rule expressions can use:
   emitted JSON names.
 - `shell_commands`, a rule-only parsed view of commands found in
   `event.command`.
+- `shell_parse_failed`, a rule-only boolean that is true when analysis of
+  `event.command` failed and produced no parsed command.
 
 Embedded rules are monitor-only by default. See the
 [built-in catalog](rule-catalog.md) for coverage and [`rules/`](../rules/) for
@@ -447,8 +449,23 @@ Set `tool_name` in a fixture when a Windows command depends on a specific dialec
 
 If part of a command is dynamic, malformed, unsupported, or over a parser
 bound, numbat emits a diagnostic. Proven independent commands remain available
-for detection. If no usable projection remains, rules that reference
-`shell_commands` skip that event.
+for detection. If no usable projection remains, numbat emits no diagnostic and
+rules that reference `shell_commands` skip that event. This happens, for
+example, when a PowerShell script is recorded under a POSIX shell `tool_name`.
+
+A rule that must still see such a command references `shell_parse_failed`. It
+is then evaluated with an empty `shell_commands` and `shell_parse_failed` set
+to true, and can add a raw-text clause for that case:
+
+```cel
+shell_commands.exists(command, command.name == "curl") ||
+(shell_parse_failed && event.command.matches("(^|\\s)curl\\s"))
+```
+
+The raw-text clause has the limits of any `event.command` match, and a match
+on an unparsed command is always detection-only. `shell_parse_failed` is false
+when at least one command was parsed, when analysis reported no problem, and
+when the event has no command.
 
 Detection recognizes explicit PowerShell `-WhatIf` requests and a statically
 visible `$WhatIfPreference = $true` for known cmdlet names and exact

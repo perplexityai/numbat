@@ -44,9 +44,10 @@ type compiledRule struct {
 }
 
 type compiledExpression struct {
-	program           cel.Program
-	usesShellCommands bool
-	usesContent       bool
+	program              cel.Program
+	usesShellCommands    bool
+	usesShellParseFailed bool
+	usesContent          bool
 }
 
 const contentRuleCostLimit uint64 = 10_000_000
@@ -104,6 +105,15 @@ func (s *SequenceRule) StepUsesShellCommands(i int) bool {
 	return s.steps[i].usesShellCommands
 }
 
+// StepUsesShellParseFailed reports whether step i handles a command that
+// produced no usable projection instead of being skipped for it.
+func (s *SequenceRule) StepUsesShellParseFailed(i int) bool {
+	if i < 0 || i >= len(s.steps) {
+		return false
+	}
+	return s.steps[i].usesShellParseFailed
+}
+
 // newEnv builds the CEL environment shared by every rule. `event` uses emitted
 // JSON field names; shellCommandsVariable is an activation-only helper.
 func newEnv() (*cel.Env, error) {
@@ -120,6 +130,7 @@ func newEnv() (*cel.Env, error) {
 		canonicalPathFunction(),
 		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable(shellCommandsVariable, cel.ListType(cel.ObjectType("rule.ShellCommand"))),
+		cel.Variable(shellParseFailedVariable, cel.BoolType),
 	)
 }
 
@@ -392,10 +403,12 @@ func programExpr(env *cel.Env, ast *cel.Ast) (compiledExpression, error) {
 	if err != nil {
 		return compiledExpression{}, fmt.Errorf("program expr: %w", err)
 	}
+	usesShellParseFailed := astReferencesGlobal(ast, shellParseFailedVariable)
 	return compiledExpression{
-		program:           prg,
-		usesShellCommands: astReferencesGlobal(ast, shellCommandsVariable),
-		usesContent:       usesContent,
+		program:              prg,
+		usesShellCommands:    usesShellParseFailed || astReferencesGlobal(ast, shellCommandsVariable),
+		usesShellParseFailed: usesShellParseFailed,
+		usesContent:          usesContent,
 	}, nil
 }
 
@@ -709,7 +722,7 @@ func (e *Engine) eval(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
 		if c.seq != nil {
 			continue
 		}
-		if activations.err != nil && c.program.usesShellCommands && !activations.shellUsable {
+		if !activations.shellUsable && c.program.usesShellCommands && !c.program.usesShellParseFailed {
 			continue
 		}
 		out, _, err := c.program.program.Eval(activations.detection)
