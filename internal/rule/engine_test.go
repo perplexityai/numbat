@@ -983,6 +983,27 @@ func TestNewEngineRejectsEventAliases(t *testing.T) {
 	}
 }
 
+func TestNewEngineChecksLeadingDotEventUnderShadow(t *testing.T) {
+	tests := []struct {
+		expr    string
+		wantErr string
+	}{
+		{`[1].exists(event, .event.command == "x")`, ""},
+		{`[1].exists(event, .event.file_pathh == "x")`, `unknown event field "file_pathh"`},
+		{`[1].exists(event, .event["file_pathh"] == "x")`, `unknown event field "file_pathh"`},
+		{`[1].exists(event, .event[.event.command] == "x")`, "event field index must be a string literal"},
+		{`[1].exists(event, size(.event) > 0)`, "event must be accessed directly"},
+	}
+	for _, tc := range tests {
+		_, err := NewEngine([]Source{{Name: "test", Rules: []Rule{{
+			ID: "t.dotted", Title: "dotted", Version: "1", Severity: model.SeverityLow, Expr: tc.expr,
+		}}}})
+		if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("%s: error = %v, want %q", tc.expr, err, tc.wantErr)
+		}
+	}
+}
+
 func TestEvalErrorDoesNotLeakEventCommand(t *testing.T) {
 	eng := mustEngine(t, Rule{
 		ID:       "t.runtime_error",

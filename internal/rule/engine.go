@@ -430,14 +430,7 @@ func astReferencesGlobal(ast *cel.Ast, name string) bool {
 func exprReferencesGlobal(ast *celast.AST, expr celast.Expr, name string, shadowed bool) bool {
 	switch expr.Kind() {
 	case celast.IdentKind:
-		if expr.AsIdent() == "."+name {
-			return true
-		}
-		if shadowed || expr.AsIdent() != name {
-			return false
-		}
-		ref, ok := ast.ReferenceMap()[expr.ID()]
-		return ok && ref.Name == name
+		return isGlobalIdent(ast, expr, name, shadowed)
 	case celast.ComprehensionKind:
 		comprehension := expr.AsComprehension()
 		if exprReferencesGlobal(ast, comprehension.IterRange(), name, shadowed) ||
@@ -549,11 +542,7 @@ func walkEventFields(ast *celast.AST, expr celast.Expr, shadowed bool, visit fun
 func exprUsesGlobalAsValue(ast *celast.AST, expr celast.Expr, name string, shadowed bool) bool {
 	switch expr.Kind() {
 	case celast.IdentKind:
-		if shadowed || expr.AsIdent() != name {
-			return false
-		}
-		ref, ok := ast.ReferenceMap()[expr.ID()]
-		return ok && ref.Name == name
+		return isGlobalIdent(ast, expr, name, shadowed)
 	case celast.SelectKind:
 		operand := expr.AsSelect().Operand()
 		if !isGlobalIdent(ast, operand, name, shadowed) &&
@@ -618,7 +607,13 @@ func exprUsesGlobalAsValue(ast *celast.AST, expr celast.Expr, name string, shado
 }
 
 func isGlobalIdent(ast *celast.AST, expr celast.Expr, name string, shadowed bool) bool {
-	if shadowed || expr.Kind() != celast.IdentKind || expr.AsIdent() != name {
+	if expr.Kind() != celast.IdentKind {
+		return false
+	}
+	if expr.AsIdent() == "."+name {
+		return true
+	}
+	if shadowed || expr.AsIdent() != name {
 		return false
 	}
 	ref, ok := ast.ReferenceMap()[expr.ID()]
