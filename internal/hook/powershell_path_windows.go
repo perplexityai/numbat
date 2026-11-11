@@ -15,5 +15,8 @@ func systemPowerShellPath() string {
 		// unexpectedly fails. Standard supported installations use this path.
 		systemDir = `C:\Windows\System32`
 	}
-	return filepath.Join(systemDir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	// Forward slashes are accepted by both PowerShell and cmd.exe, and an
+	// unquoted executable at the head of the command stays a command in
+	// PowerShell instead of being parsed as a string expression.
+	return filepath.ToSlash(filepath.Join(systemDir, "WindowsPowerShell", "v1.0", "powershell.exe"))
 }

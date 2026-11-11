@@ -416,16 +416,12 @@ func encodedPowerShellCommand(binary string, args []string) string {
 		script.WriteString(powerShellQuote(arg))
 	}
 	script.WriteString("; exit $LASTEXITCODE")
-	return windowsCommandQuote(systemPowerShellPath()) +
+	return systemPowerShellPath() +
 		" -NoLogo -NoProfile -NonInteractive -EncodedCommand " + encodePowerShell(script.String())
 }
 
 func powerShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-func windowsCommandQuote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
 func encodePowerShell(script string) string {

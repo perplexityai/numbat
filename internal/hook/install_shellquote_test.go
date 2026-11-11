@@ -119,7 +119,7 @@ func TestWindowsCommandBuilderEncodesExactArguments(t *testing.T) {
 	url := `https://ingest.example/numbat?node=%COMPUTERNAME%&mode=full`
 	cmd := buildHookCommand("windows", binary, "codex-pre-tool", AgentCodex,
 		[]string{"--output-file", output, "--http-url", url}, true)
-	wantPrefix := windowsCommandQuote(systemPowerShellPath()) +
+	wantPrefix := systemPowerShellPath() +
 		" -NoLogo -NoProfile -NonInteractive -EncodedCommand "
 	if !strings.HasPrefix(cmd, wantPrefix) {
 		t.Fatalf("Windows command did not use absolute encoded PowerShell: %q", cmd)
@@ -152,6 +152,56 @@ func TestWindowsCommandBuilderEncodesExactArguments(t *testing.T) {
 	foreignFirst := fmt.Sprintf(`{"foreign":%q,"numbat":%q}`, foreign, cmd)
 	if !isNumbatHookCommand(foreignFirst) {
 		t.Fatal("numbat marker after a foreign encoded command was not recognized")
+	}
+}
+
+func TestWindowsCodexCommandIsUnquotedSystemPowerShell(t *testing.T) {
+	binary := `C:\Program Files\Numbat's\numbat.exe`
+	cmd := buildHookCommand("windows", binary, "codex-pre-tool", AgentCodex, nil, false)
+
+	// The system PowerShell must be an unquoted forward-slash path: PowerShell
+	// parses a quoted executable at the head of the command as a string
+	// expression, so Codex's session shell never runs the hook.
+	const wantPrefix = `C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand `
+	if !strings.HasPrefix(cmd, wantPrefix) {
+		t.Fatalf("Windows user hook command did not start with unquoted system PowerShell: %q", cmd)
+	}
+	if strings.HasPrefix(cmd, `"`) {
+		t.Error("Windows user hook command quoted the PowerShell executable: " + cmd)
+	}
+	if strings.HasPrefix(strings.ToLower(cmd), "powershell.exe ") {
+		t.Error("Windows user hook command relies on executable search order: " + cmd)
+	}
+
+	// The encoded payload is unchanged: call-operator invocation, quoted binary
+	// and args, LASTEXITCODE propagation.
+	script := decodedHookCommand(cmd)
+	for _, want := range []string{
+		"& ", powerShellQuote(binary), powerShellQuote("hook"), powerShellQuote("codex-pre-tool"),
+		powerShellQuote(AgentCodex), powerShellQuote(numbatHookMarker), "exit $LASTEXITCODE",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("decoded PowerShell missing %q: %s", want, script)
+		}
+	}
+	if !isNumbatHookCommand(cmd) {
+		t.Error("encoded Windows user command was not recognized as numbat-owned")
+	}
+}
+
+func TestWindowsCodexManagedHookBlockEmbedsTheBuiltCommand(t *testing.T) {
+	body := renderCodexRequirementsHookBlock(numbatBinary, nil, false)
+	// Managed Codex generation shares codexCommandWithArgs → buildHookCommand,
+	// so on Windows its command is the unquoted system PowerShell asserted
+	// above. Pin the wiring on every platform.
+	for _, ev := range codexHookEvents {
+		want := `command = ` + tomlString(codexCommandWithArgs(numbatBinary, ev.lifecycle, nil, false)) + "\n"
+		if !strings.Contains(body, want) {
+			t.Errorf("managed hook block does not embed the builder command for %q:\n%s", ev.settingsKey, body)
+		}
+	}
+	if !strings.Contains(body, codexNumbatHookBlockStart) || !strings.Contains(body, codexNumbatHookBlockEnd) {
+		t.Error("managed hook block lost its numbat markers: " + body)
 	}
 }
 
