@@ -474,6 +474,39 @@ func TestShipDetectsRotation(t *testing.T) {
 	}
 }
 
+func TestShipResumesAfterFileIdentityChange(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.ndjson")
+	statePath := inputPath + ".ship-state"
+	writeSpool(t, inputPath, "old", 10)
+
+	sink := newFlakySink()
+	sink.healthy.Store(true)
+	defer sink.srv.Close()
+	factory := newSinkFactory(sink.srv.URL)
+	if _, err := drainAvailable(ctx, inputPath, statePath, newTestShipCursor(), maxShipBatchBytes, factory, io.Discard); err != nil {
+		t.Fatalf("initial drain: %v", err)
+	}
+
+	cursor, err := readShipCursor(statePath, testShipDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor.checkpoint.FileID = "remounted:" + cursor.checkpoint.FileID
+	size := writeSpool(t, inputPath, "new", 3)
+	cursor, err = drainAvailable(ctx, inputPath, statePath, cursor, maxShipBatchBytes, factory, io.Discard)
+	if err != nil {
+		t.Fatalf("drain after identity change: %v", err)
+	}
+	if cursor.checkpoint.Offset != size {
+		t.Fatalf("offset=%d, want %d", cursor.checkpoint.Offset, size)
+	}
+	if got, unique := len(sink.deliveredLines()), sink.uniqueDelivered(); got != 13 || unique != 13 {
+		t.Fatalf("delivered=%d unique=%d, want 13 with no replay", got, unique)
+	}
+}
+
 func TestShipDrainsRetainedRotationAfterOutage(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
