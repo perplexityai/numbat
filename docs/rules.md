@@ -475,8 +475,8 @@ matches on absence, such as `!shell_commands.exists(...)` or
 tests the flag.
 
 The raw-text clause has the limits of any `event.command` match. A match by a
-rule that references `shell_commands` or `shell_parse_failed` is detection-only
-on such a command. A rule that reads only `event.command` is not shell-derived:
+rule that references `shell_parse_failed` is detection-only on such a command.
+A rule that reads only `event.command` is not shell-derived:
 with `enforce: true` it can still deny such a command, and adding a
 `shell_parse_failed` clause to it makes it detection-only there.
 
