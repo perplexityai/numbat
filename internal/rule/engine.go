@@ -430,6 +430,9 @@ func astReferencesGlobal(ast *cel.Ast, name string) bool {
 func exprReferencesGlobal(ast *celast.AST, expr celast.Expr, name string, shadowed bool) bool {
 	switch expr.Kind() {
 	case celast.IdentKind:
+		if name == shellParseFailedVariable && expr.AsIdent() == "."+name {
+			return true
+		}
 		if shadowed || expr.AsIdent() != name {
 			return false
 		}

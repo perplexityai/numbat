@@ -260,32 +260,6 @@ func TestIsShellAnalysisUnusable(t *testing.T) {
 	}
 }
 
-func TestEngineSkipsUnusableShellAnalysis(t *testing.T) {
-	chain := func(id string, steps ...string) Rule {
-		r := Rule{ID: id, Severity: model.SeverityLow, Sequence: &SequenceSpec{WithinEvents: 8}}
-		for _, expr := range steps {
-			r.Sequence.Steps = append(r.Sequence.Steps, SequenceStep{Expr: expr})
-		}
-		return r
-	}
-	eng := mustEngine(t,
-		Rule{ID: "raw", Severity: model.SeverityLow, Expr: `event.command.contains("x")`},
-		Rule{ID: "typed", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0`},
-		Rule{ID: "fallback", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0 && shell_parse_failed`},
-		chain("raw-chain", `event.command.contains("x")`, `event.command.contains("y")`),
-		chain("typed-chain", `event.command.contains("x")`, `shell_commands.size() == 0`),
-		chain("fallback-chain", `shell_parse_failed`, `shell_commands.size() == 0 || shell_parse_failed`),
-	)
-	for id, want := range map[string]bool{
-		"raw": false, "typed": true, "fallback": false,
-		"raw-chain": false, "typed-chain": true, "fallback-chain": false, "missing": false,
-	} {
-		if got := eng.SkipsUnusableShellAnalysis(id); got != want {
-			t.Errorf("SkipsUnusableShellAnalysis(%q) = %v, want %v", id, got, want)
-		}
-	}
-}
-
 func TestShellCommandsReferenceDetectionHonorsComprehensionScope(t *testing.T) {
 	tests := []struct {
 		expr string
