@@ -237,6 +237,8 @@ loop:
 			observation, err := tracker.Observe(ev)
 			if rule.IsShellAnalysisUnusable(err) {
 				coverage.ShellParse = "unusable"
+			} else if rule.IsShellAnalysisError(err) {
+				coverage.ShellParse = "degraded"
 			} else if err != nil {
 				// Tracker errors are scoped to the failed step; independent
 				// observations below remain usable.

@@ -309,7 +309,7 @@ func TestRulesTestJSONEvaluatorFailureClass(t *testing.T) {
 
 // TestRulesTestJSONCoverageHealthClass: an event whose command exceeds the
 // shell parser's bounded coverage (>64 statements) reports coverage.shell_parse
-// = "unusable" and completes without a match, distinct from a clean no-match.
+// = "degraded" and completes without a match, distinct from a clean no-match.
 // Consumers must not infer "clean" from a bounded-analysis skip.
 func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 	// Build a command with 100 chained statements to exceed maxShellCommands=64.
@@ -322,7 +322,7 @@ func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 `
 	fixture := writeTempFile(t, "coverage.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--fixture", fixture)
-	// The event either completes with shell_parse=unusable (bounded analysis)
+	// The event either completes with shell_parse=degraded (bounded analysis)
 	// or is surfaced as an evaluation_failure. Both are valid direct-evaluator
 	// results; the test asserts that the machine-readable output distinguishes
 	// them from a clean no-match — no bare empty stdout with exit 0.
@@ -336,8 +336,8 @@ func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 			t.Fatalf("events = %d, want 1", len(events))
 		}
 		cov := events[0].Coverage
-		if cov == nil || cov.ShellParse != "unusable" {
-			t.Fatalf("coverage.shell_parse = %+v, want unusable", cov)
+		if cov == nil || cov.ShellParse != "degraded" {
+			t.Fatalf("coverage.shell_parse = %+v, want degraded", cov)
 		}
 	case 1:
 		events, summary := parseJSONStream(t, out)
