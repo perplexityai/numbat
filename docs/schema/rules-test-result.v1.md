@@ -87,7 +87,7 @@ from the exit code alone.
 
 A `status == "completed"` event carries no `evaluator_errors` and no
 `error`; both fields are omitted from the wire when empty. Any per-rule CEL
-failure or sequence-tracker error promotes the event to
+failure or sequence-tracker error other than a shell-analysis diagnostic promotes the event to
 `status == "evaluation_failure"`, at which point those errors appear in
 `evaluator_errors` and `error` is populated with the failing `kind`.
 

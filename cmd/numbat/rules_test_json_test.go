@@ -322,37 +322,19 @@ func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 `
 	fixture := writeTempFile(t, "coverage.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--fixture", fixture)
-	// The event either completes with shell_parse=degraded (bounded analysis)
-	// or is surfaced as an evaluation_failure. Both are valid direct-evaluator
-	// results; the test asserts that the machine-readable output distinguishes
-	// them from a clean no-match — no bare empty stdout with exit 0.
-	switch code {
-	case 0:
-		events, summary := parseJSONStream(t, out)
-		if summary.Status != "completed" {
-			t.Fatalf("summary.status = %q, want completed", summary.Status)
-		}
-		if len(events) != 1 {
-			t.Fatalf("events = %d, want 1", len(events))
-		}
-		cov := events[0].Coverage
-		if cov == nil || cov.ShellParse != "degraded" {
-			t.Fatalf("coverage.shell_parse = %+v, want degraded", cov)
-		}
-	case 1:
-		events, summary := parseJSONStream(t, out)
-		if summary.Status != "partial" {
-			t.Fatalf("summary.status = %q, want partial", summary.Status)
-		}
-		if len(events) == 0 {
-			t.Fatalf("expected at least one event_result; stderr=%q", errb)
-		}
-		last := events[len(events)-1]
-		if last.Status != "evaluation_failure" {
-			t.Fatalf("last status = %q, want evaluation_failure; got=%+v", last.Status, last)
-		}
-	default:
-		t.Fatalf("unexpected exit = %d; stdout=%q stderr=%q", code, out, errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stdout=%q stderr=%q", code, out, errb)
+	}
+	events, summary := parseJSONStream(t, out)
+	if summary.Status != "completed" {
+		t.Fatalf("summary.status = %q, want completed", summary.Status)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	cov := events[0].Coverage
+	if cov == nil || cov.ShellParse != "degraded" {
+		t.Fatalf("coverage.shell_parse = %+v, want degraded", cov)
 	}
 }
 
