@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/perplexityai/numbat/internal/model"
 )
 
 // jsonRulesTestEvent mirrors the per-event object the CLI emits when --json
@@ -307,7 +309,7 @@ func TestRulesTestJSONEvaluatorFailureClass(t *testing.T) {
 
 // TestRulesTestJSONCoverageHealthClass: an event whose command exceeds the
 // shell parser's bounded coverage (>64 statements) reports coverage.shell_parse
-// = "unusable" and completes without a match, distinct from a clean no-match.
+// = "degraded" and completes without a match, distinct from a clean no-match.
 // Consumers must not infer "clean" from a bounded-analysis skip.
 func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 	// Build a command with 100 chained statements to exceed maxShellCommands=64.
@@ -320,37 +322,19 @@ func TestRulesTestJSONCoverageHealthClass(t *testing.T) {
 `
 	fixture := writeTempFile(t, "coverage.ndjson", body)
 	out, errb, code := runCLI("rules", "test", "--json", "--fixture", fixture)
-	// The event either completes with shell_parse=unusable (bounded analysis)
-	// or is surfaced as an evaluation_failure. Both are valid direct-evaluator
-	// results; the test asserts that the machine-readable output distinguishes
-	// them from a clean no-match — no bare empty stdout with exit 0.
-	switch code {
-	case 0:
-		events, summary := parseJSONStream(t, out)
-		if summary.Status != "completed" {
-			t.Fatalf("summary.status = %q, want completed", summary.Status)
-		}
-		if len(events) != 1 {
-			t.Fatalf("events = %d, want 1", len(events))
-		}
-		cov := events[0].Coverage
-		if cov == nil || cov.ShellParse != "unusable" {
-			t.Fatalf("coverage.shell_parse = %+v, want unusable", cov)
-		}
-	case 1:
-		events, summary := parseJSONStream(t, out)
-		if summary.Status != "partial" {
-			t.Fatalf("summary.status = %q, want partial", summary.Status)
-		}
-		if len(events) == 0 {
-			t.Fatalf("expected at least one event_result; stderr=%q", errb)
-		}
-		last := events[len(events)-1]
-		if last.Status != "evaluation_failure" {
-			t.Fatalf("last status = %q, want evaluation_failure; got=%+v", last.Status, last)
-		}
-	default:
-		t.Fatalf("unexpected exit = %d; stdout=%q stderr=%q", code, out, errb)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stdout=%q stderr=%q", code, out, errb)
+	}
+	events, summary := parseJSONStream(t, out)
+	if summary.Status != "completed" {
+		t.Fatalf("summary.status = %q, want completed", summary.Status)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	cov := events[0].Coverage
+	if cov == nil || cov.ShellParse != "degraded" {
+		t.Fatalf("coverage.shell_parse = %+v, want degraded", cov)
 	}
 }
 
@@ -897,5 +881,43 @@ func TestRulesTestJSONCompiledCLIDevFull(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "write") {
 		t.Fatalf("stderr missing write-failure notice: %q", stderr.String())
+	}
+}
+
+func TestRulesTestSequenceOnlyCatalogReportsUnusableShellParse(t *testing.T) {
+	rulesDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rulesDir, "seq.yaml"), []byte(`id: chain.demo
+version: "1.0"
+title: demo sequence
+severity: medium
+sequence:
+  within_events: 8
+  steps:
+    - expr: 'shell_commands.exists(command, command.name == "first")'
+    - expr: 'shell_commands.exists(command, command.name == "second")'
+`), 0o600); err != nil {
+		t.Fatalf("write seq.yaml: %v", err)
+	}
+	fx := writeTempFile(t, "unparsed.ndjson", `{"schema_version":"`+model.SchemaVersion+`","event_id":"u1","source_agent":"claude-code","source_type":"artifact","event_type":"command.exec","command":"echo \"unterminated","session_id":"s1","confidence":"high","tags":[],"evidence":{"artifact_type":"claude_jsonl","local_path":"/x","line":1}}
+`)
+	out, errb, code := runCLI("rules", "test", "--json", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q, stdout=%q", code, errb, out)
+	}
+	events, summary := parseJSONStream(t, out)
+	if summary.Status != "completed" || len(events) != 1 {
+		t.Fatalf("summary = %+v, events = %+v", summary, events)
+	}
+	ev := events[0]
+	if ev.Status != "completed" || ev.Error != nil || len(ev.Findings) != 0 {
+		t.Fatalf("event = %+v, want completed without findings", ev)
+	}
+	if ev.Coverage == nil || ev.Coverage.ShellParse != "unusable" || !ev.Coverage.SequenceTrackerActive {
+		t.Fatalf("coverage = %+v, want shell_parse unusable with an active tracker", ev.Coverage)
+	}
+	const note = "fixture line 1: shell command analysis: unsupported or malformed syntax; rules that read shell_commands without shell_parse_failed are not evaluated on this event\n"
+	out, errb, code = runCLI("rules", "test", "--no-builtin-rules", "--rules-dir", rulesDir, "--fixture", fx, "--expect-none")
+	if code != 0 || out != "" || errb != note {
+		t.Fatalf("--expect-none exit = %d stdout=%q stderr=%q, want exit 0 with %q", code, out, errb, note)
 	}
 }

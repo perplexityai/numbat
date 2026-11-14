@@ -10,6 +10,8 @@ Rule expressions can use:
   emitted JSON names.
 - `shell_commands`, a rule-only parsed view of commands found in
   `event.command`.
+- `shell_parse_failed`, a rule-only boolean that is true when analysis of
+  `event.command` produced no usable projection.
 
 Embedded rules are monitor-only by default. See the
 [built-in catalog](rule-catalog.md) for coverage and [`rules/`](../rules/) for
@@ -448,7 +450,35 @@ Set `tool_name` in a fixture when a Windows command depends on a specific dialec
 If part of a command is dynamic, malformed, unsupported, or over a parser
 bound, numbat emits a diagnostic. Proven independent commands remain available
 for detection. If no usable projection remains, rules that reference
-`shell_commands` skip that event.
+`shell_commands` skip that event. This happens, for example, when a command
+cannot be parsed (such as a PowerShell script recorded under a POSIX shell
+`tool_name`), when its only executable is dynamic (such as `"$run" curl ...`),
+or when the input is over 262144 bytes.
+
+A rule that must still see such a command references `shell_parse_failed`. It
+is then evaluated with an empty `shell_commands` and `shell_parse_failed` set
+to true, and can add a raw-text clause for that case:
+
+```cel
+shell_commands.exists(command, command.name == "curl") ||
+(shell_parse_failed && event.command.matches("(^|\\s)curl\\s"))
+```
+
+`shell_parse_failed` is false when at least one command was projected, when
+analysis reported no problem, and when the event has no command. The diagnostic
+is emitted either way.
+
+A reference to `shell_parse_failed` anywhere in an expression, even in a branch
+that can never be true, opts the whole rule in to these events. A rule that
+matches on absence, such as `!shell_commands.exists(...)` or
+`shell_commands.size() == 0`, then matches every such command unless it also
+tests the flag.
+
+The raw-text clause has the limits of any `event.command` match. A match by a
+rule that references `shell_parse_failed` is detection-only on such a command.
+A rule that reads only `event.command` is not shell-derived:
+with `enforce: true` it can still deny such a command, and adding a
+`shell_parse_failed` clause to it makes it detection-only there.
 
 Detection recognizes explicit PowerShell `-WhatIf` requests and a statically
 visible `$WhatIfPreference = $true` for known cmdlet names and exact
@@ -547,6 +577,12 @@ eligibility, not whether a particular host or hook mode would block the action.
 For an enforce-enabled rule that uses `shell_commands`, include at least one
 eligible case and one detection-only case.
 
+A `no_match` case fails with the shell analysis diagnostic when one of its
+commands has no usable projection and the rule under test would skip it, that
+is, when the rule or one of its sequence steps reads `shell_commands` without
+`shell_parse_failed`. `no_match` on an event the rule never evaluated proves
+nothing. A `match` case runs, because a skip can only remove matches.
+
 For an ad hoc NDJSON fixture:
 
 ```sh
@@ -565,6 +601,11 @@ Unlike companion fixtures, NDJSON fixtures receive no defaults. Each line must
 be a valid normalized event object; emitted event records can be used directly.
 See the [event schema](schema/v0.5.0/event-record.schema.json) for required
 fields.
+
+A fixture line whose command has no usable projection does not fail the run,
+but rules that read `shell_commands` without `shell_parse_failed` skip it.
+Text mode names each such line on stderr, and `--json` reports it as
+`coverage.shell_parse: "unusable"`. `--expect-none` can pass on such a run.
 
 ## Sequence rules
 

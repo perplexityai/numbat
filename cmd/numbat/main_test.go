@@ -410,7 +410,7 @@ func TestRulesTestNormalizesWindowsPaths(t *testing.T) {
 	}
 	in := strings.NewReader(`{"schema_version":"0.5.0","event_id":"e","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","file_path":"C:\\repo\\.env","confidence":"high","evidence":{"artifact_type":"fixture","local_path":"fixture"}}` + "\n")
 	var out bytes.Buffer
-	matched, _, err := evalFixture(eng, in, &out)
+	matched, _, err := evalFixture(eng, in, &out, new(bytes.Buffer))
 	if err != nil {
 		t.Fatalf("evalFixture: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestEvalFixtureSurfacesRuntimeEvalError(t *testing.T) {
 	}
 	in := strings.NewReader(`{"event_id":"e","event_type":"command.exec","command":"hi"}` + "\n")
 	var out bytes.Buffer
-	if _, _, err := evalFixture(eng, in, &out); err == nil {
+	if _, _, err := evalFixture(eng, in, &out, new(bytes.Buffer)); err == nil {
 		t.Fatalf("expected runtime eval error to surface")
 	}
 }
@@ -518,7 +518,7 @@ func TestEvalFixtureRejectsInvalidEvent(t *testing.T) {
 	}
 	in := strings.NewReader(`{"schema_version":"0.5.0","event_id":"e","source_agent":"claude-code","source_type":"artifact","event_type":"file.read","confidence":"high","evidence":{}}` + "\n")
 	var out bytes.Buffer
-	_, _, err = evalFixture(eng, in, &out)
+	_, _, err = evalFixture(eng, in, &out, new(bytes.Buffer))
 	if err == nil || !strings.Contains(err.Error(), "fixture line 1") || !strings.Contains(err.Error(), "empty evidence.artifact_type") {
 		t.Fatalf("evalFixture error = %v, want line-specific event validation", err)
 	}

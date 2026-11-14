@@ -155,6 +155,36 @@ func TestSequenceShellAnalysisErrorIsReported(t *testing.T) {
 	}
 }
 
+func TestSequenceStepSeesUnparsedCommandViaShellParseFailed(t *testing.T) {
+	enforce := true
+	r := secretThenEgress(func(spec *rule.SequenceSpec) {
+		spec.Steps[0].Expr = `shell_parse_failed && event.command.contains("unterminated")`
+		spec.Steps[1].Expr = `shell_commands.exists(command, command.name == "finish")`
+	})
+	r.Severity = model.SeverityCritical
+	r.Enforce = &enforce
+	tr := NewTracker(compile(t, r), DefaultConfig())
+	malformed := ev("e1", "2026-06-01T10:00:00Z", model.EventCommandExec, func(e *model.Event) {
+		e.Command = `echo "unterminated`
+	})
+	if observation, err := tr.Observe(malformed); !rule.IsShellAnalysisUnusable(err) || len(observation.Findings) != 0 {
+		t.Fatalf("first observation = %+v, %v; want only the unusable analysis diagnostic", observation, err)
+	}
+	finish := ev("e2", "2026-06-01T10:01:00Z", model.EventCommandExec, func(e *model.Event) {
+		e.Command = "finish"
+	})
+	observation, err := tr.Observe(finish)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(observation.Findings) != 1 || observation.Findings[0].Rule.ID != r.ID {
+		t.Fatalf("findings = %+v, want the chain seeded by the unparsed command", observation.Findings)
+	}
+	if len(observation.EnforcementRules) != 0 {
+		t.Fatalf("enforcement rules = %+v, want none for a chain with an unparsed link", observation.EnforcementRules)
+	}
+}
+
 func TestFatalSequenceLinkCannotAuthorizeEnforcement(t *testing.T) {
 	enforce := true
 	r := secretThenEgress(func(spec *rule.SequenceSpec) {

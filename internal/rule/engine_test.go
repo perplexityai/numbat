@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -170,6 +171,92 @@ func TestEngineCompleteShellAnalysisFailureSkipsOnlyTypedRules(t *testing.T) {
 	}
 	if len(matches) != 1 || matches[0].Rule.ID != "raw" {
 		t.Fatalf("matches = %+v, want only raw-independent rule", matches)
+	}
+}
+
+func TestShellParseFailedExposesUnparsedCommand(t *testing.T) {
+	eng := mustEngine(t,
+		Rule{ID: "typed", Severity: model.SeverityLow, Expr: `shell_commands.exists(command, command.name == "get-content")`},
+		Rule{ID: "absent", Severity: model.SeverityLow, Expr: `!shell_commands.exists(command, command.name == "get-content")`},
+		Rule{
+			ID:       "fallback",
+			Severity: model.SeverityCritical,
+			Enforce:  boolPtr(true),
+			Expr: `shell_commands.exists(command, command.name == "get-content") ||
+				(shell_parse_failed && shell_commands.size() == 0 && event.command.contains("Get-Content"))`,
+		},
+		Rule{ID: "failed", Severity: model.SeverityLow, Expr: `shell_parse_failed`},
+	)
+	const script = "$config = Get-Content example/config.json -Raw | ConvertFrom-Json\n" +
+		"if ($config.token) { Write-Output 'present' }"
+	tests := []struct {
+		name            string
+		toolName        string
+		command         string
+		want            []string
+		wantEnforcement bool
+		wantErr         bool
+		wantUnusable    bool
+	}{
+		{name: "script under a POSIX label", toolName: "Bash", command: script, want: []string{"fallback", "failed"}, wantErr: true, wantUnusable: true},
+		{name: "dynamic executable only", command: `"$run" Get-Content`, want: []string{"fallback", "failed"}, wantErr: true, wantUnusable: true},
+		{name: "script under its own label", toolName: "PowerShell", command: script, want: []string{"typed", "fallback"}},
+		{name: "parsed cmdlet", toolName: "PowerShell", command: "Get-Content example/config.json", want: []string{"typed", "fallback"}, wantEnforcement: true},
+		{name: "parsed command naming the cmdlet", toolName: "Bash", command: "echo Get-Content", want: []string{"absent"}},
+		{name: "partly parsed command", toolName: "Bash", command: "$run; echo Get-Content", want: []string{"absent"}, wantErr: true},
+		{name: "no command", want: []string{"absent"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, err := eng.Eval(model.Event{
+				EventType: model.EventCommandExec,
+				ToolName:  tc.toolName,
+				Command:   tc.command,
+			})
+			if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.wantUnusable {
+				t.Fatalf("Eval error = %v, want error %v and unusable %v", err, tc.wantErr, tc.wantUnusable)
+			}
+			var got []string
+			for _, match := range matches {
+				got = append(got, match.Rule.ID)
+				if match.Rule.ID == "fallback" && match.EnforcementMatch != tc.wantEnforcement {
+					t.Errorf("EnforcementMatch = %v, want %v", match.EnforcementMatch, tc.wantEnforcement)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("matches = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsShellAnalysisUnusable(t *testing.T) {
+	eng := mustEngine(t,
+		Rule{ID: "shell", Severity: model.SeverityLow, Expr: `shell_commands.size() == 0`},
+		Rule{ID: "boom", Severity: model.SeverityLow, Expr: `event.command.size() > 50 ? false : event.command[50] == "x"`},
+	)
+	eval := func(command string) error {
+		_, err := eng.Eval(model.Event{EventType: model.EventCommandExec, Command: command})
+		return err
+	}
+	long := strings.Repeat(" ", 64)
+	tests := []struct {
+		name    string
+		command string
+		wantErr bool
+		want    bool
+	}{
+		{"clean analysis", "true" + long, false, false},
+		{"unusable analysis", `echo "unterminated` + long, true, true},
+		{"partial analysis", "$run; true" + long, true, false},
+		{"rule failure", "true", true, false},
+		{"unusable analysis and rule failure", `echo "unterminated`, true, false},
+	}
+	for _, tc := range tests {
+		err := eval(tc.command)
+		if (err != nil) != tc.wantErr || IsShellAnalysisUnusable(err) != tc.want {
+			t.Errorf("%s: error = %v, want error %v, only unusable %v", tc.name, err, tc.wantErr, tc.want)
+		}
 	}
 }
 

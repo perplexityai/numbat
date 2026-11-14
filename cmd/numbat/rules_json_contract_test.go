@@ -55,7 +55,7 @@ func TestRulesTestJSONLargeContentParity(t *testing.T) {
 	if err := json.NewEncoder(&fixture).Encode(event); err != nil {
 		t.Fatal(err)
 	}
-	matches, _, err := evalFixture(engine, strings.NewReader(fixture.String()), io.Discard)
+	matches, _, err := evalFixture(engine, strings.NewReader(fixture.String()), io.Discard, io.Discard)
 	if err != nil || matches != 1 {
 		t.Fatalf("legacy large fixture: matches=%d err=%v", matches, err)
 	}

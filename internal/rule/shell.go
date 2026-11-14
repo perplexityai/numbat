@@ -14,6 +14,7 @@ import (
 
 const (
 	shellCommandsVariable    = "shell_commands"
+	shellParseFailedVariable = "shell_parse_failed"
 	maxShellCommandBytes     = 256 << 10
 	maxShellCommands         = 64
 	maxShellListItems        = 512
@@ -68,6 +69,10 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 	}
 	analysis := analyzeEventShellCommandsDetailed(ev)
 	detection[shellCommandsVariable] = shellCommandList(adapter, analysis.commands)
+	detection[shellParseFailedVariable] = !analysis.usable
+	if analysis.err != nil {
+		analysis.err = &shellAnalysisError{err: analysis.err, unusable: !analysis.usable}
+	}
 	return sequenceActivations{
 		detection:            detection,
 		shellUsable:          analysis.usable,
@@ -154,6 +159,37 @@ func (e *fatalShellAnalysisError) Unwrap() error { return e.err }
 func hasFatalShellAnalysisError(err error) bool {
 	var fatal *fatalShellAnalysisError
 	return errors.As(err, &fatal)
+}
+
+type shellAnalysisError struct {
+	err      error
+	unusable bool
+}
+
+func (e *shellAnalysisError) Error() string   { return e.err.Error() }
+func (e *shellAnalysisError) Unwrap() []error { return []error{e.err} }
+
+// IsShellAnalysisUnusable reports whether err holds nothing but the diagnostic
+// for a command with no usable projection.
+func IsShellAnalysisUnusable(err error) bool { return isShellAnalysisError(err, true) }
+
+func IsShellAnalysisError(err error) bool { return isShellAnalysisError(err, false) }
+
+func isShellAnalysisError(err error, unusable bool) bool {
+	if analysis, ok := err.(*shellAnalysisError); ok {
+		return analysis.unusable || !unusable
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return false
+	}
+	children := joined.Unwrap()
+	for _, child := range children {
+		if !isShellAnalysisError(child, unusable) {
+			return false
+		}
+	}
+	return len(children) > 0
 }
 
 type shellAnalyzer struct {

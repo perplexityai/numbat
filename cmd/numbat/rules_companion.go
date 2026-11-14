@@ -213,7 +213,7 @@ func runCompanionRuleTestCase(eng *rule.Engine, ruleID, path string, index int, 
 	if len(c.Events) == 0 {
 		return fmt.Errorf("rule tests %q case %s: no events", path, name)
 	}
-	result, err := companionCaseMatches(eng, ruleID, c.Events)
+	result, err := companionCaseMatches(eng, ruleID, c.Events, strings.TrimSpace(c.Expect) == "no_match")
 	if err != nil {
 		return fmt.Errorf("rule tests %q case %s: %w", path, name, err)
 	}
@@ -246,19 +246,20 @@ type companionCaseResult struct {
 	enforcement bool
 }
 
-func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEvent) (companionCaseResult, error) {
+func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEvent, noMatch bool) (companionCaseResult, error) {
 	var tracker *sequence.Tracker
 	if seqs := eng.SequenceRules(); len(seqs) > 0 {
 		tracker = sequence.NewTracker(seqs, sequence.DefaultConfig())
 	}
 	var result companionCaseResult
+	skipped := noMatch && eng.SkipsUnusableShellAnalysis(ruleID)
 	for i, fixture := range events {
 		ev := normalizeRuleTestEvent(fixture.Event, i)
 		if err := ev.Validate(); err != nil {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		matches, err := eng.Eval(ev)
-		if err != nil {
+		if err != nil && (skipped || !rule.IsShellAnalysisUnusable(err)) {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		for _, m := range matches {
@@ -268,7 +269,7 @@ func companionCaseMatches(eng *rule.Engine, ruleID string, events []ruleTestEven
 			}
 		}
 		observation, err := tracker.Observe(ev)
-		if err != nil {
+		if err != nil && (skipped || !rule.IsShellAnalysisUnusable(err)) {
 			return result, fmt.Errorf("event %d: %w", i+1, err)
 		}
 		for _, c := range observation.Findings {

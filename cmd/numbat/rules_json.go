@@ -57,11 +57,12 @@ type rulesTestEvaluatorError struct {
 	Message string `json:"message"`
 }
 
-// rulesTestCoverage carries the stateless engine's shell-analysis health signal.
+// rulesTestCoverage carries the shell-analysis health signal.
 // shell_parse is one of "ok" (no stateless shell analysis run or the parse was
 // clean), "degraded" (analysis produced errors but at least one command was
-// still usable), and "unusable" (parse produced no usable commands and rules
-// that depend on shell_commands were skipped). Sequence-analysis failures are
+// still usable), and "unusable" (stateless or sequence analysis produced no
+// usable commands; rules and sequence steps that depend on shell_commands
+// without shell_parse_failed are not evaluated). Other sequence-analysis failures are
 // reported separately in evaluator_errors and error. sequence_tracker_active is
 // true when the compiled catalog contains at least one sequence rule (i.e.
 // a window tracker exists for this run); it does not imply this specific
@@ -234,7 +235,11 @@ loop:
 		sequenceErrorMessage := ""
 		if tracker != nil {
 			observation, err := tracker.Observe(ev)
-			if err != nil {
+			if rule.IsShellAnalysisUnusable(err) {
+				coverage.ShellParse = "unusable"
+			} else if rule.IsShellAnalysisError(err) {
+				coverage.ShellParse = "degraded"
+			} else if err != nil {
 				// Tracker errors are scoped to the failed step; independent
 				// observations below remain usable.
 				sequenceErrorMessage = err.Error()
