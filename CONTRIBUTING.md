@@ -14,7 +14,7 @@ deterministic, endpoint-local design and the architecture boundaries below.
 
 ## Development setup
 
-Use Go 1.26.10 or newer; CI pins 1.26.10.
+Use Go 1.26.11 or newer; CI pins 1.26.11.
 
 ```sh
 go build ./cmd/numbat
