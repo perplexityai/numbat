@@ -13,6 +13,7 @@ func TestStringMasksKnownTokens(t *testing.T) {
 		"xoxb-123456789012-abcdefABCDEF",
 		"sk-abcdefghijklmnopqrstuvwxyz0123",
 		"-----BEGIN RSA PRIVATE KEY-----",
+		"jina_0123456789abcdef0123456789abcdefXYZexampleXYZexample_example-000",
 	}
 	for _, c := range cases {
 		got := String("value: " + c)
