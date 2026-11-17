@@ -185,6 +185,7 @@ type Match struct {
 	Rule             Rule
 	Event            model.Event
 	EnforcementMatch bool
+	Remote           bool
 }
 
 func cloneRule(r Rule) Rule {

@@ -3,6 +3,7 @@ package rule
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/google/cel-go/common/types"
@@ -31,6 +32,7 @@ const (
 
 type sequenceActivations struct {
 	detection            map[string]any
+	remote               map[string]any
 	shellUsable          bool
 	shellEnforcementSafe bool
 	err                  error
@@ -68,8 +70,14 @@ func prepareActivations(adapter types.Adapter, ev model.Event, needShellCommands
 	}
 	analysis := analyzeEventShellCommandsDetailed(ev)
 	detection[shellCommandsVariable] = shellCommandList(adapter, analysis.commands)
+	var remote map[string]any
+	if len(analysis.all) > len(analysis.commands) {
+		remote = maps.Clone(detection)
+		remote[shellCommandsVariable] = shellCommandList(adapter, analysis.all)
+	}
 	return sequenceActivations{
 		detection:            detection,
+		remote:               remote,
 		shellUsable:          analysis.usable,
 		shellEnforcementSafe: analysis.enforcementSafe,
 		err:                  analysis.err,
@@ -163,6 +171,7 @@ type shellAnalyzer struct {
 	powerShellFunctions       map[string]string
 	activePowerShellFunctions map[string]bool
 	powerShellWhatIf          powerShellWhatIfState
+	remote                    []func()
 	enforcementUnsafe         bool
 	previousStatements        map[*syntax.Stmt]*syntax.Stmt
 	resolveNames              bool
@@ -173,6 +182,7 @@ type shellAnalyzer struct {
 
 type shellAnalysis struct {
 	commands        []ShellCommand
+	all             []ShellCommand
 	usable          bool
 	enforcementSafe bool
 	err             error
@@ -212,12 +222,17 @@ func analyzeShellCommandsDetailed(source string, dialect commandDialect) shellAn
 			}
 		}
 	}
-	return shellAnalysis{
+	analysis := shellAnalysis{
 		commands:        a.commands,
 		usable:          err == nil || len(a.commands) > 0,
 		enforcementSafe: enforcementSafe,
 		err:             err,
 	}
+	for i := 0; i < len(a.remote); i++ {
+		a.remote[i]()
+	}
+	analysis.all = a.commands
+	return analysis
 }
 
 func commandDialectHint(toolName string) commandDialect {
@@ -566,6 +581,10 @@ func (a *shellAnalyzer) walk(source string, root syntax.Node, depth int, functio
 						a.parseDialect(script, dialectPOSIX, depth+1, innerWrappers)
 					}
 				}
+				if script, wrapper, ok := sshScript(source, args); ok {
+					innerWrappers := append(cloneWrappers(commandWrappers), wrapper)
+					a.remote = append(a.remote, func() { a.parseDialect(script, dialectPOSIX, depth+1, innerWrappers) })
+				}
 			}
 			if allowShellBuiltins {
 				if script, ok := evalScript(source, args); ok {
@@ -724,6 +743,10 @@ var (
 	execWrapper = commandWrapperSpec{
 		valueOptions: stringSet("-a"),
 		flagOptions:  stringSet("-c", "-l"),
+	}
+	sshWrapper = commandWrapperSpec{
+		valueOptions: stringSet("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-o", "-P", "-p", "-R", "-S", "-w"),
+		flagOptions:  stringSet("-4", "-6", "-A", "-a", "-C", "-f", "-g", "-K", "-k", "-M", "-n", "-q", "-T", "-t", "-v", "-X", "-x", "-Y", "-y"),
 	}
 )
 
@@ -1212,6 +1235,18 @@ func evalScript(source string, args []*syntax.Word) (string, bool) {
 		return "", false
 	}
 	return joinScriptWords(source, args[1:])
+}
+
+func sshScript(source string, args []*syntax.Word) (string, ShellWrapper, bool) {
+	name, _ := commandName(args)
+	if commandProgram(name) != "ssh" {
+		return "", ShellWrapper{}, false
+	}
+	inner, _ := commandAfterWrapper(args, sshWrapper)
+	inner, _ = commandAfterWrapper(inner, sshWrapper)
+	script, ok := joinScriptWords(source, inner)
+	wrapper, err := wrapperProjection(source, args, inner)
+	return script, wrapper, ok && err == nil
 }
 
 func commandName(args []*syntax.Word) (string, bool) {

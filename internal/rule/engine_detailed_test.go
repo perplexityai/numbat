@@ -73,11 +73,18 @@ func TestEvalDetailedShellParity(t *testing.T) {
 		{"complete absence", `!shell_commands.exists(c, c.name == "cat")`, `echo ready`, true, false},
 		{"degraded absence", `!shell_commands.exists(c, c.name == "cat")`, `"$dynamic" .env; echo ready`, false, true},
 		{"independent raw", `event.command.contains("echo ready")`, `"$dynamic" .env; echo ready`, true, false},
+		{"ssh outer", `shell_commands.exists(c, c.name == "ssh")`, `ssh -p 22 host.example gh repo fork example/project`, true, false},
+		{"ssh remote", `shell_commands.exists(c, c.name == "gh" && c.wrappers.exists(w, w.argv == ["ssh", "-p", "22", "host.example"]))`, `ssh -p 22 host.example gh repo fork example/project`, false, false},
+		{"ssh remote absence", `!shell_commands.exists(c, c.name == "gh")`, `ssh -p 22 host.example gh repo fork example/project`, true, false},
+		{"ssh unparsed remote", `shell_commands.exists(c, c.name == "ssh")`, `ssh host.example 'if then'`, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sources := []Source{{Name: "synthetic", Rules: []Rule{{
 				ID: "test.parity", Title: "shell parity", Version: "1",
 				Severity: model.SeverityHigh, Enforce: boolPtr(true), Expr: tc.expr,
+			}, {
+				ID: "test.detect", Title: "shell parity", Version: "1",
+				Severity: model.SeverityHigh, Expr: tc.expr,
 			}}}}
 			checked, err := BuildCheckedExpressions(sources)
 			if err != nil {
@@ -97,8 +104,8 @@ func TestEvalDetailedShellParity(t *testing.T) {
 				if (legacyErr != nil) != tc.parseError || (diag.ShellParseError != nil) != tc.parseError {
 					t.Fatalf("legacy error=%v diagnostics=%+v, want parse error=%v", legacyErr, diag, tc.parseError)
 				}
-				if len(matches) != 1 || matches[0].EnforcementMatch != tc.enforce {
-					t.Fatalf("matches=%+v, want one match with enforcement=%v", matches, tc.enforce)
+				if len(matches) != 2 || matches[0].EnforcementMatch != tc.enforce || matches[1].EnforcementMatch {
+					t.Fatalf("matches=%+v, want two matches with enforcement=%v", matches, tc.enforce)
 				}
 			}
 		})

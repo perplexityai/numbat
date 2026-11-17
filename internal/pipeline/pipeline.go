@@ -42,6 +42,7 @@ type Pipeline struct {
 	indicators *output.IndicatorAccumulator
 	enforce    *EnforceDecision
 	seq        SequenceObserver
+	remote     []model.Finding
 }
 
 // SequenceObserver is the window that evaluates sequence rules per event —
@@ -153,6 +154,10 @@ func (p *Pipeline) Process(ev model.Event, source string) error {
 		var firstEligible *rule.Rule
 		for i := range matches {
 			m := matches[i]
+			if m.Remote && p.enforce != nil {
+				p.remote = append(p.remote, finding.FromMatch(m, p.fopts))
+				continue
+			}
 			findingID := ""
 			if p.sel.Findings {
 				f := finding.FromMatch(m, p.fopts)
@@ -299,6 +304,12 @@ func (p *Pipeline) emitFinding(f model.Finding) bool {
 		return false
 	}
 	return true
+}
+
+func (p *Pipeline) EmitRemote() {
+	for _, f := range p.remote {
+		p.emitFinding(f)
+	}
 }
 
 const defaultDenyMessage = "Action denied. Do not retry or attempt an equivalent action."
