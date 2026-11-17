@@ -367,6 +367,15 @@ Match a launcher around a command:
 command.wrappers.exists(wrapper, wrapper.name in ["sudo", "doas"])
 ```
 
+The command that `ssh` runs on another host is projected the same way, with
+`ssh`, its options, and the destination as the wrapper. Remote commands are
+detection-only. A rule is judged on the local commands first, and that result
+alone decides blocking and errors. If it does not match, the rule is judged
+again with the remote commands appended after the local ones. A rule that tests
+position, count, or absence over the whole list can therefore match on the
+mixed list. Sequence rules do not read remote commands. A pre-action hook
+writes such a finding after its decision, and only when it does not deny.
+
 Match an output redirect:
 
 ```cel

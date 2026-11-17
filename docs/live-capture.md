@@ -194,7 +194,8 @@ means a rule matched. When findings are selected, a matched, enforce-capable
 pre-action callback also records whether numbat computed `deny` or
 `no_override`, with joins through `finding_ids` and `action_event_ids`. It is
 written before the control response and does not prove response delivery or
-host behavior.
+host behavior. A finding that comes only from the remote command of `ssh` is
+written after that record and is in neither its `finding_ids` nor `rule_ids`.
 
 On Windows, pre-tool checks classify native PowerShell commands and normalize
 reported paths before CEL evaluation. Installed string commands use encoded
