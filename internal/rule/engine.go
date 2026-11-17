@@ -727,6 +727,10 @@ func (e *Engine) eval(ev model.Event) ([]Match, []EvalError, EvalDiagnostics) {
 				Event:            ev,
 				EnforcementMatch: enforcementMatch,
 			})
+		} else if activations.remote != nil && c.program.usesShellCommands {
+			if out, _, err := c.program.program.Eval(activations.remote); err == nil && asBool(out) {
+				matches = append(matches, Match{Rule: cloneRule(c.rule), Event: ev, Remote: true})
+			}
 		}
 	}
 	return matches, errs, diag

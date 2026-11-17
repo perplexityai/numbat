@@ -457,6 +457,9 @@ func handleHook(event string, lc hook.Lifecycle, agent, sourceAgent string, stdi
 			processErr = errors.Join(processErr, fmt.Errorf("emit enforcement decision %s: %w", decision.DecisionID, emitErr))
 		}
 	}
+	if dec != nil && !dec.Blocked {
+		p.EmitRemote()
+	}
 	recordErrors := em.Stats().RecordErrors
 
 	// Close the sink before deciding to block: a sink error means the run did not
