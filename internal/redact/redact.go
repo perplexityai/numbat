@@ -19,6 +19,7 @@ const Mask = "[redacted]"
 var tokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`jina_[0-9a-f]{32}[0-9A-Za-z_-]+`),
 	regexp.MustCompile(`ytct-[0-9a-f]{4}-[0-9a-f]{32}`),
+	regexp.MustCompile(`ctxt_secret_[0-9a-f]{32}`),
 	// AWS access key id.
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	// GitHub tokens (classic and fine-grained).
