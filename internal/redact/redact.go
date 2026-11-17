@@ -18,6 +18,7 @@ const Mask = "[redacted]"
 // anywhere in a string. They are high-precision and replaced wholesale.
 var tokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`jina_[0-9a-f]{32}[0-9A-Za-z_-]+`),
+	regexp.MustCompile(`ytct-[0-9a-f]{4}-[0-9a-f]{32}`),
 	// AWS access key id.
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	// GitHub tokens (classic and fine-grained).
