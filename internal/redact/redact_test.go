@@ -17,6 +17,7 @@ func TestStringMasksKnownTokens(t *testing.T) {
 		"ytct-0123-0123456789abcdef0123456789abcdef",
 		"ctxt_secret_0123456789abcdef0123456789abcdef",
 		"rv_0123456789abcdefABCDEF012345678_012exampleX",
+		"cfut_0123456789abcdefABCDEF0123456789exampleX01234567",
 	}
 	for _, c := range cases {
 		got := String("value: " + c)
