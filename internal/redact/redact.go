@@ -17,6 +17,11 @@ const Mask = "[redacted]"
 // tokenPatterns match well-known, self-describing secret token shapes
 // anywhere in a string. They are high-precision and replaced wholesale.
 var tokenPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`jina_[0-9a-f]{32}[0-9A-Za-z_-]+`),
+	regexp.MustCompile(`ytct-[0-9a-f]{4}-[0-9a-f]{32}`),
+	regexp.MustCompile(`ctxt_secret_[0-9a-f]{32}`),
+	regexp.MustCompile(`\brv_[0-9A-Za-z]{31}_[0-9A-Za-z]{11}\b`),
+	regexp.MustCompile(`\bcf(?:k|ut|at|ast)_[0-9A-Za-z]{48}\b`),
 	// AWS access key id.
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	// GitHub tokens (classic and fine-grained).
