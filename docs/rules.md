@@ -212,8 +212,8 @@ payload. These flags describe Numbat's retention, not upstream completeness.
 Reading an incomplete tool payload produces a scoped evaluation error rather
 than allowing a negative check to treat its missing tail as clean. This also
 applies when replaying preview records with a byte count but no body. Rules
-can inspect the truncation flags without reading the body. Content rules use
-the bounded CEL evaluation budget. Output redaction never changes local rule
+can inspect the truncation flags without reading the body.
+Output redaction never changes local rule
 input; redacted exports cannot reconstruct original values during replay.
 Simple colon-form shell parameter operators such as `${GH_TOKEN:-}` are
 preserved, but redacted commands are not lossless shell source.
