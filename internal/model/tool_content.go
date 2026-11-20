@@ -13,7 +13,7 @@ import (
 const ToolPayloadMaxBytes = 16 << 20
 
 // toolPayload keeps the original JSON representation out of default marshaling.
-// Source readers and this bound cap memory; the rule engine also caps CEL cost.
+// Source readers and this bound cap memory.
 type toolPayload struct {
 	text      string
 	bytes     int

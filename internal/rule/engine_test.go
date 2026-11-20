@@ -88,20 +88,17 @@ func TestEngineContentSeesBeyondPreview(t *testing.T) {
 	}
 }
 
-func TestEngineContentCostLimit(t *testing.T) {
+func TestEngineContentMatchesAtMaxBytes(t *testing.T) {
 	eng := mustEngine(t, Rule{
-		ID:       "t.content_cost",
+		ID:       "t.content_max",
 		Severity: model.SeverityHigh,
 		Expr:     `event.content.matches("` + strings.Repeat("x", 500) + `")`,
 	})
 	var ev model.Event
-	ev.SetContent(strings.Repeat("y", model.ContentMaxBytes), true)
+	ev.SetContent(strings.Repeat("y", model.ContentMaxBytes-500)+strings.Repeat("x", 500), true)
 	matches, err := eng.Eval(ev)
-	if err == nil || !strings.Contains(err.Error(), "evaluation failed") {
-		t.Fatalf("Eval error = %v, want bounded content evaluation failure", err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("matches = %+v, want none", matches)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("matches=%d err=%v, want one content match", len(matches), err)
 	}
 }
 

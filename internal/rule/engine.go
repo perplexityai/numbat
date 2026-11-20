@@ -49,8 +49,6 @@ type compiledExpression struct {
 	usesContent       bool
 }
 
-const contentRuleCostLimit uint64 = 10_000_000
-
 // SequenceRule is a compiled sequence rule ready for per-step evaluation. It
 // distills the validated spec (window, cap) next to the compiled step
 // programs so a tracker never re-parses YAML fields on the hot path.
@@ -384,11 +382,7 @@ func programExpr(env *cel.Env, ast *cel.Ast) (compiledExpression, error) {
 		astReferencesEventField(ast, "tool_input") || astReferencesEventField(ast, "tool_result") ||
 		astReferencesEventField(ast, "tool_input_bytes") || astReferencesEventField(ast, "tool_result_bytes") ||
 		astReferencesEventField(ast, "tool_input_truncated") || astReferencesEventField(ast, "tool_result_truncated")
-	programOptions := []cel.ProgramOption{cel.EvalOptions(cel.OptOptimize)}
-	if usesContent {
-		programOptions = append(programOptions, cel.CostLimit(contentRuleCostLimit))
-	}
-	prg, err := env.Program(ast, programOptions...)
+	prg, err := env.Program(ast, cel.EvalOptions(cel.OptOptimize))
 	if err != nil {
 		return compiledExpression{}, fmt.Errorf("program expr: %w", err)
 	}
