@@ -115,6 +115,14 @@ For the rule format and override behavior, see [Writing rules](rules.md).
   helper form is excluded; path-qualified and extended shell helpers remain
   detectable.
 
+## MCP
+
+- `mcp.server_config_write` - a command or structured action writes or deletes
+  an MCP server registry: the Claude Desktop configuration, a project
+  `.mcp.json`, or an IDE-scoped `mcp.json`. Mutating commands whose operand role
+  needs source/target analysis, such as `cp` and `sed`, are not classified by
+  this rule.
+
 ## Tampering
 
 - `tamper.agent_config_write` - a command or structured action mutates an agent
