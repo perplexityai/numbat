@@ -283,7 +283,7 @@ func TestTamperRules(t *testing.T) {
 		{"unrelated nested settings.json untouched", write("/repo/opencode/plugins/settings.json"), ""},
 		{"unrelated hook file untouched", write("/repo/hooks/custom.json"), ""},
 		{"unrelated settings.json untouched", write("/repo/app/settings.json"), ""},
-		{"project mcp config is not a monitoring surface", write("/repo/.mcp.json"), ""},
+		{"project mcp config is an MCP surface, not a monitoring surface", write("/repo/.mcp.json"), "mcp.server_config_write"},
 		{"reading settings is not tampering", model.Event{EventType: model.EventFileRead, FilePath: "/Users/dev/.claude/settings.json"}, ""},
 		{"claude project transcript not config", write("/Users/dev/.claude/projects/p/s.jsonl"), ""},
 		{"relocated Hermes home is not guessed", write("/opt/hermes-profile/config.yaml"), ""},

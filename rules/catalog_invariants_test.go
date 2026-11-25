@@ -114,6 +114,9 @@ func TestNoAtomicFindingsOnBenignCorpus(t *testing.T) {
 		{"read a source file", cmd("cat README.md")},
 		{"process cmdline is not environ", cmd("cat /proc/1/cmdline")},
 		{"directory listing", cmd("ls -la /repo")},
+		// Inspecting an MCP registry is not writing one.
+		{"search the registry for a server name", cmd("rg -n mcpServers .mcp.json")},
+		{"list the cursor config directory", cmd("ls -la .cursor")},
 	}
 	for _, tc := range benign {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,0 +1,59 @@
+id: mcp.server_config_write
+version: "1.0"
+enabled: true
+title: MCP server registry written
+description: |-
+  A file event or command requested a write to a file whose only purpose is to
+  register MCP servers: the Claude Desktop configuration, a project-scoped
+  .mcp.json, or an IDE-scoped mcp.json. An entry there gives a server the
+  agent's tools and whatever credentials those tools can reach, and the agent
+  loads it at every start. A write is therefore how an MCP server gets
+  installed rather than how an already trusted one changes.
+severity: high
+expr: |-
+  (
+    (event.event_type == "file.write" || event.event_type == "file.delete") &&
+    event.file_path.matches(
+      "(?i)(^|/)(" +
+      "claude_desktop_config\\.json|" +
+      "\\.mcp\\.json|" +
+      "\\.cursor/mcp\\.json|" +
+      "\\.vscode/mcp\\.json|" +
+      "\\.kiro/settings/mcp\\.json|" +
+      "\\.codeium/windsurf/mcp_config\\.json" +
+      ")$"
+    )
+  ) || (
+    event.event_type == "command.exec" &&
+    shell_commands.exists(command,
+      command.redirects.exists(redirect,
+        redirect.op in ["write", "append"] &&
+        redirect.target.matches(
+          "(?i)(^|[\\\\/])(" +
+          "claude_desktop_config\\.json|" +
+          "\\.mcp\\.json|" +
+          "\\.cursor[\\\\/]mcp\\.json|" +
+          "\\.vscode[\\\\/]mcp\\.json|" +
+          "\\.kiro[\\\\/]settings[\\\\/]mcp\\.json|" +
+          "\\.codeium[\\\\/]windsurf[\\\\/]mcp_config\\.json" +
+          ")$"
+        )
+      ) ||
+      (
+        command.name.matches("(?i)^(rm|truncate|tee|mv|remove-item|ri|clear-content|set-content|add-content|out-file|new-item)(\\.exe)?$") &&
+        command.argv.exists(arg,
+          arg.matches(
+            "(?i)(^|.*[\\\\/])(" +
+            "claude_desktop_config\\.json|" +
+            "\\.mcp\\.json|" +
+            "\\.cursor[\\\\/]mcp\\.json|" +
+            "\\.vscode[\\\\/]mcp\\.json|" +
+            "\\.kiro[\\\\/]settings[\\\\/]mcp\\.json|" +
+            "\\.codeium[\\\\/]windsurf[\\\\/]mcp_config\\.json" +
+            ")$"
+          )
+        )
+      )
+    )
+  )
+tags: [attack.t1546, mcp_config_write]
